@@ -612,27 +612,55 @@ function Home() {
         </div>
 
         {/* Text entry — fills remaining width so it stays visible above the on-screen keyboard */}
-        <div className="flex flex-1 items-end gap-2">
-          <Textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder="Type something to say…"
-            className="h-[120px] min-h-[120px] flex-1 resize-none text-base"
-          />
-          <Button
-            size="lg"
-            className="h-[120px] gap-2 rounded-2xl px-5"
-            onClick={() => {
-              const t = draft.trim();
-              if (!t) return;
-              speak(t);
-              setDraft("");
-            }}
-            disabled={speaking || !draft.trim()}
-          >
-            <Volume2 className="size-5" />
-            <span className="hidden sm:inline">Speak</span>
-          </Button>
+        <div className="flex flex-1 flex-col gap-1">
+          {lastExpansion && (
+            <div className="flex items-start gap-2 rounded-md border border-border bg-secondary/40 px-2 py-1 text-xs">
+              <Sparkles className="mt-0.5 size-3 shrink-0 text-primary" />
+              <div className="flex-1 leading-snug">
+                <span className="text-muted-foreground">Spoke: </span>
+                <span className="font-medium">{lastExpansion.expanded}</span>
+                <span className="ml-2 text-muted-foreground">
+                  (typed: “{lastExpansion.raw}”)
+                </span>
+              </div>
+              <button
+                onClick={() => setLastExpansion(null)}
+                className="text-muted-foreground hover:text-foreground"
+                aria-label="Dismiss"
+              >
+                <X className="size-3" />
+              </button>
+            </div>
+          )}
+          <div className="flex flex-1 items-end gap-2">
+            <Textarea
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  expandAndSpeak();
+                }
+              }}
+              placeholder="Type roughly — AI will clarify and speak it…"
+              className="h-[120px] min-h-[120px] flex-1 resize-none text-base"
+            />
+            <Button
+              size="lg"
+              className="h-[120px] gap-2 rounded-2xl px-5"
+              onClick={expandAndSpeak}
+              disabled={speaking || expanding || !draft.trim()}
+            >
+              {expanding ? (
+                <Sparkles className="size-5 animate-pulse" />
+              ) : (
+                <Volume2 className="size-5" />
+              )}
+              <span className="hidden sm:inline">
+                {expanding ? "Clarifying…" : "Speak"}
+              </span>
+            </Button>
+          </div>
         </div>
 
         {/* Settings link top-right */}
