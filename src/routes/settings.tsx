@@ -14,6 +14,7 @@ import {
   Crosshair,
   Search,
   Sparkles,
+  Map as MapIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
