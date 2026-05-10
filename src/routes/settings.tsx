@@ -1825,7 +1825,7 @@ function EventDetail({ eventId }: { eventId: string }) {
         </Field>
         <EventLocationField
           value={event.location ?? ""}
-          onChange={(v) => patch({ location: v })}
+          onChange={(v: string) => patch({ location: v })}
         />
         <div />
         <div className="md:col-span-2">
