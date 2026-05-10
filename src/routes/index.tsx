@@ -202,8 +202,9 @@ function Home() {
   // Persons whose voiceprint has already been saved/updated this session
   // (so we don't write on every committed segment).
   const persistedThisSessionRef = useRef<Set<string>>(new Set());
-  // Recognised speaker chips (label -> { personId, sim }) for UI hint.
-  const [recognised, setRecognised] = useState<
+  // Recognised speaker chips (label -> { personId, sim }) for future UI hint.
+  // Currently we only surface recognition via toast notifications.
+  const [, setRecognised] = useState<
     Record<string, { personId: string; sim: number }>
   >({});
   useEffect(() => {
