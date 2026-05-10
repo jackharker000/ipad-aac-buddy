@@ -93,6 +93,26 @@ export type Settings = {
   gps_enabled: boolean;
   cloud_sync: boolean;
   suggestion_refresh_ms: number;
+  ipad_model?: IPadModel;
+};
+
+export type IPadModel =
+  | "auto"
+  | "ipad_mini"
+  | "ipad_10_9"
+  | "ipad_air_11"
+  | "ipad_pro_12_9"
+  | "ipad_pro_13";
+
+export const IPAD_PRESETS: Record<
+  Exclude<IPadModel, "auto">,
+  { label: string; width: number; height: number }
+> = {
+  ipad_mini:     { label: "iPad mini (8.3\")",   width: 1133, height: 744 },
+  ipad_10_9:     { label: "iPad 10.9\"",         width: 1180, height: 820 },
+  ipad_air_11:   { label: "iPad Air / Pro 11\"", width: 1194, height: 834 },
+  ipad_pro_12_9: { label: "iPad Pro 12.9\"",     width: 1366, height: 1024 },
+  ipad_pro_13:   { label: "iPad Pro 13\" (M4)",  width: 1376, height: 1032 },
 };
 
 export type StyleProfile = {
@@ -162,6 +182,7 @@ export const DEFAULT_SETTINGS: Settings = {
   gps_enabled: true,
   cloud_sync: false,
   suggestion_refresh_ms: 3500,
+  ipad_model: "auto",
 };
 
 export async function getSettings(): Promise<Settings> {
