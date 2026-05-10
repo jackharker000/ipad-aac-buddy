@@ -1,6 +1,6 @@
 import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { useScribe } from "@elevenlabs/react";
+import { useScribe, CommitStrategy } from "@elevenlabs/react";
 import { useServerFn } from "@tanstack/react-start";
 import { toast } from "sonner";
 import {
@@ -90,7 +90,7 @@ function LiveConversation() {
 
   const scribe = useScribe({
     modelId: "scribe_v2_realtime",
-    commitStrategy: "vad",
+    commitStrategy: CommitStrategy.VAD,
     onPartialTranscript: (d: { text: string }) => setPartial(d.text ?? ""),
     onCommittedTranscript: async (d: any) => {
       const text = (d.text ?? "").trim();
@@ -194,16 +194,16 @@ function LiveConversation() {
         },
       });
       if (r.suggestions?.length) {
-        setSuggestions(r.suggestions);
+        setSuggestions(r.suggestions as Suggestion[]);
         lastShownRef.current = [
           ...lastShownRef.current,
-          ...r.suggestions.map((s) => s.text),
+          ...r.suggestions.map((s: Suggestion) => s.text),
         ].slice(-30);
 
         // Log each shown suggestion
         const now = Date.now();
         await db.suggestions_log.bulkAdd(
-          r.suggestions.map((s) => ({
+          (r.suggestions as Suggestion[]).map((s) => ({
             id: newId(),
             conversation_id: conversationIdRef.current,
             text: s.text,
@@ -315,7 +315,7 @@ function LiveConversation() {
 
       if (r.memories?.length) {
         await db.memories.bulkAdd(
-          r.memories.map((m) => ({
+          r.memories.map((m: { text: string; kind: "fact" | "preference" | "event" | "todo" }) => ({
             id: newId(),
             conversation_id: conversationIdRef.current,
             place_id: placeIdRef.current,
@@ -328,7 +328,7 @@ function LiveConversation() {
       }
       if (r.followUps?.length) {
         await db.follow_ups.bulkAdd(
-          r.followUps.map((t) => ({
+          r.followUps.map((t: string) => ({
             id: newId(),
             for_place_id: placeIdRef.current,
             text: t,
