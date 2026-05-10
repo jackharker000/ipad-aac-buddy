@@ -91,6 +91,12 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary" },
       { name: "twitter:site", content: "@Lovable" },
+      { name: "twitter:title", content: "AAC Copilot" },
+      { name: "description", content: "Learning text prediction assistant" },
+      { property: "og:description", content: "Learning text prediction assistant" },
+      { name: "twitter:description", content: "Learning text prediction assistant" },
+      { property: "og:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/f7f42cda-6aff-4754-b9bb-1f6ecd033e0a/id-preview-527d8068--a9375bca-9a75-43db-898a-7e41475b035b.lovable.app-1778389248099.png" },
+      { name: "twitter:image", content: "https://pub-bb2e103a32db4e198524a2e9ed8f35b4.r2.dev/f7f42cda-6aff-4754-b9bb-1f6ecd033e0a/id-preview-527d8068--a9375bca-9a75-43db-898a-7e41475b035b.lovable.app-1778389248099.png" },
     ],
     links: [
       {
