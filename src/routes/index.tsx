@@ -946,6 +946,52 @@ function Home() {
 
 /* --------------------------- Speaker mapping bar -------------------------- */
 
+function ScaledShell({
+  ipadModel,
+  children,
+}: {
+  ipadModel: string;
+  children: React.ReactNode;
+}) {
+  const preset =
+    ipadModel !== "auto" && ipadModel in IPAD_PRESETS
+      ? IPAD_PRESETS[ipadModel as keyof typeof IPAD_PRESETS]
+      : null;
+  const [vp, setVp] = useState({
+    w: typeof window === "undefined" ? 1194 : window.innerWidth,
+    h: typeof window === "undefined" ? 834 : window.innerHeight,
+  });
+  useEffect(() => {
+    const onResize = () =>
+      setVp({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  if (!preset) {
+    return (
+      <div className="h-screen w-screen overflow-hidden">{children}</div>
+    );
+  }
+
+  const scale = Math.min(vp.w / preset.width, vp.h / preset.height);
+  return (
+    <div className="grid h-screen w-screen place-items-center overflow-hidden bg-background">
+      <div
+        style={{
+          width: preset.width,
+          height: preset.height,
+          transform: `scale(${scale})`,
+          transformOrigin: "center center",
+        }}
+        className="overflow-hidden"
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function SpeakerBar({
   segments,
   speakerMap,
