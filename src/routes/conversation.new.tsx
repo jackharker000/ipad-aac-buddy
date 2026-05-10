@@ -35,6 +35,12 @@ import {
   synthesizeSpeech,
 } from "@/lib/aac.functions";
 import { buildConversationContext, suggestPeopleAtPlace } from "@/lib/context";
+import { autoMapSpeakers, labelTranscriptForPrompt } from "@/lib/speaker-id";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 export const Route = createFileRoute("/conversation/new")({
   component: LiveConversation,
@@ -47,6 +53,7 @@ const QUICK_PHRASES = [
   "No",
   "Give me a moment",
   "Could you repeat that?",
+  "Sorry, who am I speaking with?",
 ];
 
 function categoryClass(cat: string): string {
