@@ -753,6 +753,17 @@ function Home() {
             <MapPin className="size-4" /> {placeName}
           </span>
         )}
+        <button
+          onClick={() => setShowEventPicker(true)}
+          className={`flex items-center gap-1.5 rounded-full border px-3 py-1 transition ${
+            selectedEvent
+              ? "border-primary/40 bg-primary/10 text-foreground"
+              : "border-border bg-secondary/40 hover:bg-secondary"
+          }`}
+        >
+          <Calendar className="size-4" />
+          {selectedEvent ? selectedEvent.name : "Event (optional)"}
+        </button>
         {active && (
           <span className="flex items-center gap-1.5 text-destructive">
             <span className="inline-block size-2 animate-pulse rounded-full bg-destructive" />
