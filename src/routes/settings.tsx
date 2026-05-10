@@ -125,7 +125,29 @@ function SystemTab() {
 
   useEffect(() => {
     fetchVoices()
-      .then((r) => setVoices(r.voices))
+      .then((r) => {
+        // Only show male voices
+        const male = r.voices.filter((v) => {
+          const g = (v.labels?.gender ?? "").toLowerCase();
+          if (g) return g === "male";
+          // Fallback for the curated list (no labels): hard-coded male IDs
+          const KNOWN_MALE = new Set([
+            "JBFqnCBsd6RMkjVDRZzb", // George
+            "TX3LPaxmHKxFdv7VOQHJ", // Liam
+            "iP95p4xoKVk53GoZ742B", // Chris
+            "nPczCjzI2devNBz1zQrb", // Brian
+            "CwhRBWXzGAHq8TQ4Fs17", // Roger
+            "IKne3meq5aSn9XLyUdCD", // Charlie
+            "N2lVS1w4EtoT3dr4eOWO", // Callum
+            "bIHbv24MWmeRgasZH58o", // Will
+            "cjVigY5qzO86Huf0OWal", // Eric
+            "onwK4e9ZLuTAKqWW03F9", // Daniel
+            "pqHfZKP75CvOlQylNhV4", // Bill
+          ]);
+          return KNOWN_MALE.has(v.voice_id);
+        });
+        setVoices(male);
+      })
       .catch(() => toast.error("Failed to load voices"))
       .finally(() => setLoadingVoices(false));
   }, [fetchVoices]);
