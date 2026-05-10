@@ -1,4 +1,4 @@
-import { db, getJamesProfile, type Person, type Place } from "./db";
+import { db, getJamesProfile, type EventItem, type Person, type Place } from "./db";
 
 export type ConversationContext = {
   jamesProfile: {
@@ -27,6 +27,16 @@ export type ConversationContext = {
     notes?: string;
     recentMemories: string[];
     followUps: string[];
+  };
+  event?: {
+    name: string;
+    when?: string;
+    location?: string;
+    keyInfo?: string;
+    peopleNames: string[];
+    selectedKeyPoints: string[];
+    selectedKeyQuestions: string[];
+    docs: string[]; // formatted doc snippets
   };
   styleProfileJson?: string;
 };
@@ -92,6 +102,7 @@ async function followUpsForPlace(placeId: string): Promise<string[]> {
 export async function buildConversationContext(opts: {
   personIds: string[];
   place?: Place;
+  event?: EventItem;
 }): Promise<ConversationContext> {
   const profile = await getJamesProfile();
   const styleProfile = await db.style_profile.get("singleton");
@@ -140,6 +151,40 @@ export async function buildConversationContext(opts: {
     };
   }
 
+  let event: ConversationContext["event"] | undefined;
+  if (opts.event) {
+    const ev = opts.event;
+    const eventPeople = (await db.people.bulkGet(ev.person_ids ?? []))
+      .filter((p): p is Person => !!p)
+      .map((p) => p.name);
+    const evDocs = await db.event_documents
+      .where("event_id")
+      .equals(ev.id)
+      .toArray();
+    const PER_DOC = 3000;
+    const TOTAL = 12000;
+    let used = 0;
+    const docSnippets: string[] = [];
+    for (const d of evDocs) {
+      const remaining = TOTAL - used;
+      if (remaining <= 200) break;
+      const slice = (d.text ?? "").slice(0, Math.min(PER_DOC, remaining));
+      if (!slice.trim()) continue;
+      docSnippets.push(`### ${d.name}${d.note ? ` — ${d.note}` : ""}\n${slice}`);
+      used += slice.length;
+    }
+    event = {
+      name: ev.name,
+      when: ev.when,
+      location: ev.location,
+      keyInfo: ev.key_info,
+      peopleNames: eventPeople,
+      selectedKeyPoints: (ev.key_points ?? []).filter((k) => k.selected).map((k) => k.text),
+      selectedKeyQuestions: (ev.key_questions ?? []).filter((k) => k.selected).map((k) => k.text),
+      docs: docSnippets,
+    };
+  }
+
   return {
     jamesProfile: {
       name: profile.display_name || "James",
@@ -158,6 +203,7 @@ export async function buildConversationContext(opts: {
     },
     people,
     place,
+    event,
     styleProfileJson: styleProfile?.json,
   };
 }

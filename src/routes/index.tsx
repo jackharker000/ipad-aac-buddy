@@ -14,6 +14,7 @@ import {
   Check,
   X,
   Facebook,
+  Calendar,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -28,6 +29,7 @@ import {
   getSettings,
   newId,
   type Conversation,
+  type EventItem,
   type Person,
   type Place,
   type TranscriptSegment,
@@ -142,6 +144,15 @@ function Home() {
   const personIdsRef = useRef<string[]>([]);
   const [showPeoplePicker, setShowPeoplePicker] = useState(false);
 
+  // Event (optional)
+  const [allEvents, setAllEvents] = useState<EventItem[]>([]);
+  const [selectedEvent, setSelectedEvent] = useState<EventItem | null>(null);
+  const selectedEventRef = useRef<EventItem | null>(null);
+  const [showEventPicker, setShowEventPicker] = useState(false);
+  useEffect(() => {
+    selectedEventRef.current = selectedEvent;
+  }, [selectedEvent]);
+
   // Transcript
   const [committed, setCommitted] = useState<TranscriptSegment[]>([]);
   const [partial, setPartial] = useState("");
@@ -218,6 +229,9 @@ function Home() {
 
       const people = await db.people.orderBy("name").toArray();
       if (!cancelled) setAllPeople(people);
+
+      const evs = await db.events.orderBy("created_at").reverse().toArray();
+      if (!cancelled) setAllEvents(evs);
 
       if (s.gps_enabled) {
         try {
@@ -460,6 +474,7 @@ function Home() {
       const ctx = await buildConversationContext({
         personIds: personIdsRef.current,
         place: placeRef.current,
+        event: selectedEventRef.current ?? undefined,
       });
       const r = await suggestFn({
         data: {
@@ -467,6 +482,7 @@ function Home() {
           jamesProfile: ctx.jamesProfile,
           people: ctx.people,
           place: ctx.place,
+          event: ctx.event,
           styleProfileJson: ctx.styleProfileJson,
           alreadyShown: lastShownRef.current.slice(-20),
           model: aiModelRef.current,
@@ -594,6 +610,7 @@ function Home() {
       const ctx = await buildConversationContext({
         personIds: personIdsRef.current,
         place: placeRef.current,
+        event: selectedEventRef.current ?? undefined,
       });
       const r = await expandFn({
         data: {
@@ -736,6 +753,17 @@ function Home() {
             <MapPin className="size-4" /> {placeName}
           </span>
         )}
+        <button
+          onClick={() => setShowEventPicker(true)}
+          className={`flex items-center gap-1.5 rounded-full border px-3 py-1 transition ${
+            selectedEvent
+              ? "border-primary/40 bg-primary/10 text-foreground"
+              : "border-border bg-secondary/40 hover:bg-secondary"
+          }`}
+        >
+          <Calendar className="size-4" />
+          {selectedEvent ? selectedEvent.name : "Event (optional)"}
+        </button>
         {active && (
           <span className="flex items-center gap-1.5 text-destructive">
             <span className="inline-block size-2 animate-pulse rounded-full bg-destructive" />
@@ -979,6 +1007,85 @@ function Home() {
               >
                 Done
               </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {showEventPicker && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setShowEventPicker(false)}
+        >
+          <Card
+            className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden p-0"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-border px-5 py-3">
+              <h3 className="flex items-center gap-2 text-lg font-semibold">
+                <Calendar className="size-5" /> Prepping for an event?
+              </h3>
+              <button
+                onClick={() => setShowEventPicker(false)}
+                className="rounded-full p-2 hover:bg-secondary"
+              >
+                <X className="size-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-5">
+              <button
+                onClick={() => {
+                  setSelectedEvent(null);
+                  setShowEventPicker(false);
+                }}
+                className={`mb-3 flex w-full items-center justify-between rounded-lg border-2 px-4 py-2 text-left ${
+                  !selectedEvent
+                    ? "border-primary bg-primary/10"
+                    : "border-border bg-secondary/40 hover:bg-secondary"
+                }`}
+              >
+                <span className="font-medium">No event</span>
+                {!selectedEvent && <Check className="size-4" />}
+              </button>
+              {allEvents.length === 0 ? (
+                <p className="text-sm italic text-muted-foreground">
+                  No events yet. Create one in{" "}
+                  <Link to="/settings" className="underline">
+                    Settings → Events
+                  </Link>
+                  .
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {allEvents.map((e) => {
+                    const sel = selectedEvent?.id === e.id;
+                    return (
+                      <button
+                        key={e.id}
+                        onClick={() => {
+                          setSelectedEvent(e);
+                          setShowEventPicker(false);
+                        }}
+                        className={`flex w-full items-start justify-between gap-3 rounded-lg border-2 px-4 py-2 text-left ${
+                          sel
+                            ? "border-primary bg-primary/10"
+                            : "border-border bg-secondary/40 hover:bg-secondary"
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate font-medium">{e.name}</div>
+                          {(e.when || e.location) && (
+                            <div className="truncate text-xs text-muted-foreground">
+                              {[e.when, e.location].filter(Boolean).join(" · ")}
+                            </div>
+                          )}
+                        </div>
+                        {sel && <Check className="size-4 shrink-0" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           </Card>
         </div>

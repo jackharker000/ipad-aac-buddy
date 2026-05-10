@@ -253,6 +253,17 @@ const placeCtxSchema = z.object({
   followUps: z.array(z.string()).optional(),
 });
 
+const eventCtxSchema = z.object({
+  name: z.string(),
+  when: z.string().optional(),
+  location: z.string().optional(),
+  keyInfo: z.string().optional(),
+  peopleNames: z.array(z.string()).optional(),
+  selectedKeyPoints: z.array(z.string()).optional(),
+  selectedKeyQuestions: z.array(z.string()).optional(),
+  docs: z.array(z.string()).optional(),
+});
+
 const jamesProfileSchema = z.object({
   name: z.string(),
   background: z.string().optional(),
@@ -273,6 +284,7 @@ const suggestionsSchema = z.object({
   jamesProfile: jamesProfileSchema.optional(),
   people: z.array(personCtxSchema).optional(),
   place: placeCtxSchema.optional(),
+  event: eventCtxSchema.optional(),
   styleProfileJson: z.string().optional(),
   alreadyShown: z.array(z.string()).max(40).optional(),
   model: z.string().optional(),
@@ -320,6 +332,13 @@ ${data.place.name}${data.place.notes ? ` — ${data.place.notes}` : ""}
 ${data.place.recentMemories?.length ? `Recent memories here:\n- ${data.place.recentMemories.join("\n- ")}\n` : ""}${data.place.followUps?.length ? `Open follow-ups for here:\n- ${data.place.followUps.join("\n- ")}\n` : ""}`
       : "";
 
+    const ev = data.event;
+    const eventBlock = ev
+      ? `# Event James is at: ${ev.name}
+${ev.when ? `When: ${ev.when}\n` : ""}${ev.location ? `Where: ${ev.location}\n` : ""}${ev.peopleNames?.length ? `Attendees: ${ev.peopleNames.join(", ")}\n` : ""}${ev.keyInfo ? `Key info: ${ev.keyInfo}\n` : ""}${ev.selectedKeyPoints?.length ? `Key points James wants to make:\n- ${ev.selectedKeyPoints.join("\n- ")}\n` : ""}${ev.selectedKeyQuestions?.length ? `Key questions James wants to ask:\n- ${ev.selectedKeyQuestions.join("\n- ")}\n` : ""}${ev.docs?.length ? `Reference materials for the event:\n${ev.docs.join("\n\n")}\n` : ""}
+Strongly bias suggestions toward making these key points and asking these key questions when natural.`
+      : "";
+
     const styleBlock = data.styleProfileJson
       ? `# Learned style profile (JSON)\n${data.styleProfileJson}\n`
       : "";
@@ -329,6 +348,7 @@ ${data.place.recentMemories?.length ? `Recent memories here:\n- ${data.place.rec
     const user = `${profileBlock}
 ${peopleBlock}
 ${placeBlock}
+${eventBlock}
 ${styleBlock}
 # Live conversation so far
 ${transcriptText || "(no transcript yet — conversation just starting)"}
@@ -698,5 +718,109 @@ Produce one polished version (the recommended one) plus 3 alternative variations
       };
     } catch {
       return { recommended: data.rawText, alternatives: [], error: "Parse error" };
+    }
+  });
+
+/* ----------------------- AI: event prep generation ------------------------ */
+
+const eventPrepSchema = z.object({
+  eventName: z.string().min(1).max(200),
+  when: z.string().max(200).optional(),
+  location: z.string().max(200).optional(),
+  keyInfo: z.string().max(4000).optional(),
+  prepPrompt: z.string().max(2000).optional(),
+  peopleNames: z.array(z.string()).optional(),
+  docs: z.array(z.string()).max(20).optional(), // formatted doc snippets
+  jamesProfile: jamesProfileSchema.optional(),
+  existingPoints: z.array(z.string()).optional(),
+  existingQuestions: z.array(z.string()).optional(),
+  model: z.string().optional(),
+});
+
+export const generateEventPrep = createServerFn({ method: "POST" })
+  .inputValidator((d) => eventPrepSchema.parse(d))
+  .handler(async ({ data }) => {
+    const jp = data.jamesProfile;
+    const profileBlock = jp
+      ? `# About ${jp.name}
+${jp.background ? `Background: ${jp.background}\n` : ""}${jp.personality ? `Personality: ${jp.personality}\n` : ""}${jp.communication ? `Communication style: ${jp.communication}\n` : ""}${jp.topicsLoved ? `Topics he loves: ${jp.topicsLoved}\n` : ""}${jp.currentLifeContext ? `Current life context: ${jp.currentLifeContext}\n` : ""}`
+      : "";
+
+    const docsBlock = data.docs?.length
+      ? `# Reference documents for this event\n${data.docs.join("\n\n")}\n`
+      : "";
+
+    const existingBlock =
+      (data.existingPoints?.length || data.existingQuestions?.length)
+        ? `# Already drafted (offer DIFFERENT, complementary items)\n${data.existingPoints?.length ? `Points:\n- ${data.existingPoints.join("\n- ")}\n` : ""}${data.existingQuestions?.length ? `Questions:\n- ${data.existingQuestions.join("\n- ")}\n` : ""}`
+        : "";
+
+    const system = `You help ${jp?.name ?? "James"}, a non-speaking AAC user, prepare for an upcoming event or meeting. Generate concrete, useful KEY POINTS he may want to make and KEY QUESTIONS he may want to ask, grounded in his profile, the event details, attendees, the user's prep prompt, and any reference documents provided. Items must sound like him, be specific (not generic), and be tappable as standalone spoken lines (under ~20 words each).`;
+
+    const user = `${profileBlock}
+# Event
+Name: ${data.eventName}
+${data.when ? `When: ${data.when}\n` : ""}${data.location ? `Where: ${data.location}\n` : ""}${data.peopleNames?.length ? `Attendees: ${data.peopleNames.join(", ")}\n` : ""}${data.keyInfo ? `Key info: ${data.keyInfo}\n` : ""}${data.prepPrompt ? `\n# James's prep instructions\n${data.prepPrompt}\n` : ""}
+${docsBlock}
+${existingBlock}
+Generate 6-10 key points and 6-10 key questions tailored to this event.`;
+
+    const target = resolveChatTarget(data.model);
+    const res = await fetch(target.url, {
+      method: "POST",
+      headers: target.headers,
+      body: JSON.stringify({
+        model: target.model,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "emit_event_prep",
+              parameters: {
+                type: "object",
+                properties: {
+                  keyPoints: {
+                    type: "array",
+                    minItems: 4,
+                    maxItems: 12,
+                    items: { type: "string" },
+                  },
+                  keyQuestions: {
+                    type: "array",
+                    minItems: 4,
+                    maxItems: 12,
+                    items: { type: "string" },
+                  },
+                },
+                required: ["keyPoints", "keyQuestions"],
+              },
+            },
+          },
+        ],
+        tool_choice: { type: "function", function: { name: "emit_event_prep" } },
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      console.error("Event prep failed:", res.status, err);
+      return { keyPoints: [], keyQuestions: [], error: `AI error ${res.status}` };
+    }
+    const json = (await res.json()) as any;
+    const call = json.choices?.[0]?.message?.tool_calls?.[0];
+    if (!call) return { keyPoints: [], keyQuestions: [], error: "No tool call" };
+    try {
+      const parsed = JSON.parse(call.function.arguments);
+      return {
+        keyPoints: (parsed.keyPoints ?? []).map((s: string) => s.trim()).filter(Boolean),
+        keyQuestions: (parsed.keyQuestions ?? []).map((s: string) => s.trim()).filter(Boolean),
+        error: null,
+      };
+    } catch {
+      return { keyPoints: [], keyQuestions: [], error: "Parse error" };
     }
   });
