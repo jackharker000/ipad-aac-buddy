@@ -138,6 +138,7 @@ export function labelTranscriptForPrompt(
   jamesName = "James",
 ): { speaker: string; text: string }[] {
   return segments.map((s) => {
+    if (s.speaker === "__james_self__") return { ...s, speaker: jamesName };
     if (s.speaker === jamesLabel) return { ...s, speaker: jamesName };
     const pid = mapping[s.speaker];
     if (pid) {
