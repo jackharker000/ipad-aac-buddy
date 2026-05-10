@@ -17,6 +17,7 @@ import {
   Map as MapIcon,
   FileText,
   Upload,
+  Calendar,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -50,6 +51,9 @@ import {
   type JamesDocument,
   type Person,
   type Place,
+  type EventItem,
+  type EventDocument,
+  type EventPrepItem,
   IPAD_PRESETS,
   type IPadModel,
   MODEL_OPTIONS,
@@ -59,6 +63,7 @@ import {
   synthesizeSpeech,
   designVoicePreviews,
   saveDesignedVoice,
+  generateEventPrep,
 } from "@/lib/aac.functions";
 import { getCurrentPosition } from "@/lib/geo";
 import { getPersonStats, groupMemories } from "@/lib/people-stats";
@@ -103,6 +108,9 @@ function SettingsPage() {
             <TabsTrigger value="places" className="h-10 gap-2 px-4 text-base">
               <MapPin className="size-4" /> Locations
             </TabsTrigger>
+            <TabsTrigger value="events" className="h-10 gap-2 px-4 text-base">
+              <Calendar className="size-4" /> Events
+            </TabsTrigger>
             <TabsTrigger value="system" className="h-10 gap-2 px-4 text-base">
               <SlidersHorizontal className="size-4" /> System
             </TabsTrigger>
@@ -116,6 +124,9 @@ function SettingsPage() {
           </TabsContent>
           <TabsContent value="places">
             <PlacesTab />
+          </TabsContent>
+          <TabsContent value="events">
+            <EventsTab />
           </TabsContent>
           <TabsContent value="system">
             <SystemTab />
