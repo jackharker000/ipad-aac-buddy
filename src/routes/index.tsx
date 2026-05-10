@@ -870,12 +870,12 @@ function Home() {
             ))}
           </div>
           {/* Quick phrases */}
-          <div className="flex flex-wrap gap-1.5 border-t border-border p-2">
+          <div className="grid grid-cols-5 gap-1.5 border-t border-border p-2">
             {QUICK_PHRASES.map((p) => (
               <Button
                 key={p}
                 variant="secondary"
-                className="h-8 rounded-full px-3 text-xs"
+                className="h-16 rounded-xl px-3 text-base font-medium leading-tight whitespace-normal"
                 onClick={() => speak(p)}
                 disabled={speaking}
               >
@@ -885,73 +885,49 @@ function Home() {
           </div>
         </section>
 
-        {/* Transcript / Recent — strip along the bottom */}
-        <section className="flex min-h-0 flex-[1] flex-col rounded-2xl border border-border bg-card/40">
-          <div className="border-b border-border px-3 py-1.5">
-            <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-              {active ? "Transcript" : "Recent conversations"}
-            </h2>
-          </div>
-          <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-3 text-sm">
-            {active ? (
-              <>
-                {transcriptList.length === 0 && !partial && (
-                  <p className="text-sm italic text-muted-foreground">
-                    Listening…
-                  </p>
-                )}
-                {transcriptList.map((s) => {
-                  const displayName =
-                    s.speaker_label === jamesLabel ||
-                    s.speaker_label === JAMES_SELF_LABEL
-                      ? "James"
-                      : (() => {
-                          const pid = speakerMap[s.speaker_label];
-                          return pid
-                            ? (allPeople.find((p) => p.id === pid)?.name ??
-                                s.speaker_label)
-                            : s.speaker_label;
-                        })();
-                  return (
-                    <div key={s.id} className="leading-snug">
-                      <span className="mr-2 text-xs font-medium text-muted-foreground">
-                        {displayName}
-                      </span>
-                      {s.text}
-                    </div>
-                  );
-                })}
-                {partial && (
-                  <div className="italic leading-snug text-muted-foreground">
-                    {partial}
+        {/* Transcript — only shown during an active conversation */}
+        {active && (
+          <section className="flex min-h-0 flex-[1] flex-col rounded-2xl border border-border bg-card/40">
+            <div className="border-b border-border px-3 py-1.5">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                Transcript
+              </h2>
+            </div>
+            <div className="min-h-0 flex-1 space-y-1 overflow-y-auto p-3 text-sm">
+              {transcriptList.length === 0 && !partial && (
+                <p className="text-sm italic text-muted-foreground">
+                  Listening…
+                </p>
+              )}
+              {transcriptList.map((s) => {
+                const displayName =
+                  s.speaker_label === jamesLabel ||
+                  s.speaker_label === JAMES_SELF_LABEL
+                    ? "James"
+                    : (() => {
+                        const pid = speakerMap[s.speaker_label];
+                        return pid
+                          ? (allPeople.find((p) => p.id === pid)?.name ??
+                              s.speaker_label)
+                          : s.speaker_label;
+                      })();
+                return (
+                  <div key={s.id} className="leading-snug">
+                    <span className="mr-2 text-xs font-medium text-muted-foreground">
+                      {displayName}
+                    </span>
+                    {s.text}
                   </div>
-                )}
-              </>
-            ) : (
-              <>
-                {recent.length === 0 && (
-                  <p className="text-sm italic text-muted-foreground">
-                    No conversations yet.
-                  </p>
-                )}
-                {recent.map((c) => (
-                  <Card key={c.id} className="p-2">
-                    <div className="text-xs text-muted-foreground">
-                      {new Date(c.started_at).toLocaleString()}
-                    </div>
-                    {c.summary ? (
-                      <p className="mt-1 leading-snug">{c.summary}</p>
-                    ) : (
-                      <p className="mt-1 text-xs italic text-muted-foreground">
-                        {c.ended_at ? "No summary" : "In progress…"}
-                      </p>
-                    )}
-                  </Card>
-                ))}
-              </>
-            )}
-          </div>
-        </section>
+                );
+              })}
+              {partial && (
+                <div className="italic leading-snug text-muted-foreground">
+                  {partial}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
       </div>
 
       {/* People picker modal */}
