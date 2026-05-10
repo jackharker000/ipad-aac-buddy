@@ -46,7 +46,12 @@ import {
   type Person,
   type Place,
 } from "@/lib/db";
-import { listVoices, synthesizeSpeech } from "@/lib/aac.functions";
+import {
+  listVoices,
+  synthesizeSpeech,
+  designVoicePreviews,
+  saveDesignedVoice,
+} from "@/lib/aac.functions";
 import { getCurrentPosition } from "@/lib/geo";
 import { getPersonStats, groupMemories } from "@/lib/people-stats";
 
@@ -197,12 +202,20 @@ function SystemTab() {
     toast.success("All data cleared");
   }
 
+  function addCustomVoice(v: Voice) {
+    setVoices((cur) => {
+      if (cur.some((x) => x.voice_id === v.voice_id)) return cur;
+      return [v, ...cur];
+    });
+  }
+
   return (
     <div className="space-y-4">
       <Card className="p-6">
         <h2 className="text-lg font-semibold">Voice</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Choose how the app speaks suggestions out loud.
+          Choose how the app speaks suggestions out loud. Selection is
+          remembered across sessions.
         </p>
         <div className="mt-4 flex items-center gap-3">
           <Select
@@ -233,6 +246,13 @@ function SystemTab() {
             {previewing ? "…" : "Preview"}
           </Button>
         </div>
+
+        <VoiceDesignerPanel
+          onSaved={(v) => {
+            addCustomVoice(v);
+            handleVoiceChange(v.voice_id);
+          }}
+        />
       </Card>
 
       <Card className="p-6">
@@ -276,6 +296,173 @@ function SystemTab() {
           Clear all local data
         </Button>
       </Card>
+    </div>
+  );
+}
+
+/* -------------------------- James Profile editor -------------------------- */
+
+/* ---------------------------- Voice Designer ----------------------------- */
+
+type Preview = {
+  generatedVoiceId: string;
+  audioBase64: string;
+  mime: string;
+};
+
+function VoiceDesignerPanel({
+  onSaved,
+}: {
+  onSaved: (v: Voice) => void;
+}) {
+  const designFn = useServerFn(designVoicePreviews);
+  const saveFn = useServerFn(saveDesignedVoice);
+  const [open, setOpen] = useState(false);
+  const [description, setDescription] = useState(
+    "A calm, authoritative 44-year-old middle-class New Zealand man. Warm but understated, measured pace, gentle dry humour, clearly articulated.",
+  );
+  const [name, setName] = useState("James");
+  const [previews, setPreviews] = useState<Preview[]>([]);
+  const [chosen, setChosen] = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function generate() {
+    if (description.trim().length < 20) {
+      toast.error("Description must be at least 20 characters");
+      return;
+    }
+    setGenerating(true);
+    setPreviews([]);
+    setChosen(null);
+    try {
+      const r = await designFn({ data: { description } });
+      setPreviews(r.previews);
+      if (r.previews[0]) setChosen(r.previews[0].generatedVoiceId);
+    } catch (e: any) {
+      toast.error(e?.message ?? "Voice design failed");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  function play(p: Preview) {
+    const audio = new Audio(`data:${p.mime};base64,${p.audioBase64}`);
+    audio.play().catch(() => toast.error("Playback failed"));
+  }
+
+  async function save() {
+    if (!chosen) return;
+    if (!name.trim()) {
+      toast.error("Give the voice a name");
+      return;
+    }
+    setSaving(true);
+    try {
+      const r = await saveFn({
+        data: {
+          voiceName: name.trim(),
+          description,
+          generatedVoiceId: chosen,
+        },
+      });
+      toast.success(`Saved "${r.name}" — now selected`);
+      onSaved({
+        voice_id: r.voiceId,
+        name: r.name,
+        labels: { gender: "male", custom: "true" },
+      });
+      setOpen(false);
+      setPreviews([]);
+      setChosen(null);
+    } catch (e: any) {
+      toast.error(e?.message ?? "Could not save voice");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="mt-5 rounded-xl border border-border bg-secondary/30 p-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-sm font-semibold">Design a custom voice</h3>
+          <p className="text-xs text-muted-foreground">
+            Describe the voice you want — ElevenLabs will generate 3 candidates
+            for you to choose from.
+          </p>
+        </div>
+        <Button
+          size="sm"
+          variant={open ? "ghost" : "secondary"}
+          onClick={() => setOpen((o) => !o)}
+        >
+          {open ? "Close" : "Open"}
+        </Button>
+      </div>
+
+      {open && (
+        <div className="mt-4 space-y-3">
+          <Field
+            label="Voice description"
+            hint="Age, gender, accent, tone, pace, personality. The more specific, the better."
+          >
+            <Textarea
+              rows={4}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </Field>
+
+          <Button onClick={generate} disabled={generating}>
+            {generating ? "Generating 3 previews…" : "Generate previews"}
+          </Button>
+
+          {previews.length > 0 && (
+            <div className="space-y-2">
+              <Label className="text-base">Pick your favourite</Label>
+              {previews.map((p, i) => (
+                <label
+                  key={p.generatedVoiceId}
+                  className={`flex items-center justify-between gap-3 rounded-lg border-2 p-3 transition cursor-pointer ${
+                    chosen === p.generatedVoiceId
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:bg-secondary"
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="radio"
+                      name="preview"
+                      checked={chosen === p.generatedVoiceId}
+                      onChange={() => setChosen(p.generatedVoiceId)}
+                    />
+                    <span className="font-medium">Candidate {i + 1}</span>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      play(p);
+                    }}
+                  >
+                    <Volume2 className="size-4" /> Play
+                  </Button>
+                </label>
+              ))}
+
+              <Field label="Save as">
+                <Input value={name} onChange={(e) => setName(e.target.value)} />
+              </Field>
+              <Button onClick={save} disabled={saving || !chosen}>
+                {saving ? "Saving…" : "Save and use this voice"}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
