@@ -206,6 +206,7 @@ function SystemTab() {
       db.places.clear(),
       db.style_profile.clear(),
       db.james_profile.clear(),
+      db.james_documents.clear(),
     ]);
     toast.success("All data cleared");
   }
