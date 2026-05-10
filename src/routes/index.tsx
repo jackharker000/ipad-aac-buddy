@@ -258,6 +258,9 @@ function Home() {
         .limit(5)
         .toArray();
       if (!cancelled) setRecent(r);
+      if (!cancelled && r[0] && !lastConversationIdRef.current) {
+        lastConversationIdRef.current = r[0].id;
+      }
     })();
     return () => {
       cancelled = true;
