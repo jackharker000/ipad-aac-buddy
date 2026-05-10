@@ -94,7 +94,7 @@ function SettingsPage() {
                 <MapPin className="size-4" /> Locations
               </TabsTrigger>
               <TabsTrigger value="events" className="h-10 gap-2 px-4 text-base">
-                <Calendar className="size-4" /> Events
+                <CalendarIcon className="size-4" /> Events
               </TabsTrigger>
               <TabsTrigger value="system" className="h-10 gap-2 px-4 text-base">
                 <SlidersHorizontal className="size-4" /> System
