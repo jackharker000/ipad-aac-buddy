@@ -30,6 +30,7 @@ import {
   type Person,
   type Place,
   type TranscriptSegment,
+  IPAD_PRESETS,
 } from "@/lib/db";
 import { findNearestPlace, getCurrentPosition } from "@/lib/geo";
 import {
@@ -150,6 +151,7 @@ function Home() {
     expanded: string;
   } | null>(null);
   const [voiceId, setVoiceId] = useState<string>("EXAVITQu4vr4xnSDxMaL");
+  const [ipadModel, setIpadModel] = useState<string>("auto");
 
   // Speaker map
   const [speakerMap, setSpeakerMap] = useState<Record<string, string>>({});
@@ -201,6 +203,7 @@ function Home() {
       const s = await getSettings();
       if (cancelled) return;
       setVoiceId(s.voice_id);
+      setIpadModel(s.ipad_model ?? "auto");
 
       const people = await db.people.orderBy("name").toArray();
       if (!cancelled) setAllPeople(people);
