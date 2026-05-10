@@ -770,3 +770,109 @@ function LiveConversation() {
     </main>
   );
 }
+
+/* --------------------------- Speaker mapping bar -------------------------- */
+
+function SpeakerBar({
+  segments,
+  speakerMap,
+  jamesLabel,
+  candidates,
+  onAssign,
+  onSetJames,
+  onClear,
+}: {
+  segments: TranscriptSegment[];
+  speakerMap: Record<string, string>;
+  jamesLabel?: string;
+  candidates: Person[];
+  onAssign: (label: string, personId: string) => void;
+  onSetJames: (label: string) => void;
+  onClear: (label: string) => void;
+}) {
+  // Distinct speaker labels seen so far
+  const labels = useMemo(() => {
+    const seen = new Set<string>();
+    for (const s of segments) seen.add(s.speaker_label);
+    return [...seen];
+  }, [segments]);
+
+  if (labels.length === 0) return null;
+
+  return (
+    <div className="border-b border-border bg-card px-5 py-2">
+      <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2">
+        <span className="text-xs uppercase tracking-wider text-muted-foreground">
+          Speakers
+        </span>
+        {labels.map((label) => {
+          const isJames = label === jamesLabel;
+          const pid = speakerMap[label];
+          const person = pid ? candidates.find((p) => p.id === pid) : undefined;
+          const displayName = isJames
+            ? "James"
+            : person?.name ?? label;
+          const assigned = isJames || !!person;
+          return (
+            <Popover key={label}>
+              <PopoverTrigger asChild>
+                <button
+                  className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm transition-colors ${
+                    assigned
+                      ? "border-primary/40 bg-primary/10 text-foreground"
+                      : "border-border bg-secondary/40 text-muted-foreground hover:bg-secondary"
+                  }`}
+                >
+                  <span className="font-medium">{displayName}</span>
+                  {assigned && label !== displayName && (
+                    <span className="text-[10px] opacity-60">({label})</span>
+                  )}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="w-56 p-2">
+                <div className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Who is "{label}"?
+                </div>
+                <button
+                  onClick={() => onSetJames(label)}
+                  className="flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-sm hover:bg-secondary"
+                >
+                  <span>James (this is me)</span>
+                  {jamesLabel === label && <Check className="size-4" />}
+                </button>
+                {candidates.map((p) => {
+                  const used = speakerMap[label] === p.id;
+                  return (
+                    <button
+                      key={p.id}
+                      onClick={() => onAssign(label, p.id)}
+                      className="flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-sm hover:bg-secondary"
+                    >
+                      <span>
+                        {p.name}
+                        {p.relationship && (
+                          <span className="ml-1 text-xs text-muted-foreground">
+                            · {p.relationship}
+                          </span>
+                        )}
+                      </span>
+                      {used && <Check className="size-4" />}
+                    </button>
+                  );
+                })}
+                {(jamesLabel === label || speakerMap[label]) && (
+                  <button
+                    onClick={() => onClear(label)}
+                    className="mt-1 w-full rounded-md px-2 py-2 text-left text-sm text-destructive hover:bg-destructive/10"
+                  >
+                    Clear
+                  </button>
+                )}
+              </PopoverContent>
+            </Popover>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
