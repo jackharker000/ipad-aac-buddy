@@ -45,6 +45,8 @@ import {
   type JamesProfile,
   type Person,
   type Place,
+  IPAD_PRESETS,
+  type IPadModel,
 } from "@/lib/db";
 import {
   listVoices,
@@ -272,6 +274,36 @@ function SystemTab() {
               )
             }
           />
+        </div>
+      </Card>
+
+      <Card className="p-6">
+        <h2 className="text-lg font-semibold">Display size</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Pick the iPad you mostly use. The home screen scales so all
+          suggestions, transcript and controls fit without scrolling.
+        </p>
+        <div className="mt-4">
+          <Select
+            value={settings.ipad_model ?? "auto"}
+            onValueChange={(v) =>
+              updateSettings({ ipad_model: v as IPadModel }).then(() =>
+                toast.success("Display size updated"),
+              )
+            }
+          >
+            <SelectTrigger className="h-12 text-base">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="auto">Auto (use this screen)</SelectItem>
+              {Object.entries(IPAD_PRESETS).map(([key, p]) => (
+                <SelectItem key={key} value={key}>
+                  {p.label} — {p.width}×{p.height}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </Card>
 

@@ -296,7 +296,7 @@ ${styleBlock}
 ${transcriptText || "(no transcript yet — conversation just starting)"}
 
 ${data.alreadyShown?.length ? `# Already shown (do NOT repeat)\n${data.alreadyShown.join(" | ")}\n` : ""}
-Return 6 ranked suggestions in James's voice.`;
+Return 16 ranked suggestions in James's voice. Provide a wide variety so James has plenty of useful options to pick from.`;
 
     const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -321,8 +321,8 @@ Return 6 ranked suggestions in James's voice.`;
                 properties: {
                   suggestions: {
                     type: "array",
-                    minItems: 4,
-                    maxItems: 8,
+                     minItems: 12,
+                     maxItems: 16,
                     items: {
                       type: "object",
                       properties: {
