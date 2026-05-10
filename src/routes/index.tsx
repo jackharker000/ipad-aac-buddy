@@ -443,7 +443,7 @@ function Home() {
         segments: committed,
         candidates,
         current: speakerMapRef.current,
-        jamesSpeakerLabel: jamesLabelRef.current,
+        // James never speaks aloud — every diarized voice is a non-James person.
       });
       const changed = Object.keys(mapping).some(
         (k) => mapping[k] !== speakerMapRef.current[k],
@@ -1274,13 +1274,6 @@ function SpeakerBar({
               <div className="px-2 py-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Who is "{label}"?
               </div>
-              <button
-                onClick={() => onSetJames(label)}
-                className="flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-sm hover:bg-secondary"
-              >
-                <span>James (this is me)</span>
-                {jamesLabel === label && <Check className="size-4" />}
-              </button>
               {candidates.map((p) => {
                 const used = speakerMap[label] === p.id;
                 return (
