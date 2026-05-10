@@ -536,6 +536,47 @@ function Home() {
     [allPeople, selectedPersonIds],
   );
 
+  // Expand James's truncated typing via LLM, then speak the expanded version
+  const expandAndSpeak = useCallback(async () => {
+    const raw = draft.trim();
+    if (!raw || expanding || speaking) return;
+    setExpanding(true);
+    try {
+      const peopleById = new Map(allPeople.map((p) => [p.id, p] as const));
+      const rawRecent = committed.slice(-12).map((s) => ({
+        speaker: s.speaker_label,
+        text: s.text,
+      }));
+      const recent = labelTranscriptForPrompt(
+        rawRecent,
+        speakerMapRef.current,
+        peopleById,
+        jamesLabelRef.current,
+      );
+      const ctx = await buildConversationContext({
+        personIds: personIdsRef.current,
+        place: placeRef.current,
+      });
+      const r = await expandFn({
+        data: {
+          rawText: raw,
+          recentTranscript: recent,
+          jamesProfile: ctx.jamesProfile,
+          people: ctx.people,
+          place: ctx.place,
+        },
+      });
+      const spoken = (r.expanded || raw).trim();
+      setLastExpansion({ raw, expanded: spoken });
+      setDraft("");
+      await speak(spoken);
+    } catch (e: any) {
+      toast.error(e?.message ?? "Could not expand text");
+    } finally {
+      setExpanding(false);
+    }
+  }, [draft, expanding, speaking, expandFn, allPeople, committed, speak]);
+
   return (
     <main className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
       {/* Top control bar — always visible, designed for landscape iPad */}
