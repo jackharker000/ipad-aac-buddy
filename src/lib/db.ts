@@ -156,6 +156,38 @@ export type JamesDocument = {
   created_at: number;
 };
 
+export type EventPrepItem = {
+  id: string;
+  text: string;
+  selected: boolean;
+  edited?: boolean;
+};
+
+export type EventItem = {
+  id: string;
+  name: string;
+  when?: string; // freeform date/time
+  location?: string;
+  person_ids: string[];
+  key_info?: string;
+  prep_prompt?: string; // user-provided steering for AI prep
+  key_points: EventPrepItem[];
+  key_questions: EventPrepItem[];
+  notes?: string;
+  created_at: number;
+};
+
+export type EventDocument = {
+  id: string;
+  event_id: string;
+  name: string;
+  mime: string;
+  size: number;
+  text: string;
+  note?: string;
+  created_at: number;
+};
+
 class AacDb extends Dexie {
   people!: Table<Person, string>;
   places!: Table<Place, string>;
@@ -169,6 +201,8 @@ class AacDb extends Dexie {
   style_profile!: Table<StyleProfile, string>;
   james_profile!: Table<JamesProfile, string>;
   james_documents!: Table<JamesDocument, string>;
+  events!: Table<EventItem, string>;
+  event_documents!: Table<EventDocument, string>;
 
   constructor() {
     super("aac_copilot");
@@ -189,6 +223,10 @@ class AacDb extends Dexie {
     });
     this.version(3).stores({
       james_documents: "id, created_at",
+    });
+    this.version(4).stores({
+      events: "id, name, created_at",
+      event_documents: "id, event_id, created_at",
     });
   }
 }
