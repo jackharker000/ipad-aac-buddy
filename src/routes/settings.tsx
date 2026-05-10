@@ -17,7 +17,7 @@ import {
   Map as MapIcon,
   FileText,
   Upload,
-  Calendar,
+  Calendar as CalendarIcon,
   Check,
   Mic,
 } from "lucide-react";
@@ -29,6 +29,14 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Calendar } from "@/components/ui/calendar";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { format } from "date-fns";
+import { cn } from "@/lib/utils";
 import {
   Tabs,
   TabsContent,
@@ -94,7 +102,7 @@ function SettingsPage() {
                 <MapPin className="size-4" /> Locations
               </TabsTrigger>
               <TabsTrigger value="events" className="h-10 gap-2 px-4 text-base">
-                <Calendar className="size-4" /> Events
+                <CalendarIcon className="size-4" /> Events
               </TabsTrigger>
               <TabsTrigger value="system" className="h-10 gap-2 px-4 text-base">
                 <SlidersHorizontal className="size-4" /> System
@@ -1782,18 +1790,43 @@ function EventDetail({ eventId }: { eventId: string }) {
             onChange={(e) => patch({ name: e.target.value })}
           />
         </Field>
-        <Field label="When" hint="e.g. Tue 14 May, 10am">
-          <Input
-            value={event.when ?? ""}
-            onChange={(e) => patch({ when: e.target.value })}
-          />
+        <Field label="When" hint="Pick a date or type freeform (e.g. Tue 14 May, 10am)">
+          <div className="flex gap-2">
+            <Input
+              value={event.when ?? ""}
+              onChange={(e) => patch({ when: e.target.value })}
+              placeholder="Tue 14 May, 10am"
+              className="flex-1"
+            />
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  aria-label="Pick a date"
+                >
+                  <CalendarIcon className="size-4" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0" align="end">
+                <Calendar
+                  mode="single"
+                  selected={parseEventDate(event.when)}
+                  onSelect={(d) => {
+                    if (d) patch({ when: format(d, "EEE d MMM yyyy") });
+                  }}
+                  initialFocus
+                  className={cn("p-3 pointer-events-auto")}
+                />
+              </PopoverContent>
+            </Popover>
+          </div>
         </Field>
-        <Field label="Where">
-          <Input
-            value={event.location ?? ""}
-            onChange={(e) => patch({ location: e.target.value })}
-          />
-        </Field>
+        <EventLocationField
+          value={event.location ?? ""}
+          onChange={(v: string) => patch({ location: v })}
+        />
         <div />
         <div className="md:col-span-2">
           <Field label="Key info" hint="Purpose, agenda, anything important">
@@ -1996,5 +2029,63 @@ function PrepList({
         </div>
       )}
     </div>
+  );
+}
+
+/** Try to parse a freeform `when` string into a Date for the calendar. */
+function parseEventDate(value: string | undefined): Date | undefined {
+  if (!value) return undefined;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? undefined : d;
+}
+
+function EventLocationField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const places = useLiveQuery(() => db.places.orderBy("name").toArray(), []);
+  const matchedPlaceId = useMemo(() => {
+    if (!places || !value) return "";
+    const m = places.find((p) => p.name === value);
+    return m?.id ?? "__custom__";
+  }, [places, value]);
+  return (
+    <Field label="Where" hint="Choose a saved location or type your own">
+      <div className="flex gap-2">
+        <Input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="Where is this happening?"
+          className="flex-1"
+        />
+        <Select
+          value={matchedPlaceId}
+          onValueChange={(id) => {
+            const p = places?.find((pl) => pl.id === id);
+            if (p) onChange(p.name);
+          }}
+        >
+          <SelectTrigger className="w-[180px]">
+            <SelectValue placeholder="Saved places…" />
+          </SelectTrigger>
+          <SelectContent>
+            {(places ?? []).length === 0 ? (
+              <SelectItem value="__none__" disabled>
+                No saved locations
+              </SelectItem>
+            ) : (
+              (places ?? []).map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.name}
+                </SelectItem>
+              ))
+            )}
+          </SelectContent>
+        </Select>
+      </div>
+    </Field>
   );
 }
