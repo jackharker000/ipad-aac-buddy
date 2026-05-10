@@ -96,6 +96,11 @@ export type Settings = {
   ipad_model?: IPadModel;
   suggestion_model?: string;
   expand_model?: string;
+  custom_voices?: Array<{
+    voice_id: string;
+    name: string;
+    labels?: Record<string, string>;
+  }>;
 };
 
 export type IPadModel =
