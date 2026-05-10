@@ -68,6 +68,7 @@ import {
 } from "@/lib/aac.functions";
 import { getCurrentPosition } from "@/lib/geo";
 import { getPersonStats, groupMemories } from "@/lib/people-stats";
+import { deleteVoiceprint } from "@/lib/voiceprint";
 
 export const Route = createFileRoute("/settings")({
   component: SettingsPage,
