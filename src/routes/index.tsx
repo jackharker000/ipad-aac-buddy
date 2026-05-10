@@ -474,6 +474,7 @@ function Home() {
       const ctx = await buildConversationContext({
         personIds: personIdsRef.current,
         place: placeRef.current,
+        event: selectedEventRef.current ?? undefined,
       });
       const r = await suggestFn({
         data: {
@@ -481,6 +482,7 @@ function Home() {
           jamesProfile: ctx.jamesProfile,
           people: ctx.people,
           place: ctx.place,
+          event: ctx.event,
           styleProfileJson: ctx.styleProfileJson,
           alreadyShown: lastShownRef.current.slice(-20),
           model: aiModelRef.current,
@@ -608,6 +610,7 @@ function Home() {
       const ctx = await buildConversationContext({
         personIds: personIdsRef.current,
         place: placeRef.current,
+        event: selectedEventRef.current ?? undefined,
       });
       const r = await expandFn({
         data: {
