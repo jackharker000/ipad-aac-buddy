@@ -570,6 +570,7 @@ function Home() {
           jamesProfile: ctx.jamesProfile,
           people: ctx.people,
           place: ctx.place,
+          model: aiModelRef.current,
         },
       });
       const spoken = (r.expanded || raw).trim();
