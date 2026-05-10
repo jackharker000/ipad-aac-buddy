@@ -259,6 +259,22 @@ function SystemTab() {
 
       <Card className="p-6">
         <h2 className="text-lg font-semibold">Location</h2>
+        <div className="mt-3 flex items-center justify-between">
+          <div>
+            <Label className="text-base">Use GPS for context</Label>
+            <p className="text-sm text-muted-foreground">
+              Auto-detects places (e.g. library, café) to tailor suggestions.
+            </p>
+          </div>
+          <Switch
+            checked={settings.gps_enabled}
+            onCheckedChange={(v) =>
+              updateSettings({ gps_enabled: v }).then(() =>
+                toast.success(v ? "GPS on" : "GPS off"),
+              )
+            }
+          />
+        </div>
       </Card>
 
       <Card className="p-6">
@@ -288,26 +304,6 @@ function SystemTab() {
               ))}
             </SelectContent>
           </Select>
-        </div>
-      </Card>
-
-      <Card className="p-6 hidden">
-        <h2 className="text-lg font-semibold">Location</h2>
-        <div className="mt-3 flex items-center justify-between">
-          <div>
-            <Label className="text-base">Use GPS for context</Label>
-            <p className="text-sm text-muted-foreground">
-              Auto-detects places (e.g. library, café) to tailor suggestions.
-            </p>
-          </div>
-          <Switch
-            checked={settings.gps_enabled}
-            onCheckedChange={(v) =>
-              updateSettings({ gps_enabled: v }).then(() =>
-                toast.success(v ? "GPS on" : "GPS off"),
-              )
-            }
-          />
         </div>
       </Card>
 
