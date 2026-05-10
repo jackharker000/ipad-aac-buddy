@@ -536,13 +536,12 @@ const expandSchema = z.object({
   jamesProfile: jamesProfileSchema.optional(),
   people: z.array(personCtxSchema).optional(),
   place: placeCtxSchema.optional(),
+  model: z.string().optional(),
 });
 
 export const expandUtterance = createServerFn({ method: "POST" })
   .inputValidator((d) => expandSchema.parse(d))
   .handler(async ({ data }) => {
-    const apiKey = requireLovableApiKey();
-
     const transcriptText = (data.recentTranscript ?? [])
       .slice(-12)
       .map((s) => `${s.speaker}: ${s.text}`)
@@ -567,14 +566,12 @@ James typed: "${data.rawText}"
 
 Rewrite as the spoken reply:`;
 
-    const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const target = resolveChatTarget(data.model);
+    const res = await fetch(target.url, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
+      headers: target.headers,
       body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
+        model: target.model,
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
