@@ -253,6 +253,17 @@ const placeCtxSchema = z.object({
   followUps: z.array(z.string()).optional(),
 });
 
+const eventCtxSchema = z.object({
+  name: z.string(),
+  when: z.string().optional(),
+  location: z.string().optional(),
+  keyInfo: z.string().optional(),
+  peopleNames: z.array(z.string()).optional(),
+  selectedKeyPoints: z.array(z.string()).optional(),
+  selectedKeyQuestions: z.array(z.string()).optional(),
+  docs: z.array(z.string()).optional(),
+});
+
 const jamesProfileSchema = z.object({
   name: z.string(),
   background: z.string().optional(),
@@ -273,6 +284,7 @@ const suggestionsSchema = z.object({
   jamesProfile: jamesProfileSchema.optional(),
   people: z.array(personCtxSchema).optional(),
   place: placeCtxSchema.optional(),
+  event: eventCtxSchema.optional(),
   styleProfileJson: z.string().optional(),
   alreadyShown: z.array(z.string()).max(40).optional(),
   model: z.string().optional(),
@@ -320,6 +332,13 @@ ${data.place.name}${data.place.notes ? ` — ${data.place.notes}` : ""}
 ${data.place.recentMemories?.length ? `Recent memories here:\n- ${data.place.recentMemories.join("\n- ")}\n` : ""}${data.place.followUps?.length ? `Open follow-ups for here:\n- ${data.place.followUps.join("\n- ")}\n` : ""}`
       : "";
 
+    const ev = data.event;
+    const eventBlock = ev
+      ? `# Event James is at: ${ev.name}
+${ev.when ? `When: ${ev.when}\n` : ""}${ev.location ? `Where: ${ev.location}\n` : ""}${ev.peopleNames?.length ? `Attendees: ${ev.peopleNames.join(", ")}\n` : ""}${ev.keyInfo ? `Key info: ${ev.keyInfo}\n` : ""}${ev.selectedKeyPoints?.length ? `Key points James wants to make:\n- ${ev.selectedKeyPoints.join("\n- ")}\n` : ""}${ev.selectedKeyQuestions?.length ? `Key questions James wants to ask:\n- ${ev.selectedKeyQuestions.join("\n- ")}\n` : ""}${ev.docs?.length ? `Reference materials for the event:\n${ev.docs.join("\n\n")}\n` : ""}
+Strongly bias suggestions toward making these key points and asking these key questions when natural.`
+      : "";
+
     const styleBlock = data.styleProfileJson
       ? `# Learned style profile (JSON)\n${data.styleProfileJson}\n`
       : "";
@@ -329,6 +348,7 @@ ${data.place.recentMemories?.length ? `Recent memories here:\n- ${data.place.rec
     const user = `${profileBlock}
 ${peopleBlock}
 ${placeBlock}
+${eventBlock}
 ${styleBlock}
 # Live conversation so far
 ${transcriptText || "(no transcript yet — conversation just starting)"}
