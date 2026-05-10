@@ -13,6 +13,7 @@ import {
   Settings as SettingsIcon,
   Check,
   X,
+  Facebook,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
