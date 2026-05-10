@@ -672,7 +672,14 @@ function Home() {
           </div>
         </div>
 
-        {/* Settings link top-right */}
+        {/* Facebook helper + Settings links top-right */}
+        <Link
+          to="/facebook"
+          aria-label="Facebook helper"
+          className="flex size-14 shrink-0 items-center justify-center rounded-xl text-[#1877f2] hover:bg-secondary"
+        >
+          <Facebook className="size-6" />
+        </Link>
         <Link
           to="/settings"
           aria-label="Settings"
