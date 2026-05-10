@@ -1011,6 +1011,85 @@ function Home() {
           </Card>
         </div>
       )}
+
+      {showEventPicker && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setShowEventPicker(false)}
+        >
+          <Card
+            className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden p-0"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-border px-5 py-3">
+              <h3 className="flex items-center gap-2 text-lg font-semibold">
+                <Calendar className="size-5" /> Prepping for an event?
+              </h3>
+              <button
+                onClick={() => setShowEventPicker(false)}
+                className="rounded-full p-2 hover:bg-secondary"
+              >
+                <X className="size-5" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-5">
+              <button
+                onClick={() => {
+                  setSelectedEvent(null);
+                  setShowEventPicker(false);
+                }}
+                className={`mb-3 flex w-full items-center justify-between rounded-lg border-2 px-4 py-2 text-left ${
+                  !selectedEvent
+                    ? "border-primary bg-primary/10"
+                    : "border-border bg-secondary/40 hover:bg-secondary"
+                }`}
+              >
+                <span className="font-medium">No event</span>
+                {!selectedEvent && <Check className="size-4" />}
+              </button>
+              {allEvents.length === 0 ? (
+                <p className="text-sm italic text-muted-foreground">
+                  No events yet. Create one in{" "}
+                  <Link to="/settings" className="underline">
+                    Settings → Events
+                  </Link>
+                  .
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {allEvents.map((e) => {
+                    const sel = selectedEvent?.id === e.id;
+                    return (
+                      <button
+                        key={e.id}
+                        onClick={() => {
+                          setSelectedEvent(e);
+                          setShowEventPicker(false);
+                        }}
+                        className={`flex w-full items-start justify-between gap-3 rounded-lg border-2 px-4 py-2 text-left ${
+                          sel
+                            ? "border-primary bg-primary/10"
+                            : "border-border bg-secondary/40 hover:bg-secondary"
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate font-medium">{e.name}</div>
+                          {(e.when || e.location) && (
+                            <div className="truncate text-xs text-muted-foreground">
+                              {[e.when, e.location].filter(Boolean).join(" · ")}
+                            </div>
+                          )}
+                        </div>
+                        {sel && <Check className="size-4 shrink-0" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </Card>
+        </div>
+      )}
     </main>
     </ScaledShell>
   );
