@@ -123,6 +123,10 @@ function Home() {
 
   // Conversation state
   const conversationIdRef = useRef<string | null>(null);
+  // Tracks the most recent conversation id even after Stop, so that
+  // James's typed lines and tapped suggestions keep appending to the
+  // last recording instead of being lost.
+  const lastConversationIdRef = useRef<string | null>(null);
   const startedAtRef = useRef<number>(0);
   const [active, setActive] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -268,6 +272,7 @@ function Home() {
     try {
       const id = newId();
       conversationIdRef.current = id;
+      lastConversationIdRef.current = id;
       startedAtRef.current = Date.now();
       personIdsRef.current = selectedPersonIds;
       setCommitted([]);
@@ -514,22 +519,27 @@ function Home() {
         await audio.play();
         // Record James's spoken line as a transcript segment so the next
         // suggestion refresh sees it as part of the conversation.
-        if (conversationIdRef.current) {
+        const targetCid =
+          conversationIdRef.current ?? lastConversationIdRef.current;
+        if (targetCid) {
           const selfLabel = jamesLabelRef.current ?? JAMES_SELF_LABEL;
           const seg: TranscriptSegment = {
             id: newId(),
-            conversation_id: conversationIdRef.current,
+            conversation_id: targetCid,
             speaker_label: selfLabel,
             text,
             ts: Date.now(),
           };
-          setCommitted((prev) => [...prev, seg]);
+          // Only update the live transcript view while recording is active.
+          if (conversationIdRef.current) {
+            setCommitted((prev) => [...prev, seg]);
+          }
           await db.transcript_segments.add(seg);
         }
-        if (meta?.suggestion && conversationIdRef.current) {
+        if (meta?.suggestion && targetCid) {
           const logs = await db.suggestions_log
             .where("conversation_id")
-            .equals(conversationIdRef.current)
+            .equals(targetCid)
             .and((l) => l.text === meta.suggestion!.text && !l.selected)
             .toArray();
           if (logs[0]) {
@@ -538,10 +548,10 @@ function Home() {
               spoken: true,
             });
           }
-        } else if (conversationIdRef.current) {
+        } else if (targetCid) {
           await db.manual_replies.add({
             id: newId(),
-            conversation_id: conversationIdRef.current,
+            conversation_id: targetCid,
             text,
             ts: Date.now(),
           });
