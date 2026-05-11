@@ -1047,6 +1047,30 @@ function Home() {
               </Button>
             ))}
           </div>
+          {/* Mood selector — biases suggestions toward this emotional tone */}
+          <div className="flex flex-wrap items-center gap-1.5 border-t border-border p-2">
+            <span className="mr-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Mood
+            </span>
+            {MOODS.map((m) => {
+              const selected = mood === m.id;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => setMood(m.id)}
+                  aria-pressed={selected}
+                  className={`rounded-full border-2 px-3 py-1.5 text-sm font-medium transition ${
+                    selected
+                      ? `${m.color} border-transparent shadow`
+                      : "border-border bg-background text-muted-foreground hover:bg-secondary"
+                  }`}
+                >
+                  {m.label}
+                </button>
+              );
+            })}
+          </div>
         </section>
 
         {/* Transcript — only shown during an active conversation */}
