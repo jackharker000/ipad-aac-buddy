@@ -13,12 +13,10 @@ import {
   Settings as SettingsIcon,
   Check,
   X,
-  Facebook,
   Calendar,
   History,
   Plus,
-  Mail,
-  MessageCircle,
+  Reply,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
