@@ -694,7 +694,7 @@ function Home() {
     }, 600);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [committed.length, active]);
+  }, [committed.length, active, mood]);
 
   // Speak via TTS
   const speak = useCallback(
