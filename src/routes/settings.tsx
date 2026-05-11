@@ -64,6 +64,7 @@ import {
   type Person,
   type PersonDocument,
   type Place,
+  type Memory,
   type EventItem,
   type EventDocument,
   type EventPrepItem,
