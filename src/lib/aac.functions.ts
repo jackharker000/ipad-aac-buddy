@@ -83,7 +83,7 @@ export const synthesizeSpeech = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const apiKey = requireElevenLabsApiKey();
     const res = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${data.voiceId}?output_format=mp3_44100_128`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${data.voiceId}?output_format=mp3_22050_32`,
       {
         method: "POST",
         headers: {
@@ -96,8 +96,6 @@ export const synthesizeSpeech = createServerFn({ method: "POST" })
           voice_settings: {
             stability: 0.5,
             similarity_boost: 0.75,
-            style: 0.3,
-            use_speaker_boost: true,
             speed: 1.0,
           },
         }),
@@ -308,7 +306,7 @@ export const generateSuggestions = createServerFn({ method: "POST" })
   .inputValidator((d) => suggestionsSchema.parse(d))
   .handler(async ({ data }) => {
     const transcriptText = data.recentTranscript
-      .slice(-20)
+      .slice(-8)
       .map((s) => `${s.speaker}: ${s.text}`)
       .join("\n");
 
@@ -381,7 +379,7 @@ ${moodBlock}
 ${transcriptText || "(no transcript yet — conversation just starting)"}
 
 ${data.alreadyShown?.length ? `# Already shown (do NOT repeat)\n${data.alreadyShown.join(" | ")}\n` : ""}
-Return 16 ranked suggestions in James's voice. Provide a wide variety so James has plenty of useful options to pick from.`;
+Return 10 ranked suggestions in James's voice. Provide a wide variety so James has plenty of useful options to pick from.`;
 
     const target = resolveChatTarget(data.model);
     const res = await fetch(target.url, {
@@ -404,8 +402,8 @@ Return 16 ranked suggestions in James's voice. Provide a wide variety so James h
                 properties: {
                   suggestions: {
                     type: "array",
-                    minItems: 8,
-                    maxItems: 16,
+                    minItems: 6,
+                    maxItems: 10,
                     items: {
                       type: "object",
                       properties: {
