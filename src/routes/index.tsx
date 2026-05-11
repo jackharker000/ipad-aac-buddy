@@ -220,7 +220,7 @@ function Home() {
   const persistedThisSessionRef = useRef<Set<string>>(new Set());
   // Recognised speaker chips (label -> { personId, sim }) for future UI hint.
   // Currently we only surface recognition via toast notifications.
-  const [, setRecognised] = useState<
+  const recognisedRef = useRef<
     Record<string, { personId: string; sim: number }>
   >({});
   useEffect(() => {
@@ -316,10 +316,10 @@ function Home() {
                   };
                   speakerMapRef.current = next;
                   setSpeakerMap(next);
-                  setRecognised((cur) => ({
-                    ...cur,
+                  recognisedRef.current = {
+                    ...recognisedRef.current,
                     [label]: { personId: match.print.person_id, sim: match.sim },
-                  }));
+                  };
                   if (conversationIdRef.current) {
                     db.conversations.update(conversationIdRef.current, {
                       speaker_map: next,
@@ -439,7 +439,7 @@ function Home() {
       lastShownRef.current = [];
       livePrintsRef.current = new Map();
       persistedThisSessionRef.current = new Set();
-      setRecognised({});
+      recognisedRef.current = {};
 
       const conv: Conversation = {
         id,
