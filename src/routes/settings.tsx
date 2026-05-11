@@ -1150,6 +1150,9 @@ function PersonDetail({
       {/* Voiceprint — on-device voice fingerprint built up over conversations */}
       <VoiceprintSection personId={personId} />
 
+      {/* Background documents specific to this person */}
+      <PersonDocumentsSection personId={personId} />
+
       {/* Auto-learned memories */}
       <Section
         title="Key facts (auto-learned)"
