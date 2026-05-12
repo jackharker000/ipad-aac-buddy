@@ -508,7 +508,7 @@ function Home() {
       try {
         for (const [label, personId] of Object.entries(speakerMapRef.current)) {
           const live = livePrintsRef.current.get(label);
-          if (live && live.count >= 2) {
+          if (live && live.count >= 1) {
             await recordVoiceprint(personId, live.centroid);
           }
         }
