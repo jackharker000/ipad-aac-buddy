@@ -546,7 +546,7 @@ function Home() {
               transcript,
               placeName: placeName ?? undefined,
               peopleNames,
-              model: aiModelRef.current,
+              model: smartModelRef.current,
             },
           });
           await db.conversations.update(cid, {
@@ -689,7 +689,7 @@ function Home() {
           event: ctx.event,
           styleProfileJson: ctx.styleProfileJson,
           alreadyShown: lastShownRef.current.slice(-20),
-          model: aiModelRef.current,
+          model: fastModelRef.current,
           mood: moodRef.current,
         },
       });
@@ -824,7 +824,7 @@ function Home() {
           jamesProfile: ctx.jamesProfile,
           people: ctx.people,
           place: ctx.place,
-          model: aiModelRef.current,
+          model: fastModelRef.current,
         },
       });
       const spoken = (r.expanded || raw).trim();
