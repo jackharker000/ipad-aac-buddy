@@ -312,7 +312,20 @@ export const MODEL_OPTIONS: ModelOption[] = [
 
 export async function getSettings(): Promise<Settings> {
   const existing = await db.settings.get("singleton");
-  if (existing) return existing;
+  if (existing) {
+    // Backfill new tier fields for users who set up before the split.
+    if (!existing.fast_model || !existing.smart_model) {
+      const migrated = {
+        ...existing,
+        fast_model:
+          existing.fast_model ?? existing.suggestion_model ?? DEFAULT_SETTINGS.fast_model,
+        smart_model: existing.smart_model ?? DEFAULT_SETTINGS.smart_model,
+      };
+      await db.settings.put(migrated);
+      return migrated;
+    }
+    return existing;
+  }
   await db.settings.put(DEFAULT_SETTINGS);
   return DEFAULT_SETTINGS;
 }
