@@ -201,7 +201,8 @@ function Home() {
   } | null>(null);
   const [voiceId, setVoiceId] = useState<string>("EXAVITQu4vr4xnSDxMaL");
   const [ipadModel, setIpadModel] = useState<string>("auto");
-  const aiModelRef = useRef<string>("google/gemini-2.5-flash-lite");
+  const fastModelRef = useRef<string>("google/gemini-2.5-flash-lite");
+  const smartModelRef = useRef<string>("google/gemini-2.5-pro");
 
   // Speaker map
   const [speakerMap, setSpeakerMap] = useState<Record<string, string>>({});
@@ -385,7 +386,9 @@ function Home() {
       if (cancelled) return;
       setVoiceId(s.voice_id);
       setIpadModel(s.ipad_model ?? "auto");
-      aiModelRef.current = s.suggestion_model ?? "google/gemini-2.5-flash-lite";
+      fastModelRef.current =
+        s.fast_model ?? s.suggestion_model ?? "google/gemini-2.5-flash-lite";
+      smartModelRef.current = s.smart_model ?? "google/gemini-2.5-pro";
 
       const people = await db.people.orderBy("name").toArray();
       if (!cancelled) setAllPeople(people);
