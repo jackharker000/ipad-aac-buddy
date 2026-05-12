@@ -96,6 +96,10 @@ export type Settings = {
   ipad_model?: IPadModel;
   suggestion_model?: string;
   expand_model?: string;
+  /** Latency-critical tier: live suggestions + clarify-and-speak expansion. */
+  fast_model?: string;
+  /** Quality-critical tier: post-conversation summary, memory extraction, event prep, drafts. */
+  smart_model?: string;
   custom_voices?: Array<{
     voice_id: string;
     name: string;
