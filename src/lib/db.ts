@@ -96,6 +96,10 @@ export type Settings = {
   ipad_model?: IPadModel;
   suggestion_model?: string;
   expand_model?: string;
+  /** Latency-critical tier: live suggestions + clarify-and-speak expansion. */
+  fast_model?: string;
+  /** Quality-critical tier: post-conversation summary, memory extraction, event prep, drafts. */
+  smart_model?: string;
   custom_voices?: Array<{
     voice_id: string;
     name: string;
@@ -278,6 +282,8 @@ export const DEFAULT_SETTINGS: Settings = {
   ipad_model: "auto",
   suggestion_model: "google/gemini-2.5-flash-lite",
   expand_model: "google/gemini-2.5-flash-lite",
+  fast_model: "google/gemini-2.5-flash-lite",
+  smart_model: "google/gemini-2.5-pro",
 };
 
 export type ModelOption = {
@@ -306,7 +312,20 @@ export const MODEL_OPTIONS: ModelOption[] = [
 
 export async function getSettings(): Promise<Settings> {
   const existing = await db.settings.get("singleton");
-  if (existing) return existing;
+  if (existing) {
+    // Backfill new tier fields for users who set up before the split.
+    if (!existing.fast_model || !existing.smart_model) {
+      const migrated = {
+        ...existing,
+        fast_model:
+          existing.fast_model ?? existing.suggestion_model ?? DEFAULT_SETTINGS.fast_model,
+        smart_model: existing.smart_model ?? DEFAULT_SETTINGS.smart_model,
+      };
+      await db.settings.put(migrated);
+      return migrated;
+    }
+    return existing;
+  }
   await db.settings.put(DEFAULT_SETTINGS);
   return DEFAULT_SETTINGS;
 }

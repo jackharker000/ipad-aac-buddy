@@ -329,27 +329,70 @@ function SystemTab() {
       </Card>
 
       <Card className="p-6">
-        <h2 className="text-lg font-semibold">AI model</h2>
+        <h2 className="text-lg font-semibold">AI models</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Powers suggestions and the "clarify &amp; speak" expansion. Faster
-          models give snappier suggestions; bigger models think harder but are
-          slower. "Your key" options use your own OpenAI API key.
+          Two tiers: a <strong>fast</strong> model for live suggestions and
+          clarify-and-speak (runs constantly, needs to be snappy), and a{" "}
+          <strong>smart</strong> model for end-of-conversation summary, memory
+          extraction, event prep and reply drafts (runs once, quality matters
+          more than speed). "Your key" options use your own OpenAI API key.
         </p>
+
         <div className="mt-4">
+          <div className="text-sm font-medium">Live suggestions &amp; expansion (fast)</div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Powers the suggestion chips and the "clarify &amp; speak" rewrite.
+            Pick a fast model — James will feel every extra second.
+          </p>
           <Select
-            value={settings.suggestion_model ?? "google/gemini-2.5-flash-lite"}
+            value={
+              settings.fast_model ??
+              settings.suggestion_model ??
+              "google/gemini-2.5-flash-lite"
+            }
             onValueChange={(v) =>
-              updateSettings({ suggestion_model: v, expand_model: v }).then(() =>
-                toast.success("AI model updated"),
-              )
+              updateSettings({
+                fast_model: v,
+                // Keep legacy fields in sync for back-compat.
+                suggestion_model: v,
+                expand_model: v,
+              }).then(() => toast.success("Fast model updated"))
             }
           >
-            <SelectTrigger className="h-12 text-base">
+            <SelectTrigger className="mt-2 h-12 text-base">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {MODEL_OPTIONS.map((m) => (
-                <SelectItem key={m.id} value={m.id}>
+                <SelectItem key={`fast-${m.id}`} value={m.id}>
+                  {m.label} — <span className="text-muted-foreground">{m.hint}</span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div className="mt-6">
+          <div className="text-sm font-medium">Memory, summary &amp; drafts (smart)</div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Powers the end-of-conversation summary, durable memory extraction,
+            event prep briefings and reply drafts. Pick a stronger model — the
+            extra second or two is invisible to James.
+          </p>
+          <Select
+            value={settings.smart_model ?? "google/gemini-2.5-pro"}
+            onValueChange={(v) =>
+              updateSettings({ smart_model: v }).then(() =>
+                toast.success("Smart model updated"),
+              )
+            }
+          >
+            <SelectTrigger className="mt-2 h-12 text-base">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {MODEL_OPTIONS.map((m) => (
+                <SelectItem key={`smart-${m.id}`} value={m.id}>
                   {m.label} — <span className="text-muted-foreground">{m.hint}</span>
                 </SelectItem>
               ))}
@@ -2131,6 +2174,7 @@ function EventDetail({ eventId }: { eventId: string }) {
     setGenerating(true);
     try {
       const profile = await getJamesProfile();
+      const s = await getSettings();
       const peopleNames = (await db.people.bulkGet(event.person_ids ?? []))
         .filter((p): p is Person => !!p)
         .map((p) => p.name);
@@ -2148,6 +2192,7 @@ function EventDetail({ eventId }: { eventId: string }) {
           docs: docSnips,
           existingPoints: event.key_points.map((k) => k.text),
           existingQuestions: event.key_questions.map((k) => k.text),
+          model: s.smart_model ?? "google/gemini-2.5-pro",
           jamesProfile: {
             name: profile.display_name || "James",
             background: profile.background,
