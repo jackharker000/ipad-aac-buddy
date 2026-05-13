@@ -509,6 +509,7 @@ function Home() {
       livePrintsRef.current = new Map();
       persistedThisSessionRef.current = new Set();
       recognisedRef.current = {};
+      speakerCounterRef.current = 0;
 
       const conv: Conversation = {
         id,
