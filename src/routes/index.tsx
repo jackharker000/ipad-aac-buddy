@@ -563,42 +563,89 @@ function Home() {
       try {
         const liveEntries = [...livePrintsRef.current.entries()];
         const mapped = speakerMapRef.current;
-        let persistedAny = false;
+        // 1. Persist voiceprints for already-mapped speakers (the strong case).
         for (const [label, personId] of Object.entries(mapped)) {
           const live = livePrintsRef.current.get(label);
           if (live && live.count >= 1) {
             await recordVoiceprint(personId, live.centroid);
-            persistedAny = true;
           }
         }
-        // Fallback: if speaker labels never got mapped to people but exactly
-        // one non-James person was in the roster, attribute every captured
-        // (non-James) voice frame to them. This is the common 1:1 case where
-        // the diarizer produces a "Speaker 1" label that auto-mapping didn't
-        // resolve before the session ended.
-        if (!persistedAny && liveEntries.length > 0) {
-          const others = personIdsRef.current; // James is not in this list
-          if (others.length === 1) {
-            const personId = others[0];
-            // Merge all label centroids weighted by their sample counts.
-            let combined: { centroid: number[]; count: number } | null = null;
-            for (const [, live] of liveEntries) {
-              const merged = mergeIntoCentroid(
-                combined?.centroid,
-                combined?.count ?? 0,
-                live.centroid,
-                live.count,
-              );
-              combined = merged;
-            }
-            if (combined && combined.count >= 1) {
-              await recordVoiceprint(personId, combined.centroid);
-              console.debug("[voiceprint] fallback persisted for sole person", {
-                personId,
-                samples: combined.count,
-              });
-            }
+        // 2. For every live cluster that is STILL unmapped at session end,
+        // create a placeholder Person ("Guest …") and persist its voiceprint.
+        // This guarantees every distinct voice we heard ends up with a saved
+        // fingerprint and a row in the People list — the user can rename it
+        // afterwards. We require a minimum sample count to avoid persisting
+        // single noisy bursts.
+        const allSegs = cid
+          ? await db.transcript_segments
+              .where("conversation_id")
+              .equals(cid)
+              .toArray()
+          : [];
+        const segsByLabel = new Map<string, TranscriptSegment[]>();
+        for (const s of allSegs) {
+          const arr = segsByLabel.get(s.speaker_label) ?? [];
+          arr.push(s);
+          segsByLabel.set(s.speaker_label, arr);
+        }
+        const introduced = (await import("@/lib/auto-person")).extractIntroducedNames(
+          allSegs,
+        );
+        const introByLabel = new Map<string, string>();
+        for (const it of introduced) introByLabel.set(it.speaker_label, it.name);
+
+        const mappedPersonIds = new Set(Object.values(mapped));
+        const placeLabel = placeName ? ` at ${placeName}` : "";
+        const stamp = new Date().toLocaleString(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        let guestIdx = 0;
+        const newRoster = [...personIdsRef.current];
+        const newSpeakerMap = { ...mapped };
+        for (const [label, live] of liveEntries) {
+          if (mapped[label]) continue; // already mapped above
+          if (live.count < 2) continue; // too little audio to persist
+          // Skip clusters that are clearly James himself (by jamesLabel)
+          if (label === jamesLabelRef.current) continue;
+          guestIdx += 1;
+          const introName = introByLabel.get(label);
+          const personName =
+            introName ?? `Guest ${stamp}${guestIdx > 1 ? ` (${guestIdx})` : ""}`;
+          const newPerson: Person = {
+            id: newId(),
+            name: personName,
+            relationship: "",
+            interests: [],
+            notes: introName
+              ? `Auto-added — first met during a conversation${placeLabel}.`
+              : `Auto-added from a recorded conversation${placeLabel}. Rename me.`,
+            style_notes: "",
+            created_at: Date.now(),
+          };
+          await db.people.add(newPerson);
+          await recordVoiceprint(newPerson.id, live.centroid);
+          newSpeakerMap[label] = newPerson.id;
+          if (!newRoster.includes(newPerson.id) && !mappedPersonIds.has(newPerson.id)) {
+            newRoster.push(newPerson.id);
           }
+          console.debug("[voiceprint] placeholder person created", {
+            label,
+            personId: newPerson.id,
+            name: personName,
+            samples: live.count,
+          });
+        }
+        if (cid && (newRoster.length !== personIdsRef.current.length ||
+          Object.keys(newSpeakerMap).length !== Object.keys(mapped).length)) {
+          personIdsRef.current = newRoster;
+          speakerMapRef.current = newSpeakerMap;
+          await db.conversations.update(cid, {
+            person_ids: newRoster,
+            speaker_map: newSpeakerMap,
+          });
         }
       } catch (err) {
         console.warn("final voiceprint persist failed", err);
