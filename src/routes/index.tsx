@@ -55,6 +55,7 @@ import {
   mergeIntoCentroid,
   recordVoiceprint,
   bestMatch,
+  cosineSim,
 } from "@/lib/voiceprint";
 import { VOICEPRINT_MATCH_THRESHOLD } from "@/lib/db";
 
