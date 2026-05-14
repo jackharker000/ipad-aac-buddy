@@ -711,11 +711,104 @@ function Home() {
     [ttsFn, voiceId],
   );
 
-  const transcriptList = useMemo(() => committed.slice(-12), [committed]);
   const peopleInConvo = useMemo(
     () => allPeople.filter((p) => selectedPersonIds.includes(p.id)),
     [allPeople, selectedPersonIds],
   );
+
+  // Build cluster rows from the diarizer + cluster-status state for the SpeakerPanel.
+  const clusterRows = useMemo<ClusterRow[]>(() => {
+    const rows: ClusterRow[] = [];
+    for (const c of diarizerRef.current.clusters()) {
+      const status = clusterStatus[c.label] ?? { kind: "unknown" as const };
+      rows.push({ label: c.label, count: c.count, status });
+    }
+    // Stable sort by numeric portion of "Speaker N"
+    rows.sort((a, b) => {
+      const na = Number(a.label.replace(/\D/g, "")) || 0;
+      const nb = Number(b.label.replace(/\D/g, "")) || 0;
+      return na - nb;
+    });
+    return rows;
+    // committed length triggers re-render via setClusterTick already
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clusterStatus, committed.length]);
+
+  // ---- Speaker confirmation handlers ----
+  const confirmKnownSpeaker = useCallback(
+    async (label: string, personId: string) => {
+      const cluster = diarizerRef.current.get(label);
+      if (cluster) await recordVoiceprint(personId, cluster.centroid);
+      // Update speakerMap (only confirmed entries) and conversation roster.
+      const nextMap = { ...speakerMapRef.current };
+      // Remove any prior label for this person
+      for (const k of Object.keys(nextMap))
+        if (nextMap[k] === personId) delete nextMap[k];
+      nextMap[label] = personId;
+      speakerMapRef.current = nextMap;
+      setSpeakerMap(nextMap);
+      const nextStatus = {
+        ...clusterStatusRef.current,
+        [label]: { kind: "confirmed" as const, personId },
+      };
+      clusterStatusRef.current = nextStatus;
+      setClusterStatus(nextStatus);
+      if (!personIdsRef.current.includes(personId)) {
+        const merged = [...personIdsRef.current, personId];
+        personIdsRef.current = merged;
+        setSelectedPersonIds(merged);
+      }
+      if (conversationIdRef.current) {
+        await db.conversations.update(conversationIdRef.current, {
+          speaker_map: nextMap,
+          person_ids: personIdsRef.current,
+        });
+      }
+      const p = await db.people.get(personId);
+      if (p) toast.success(`Confirmed ${p.name}`);
+    },
+    [],
+  );
+
+  const rejectSuggestion = useCallback((label: string) => {
+    const next = {
+      ...clusterStatusRef.current,
+      [label]: { kind: "unknown" as const },
+    };
+    clusterStatusRef.current = next;
+    setClusterStatus(next);
+  }, []);
+
+  const confirmNewSpeaker = useCallback(
+    async (label: string, name: string) => {
+      const trimmed = name.trim();
+      if (!trimmed) return;
+      // Re-use existing person if name (first-name) matches
+      const existing = allPeople.find(
+        (p) => p.name.toLowerCase() === trimmed.toLowerCase(),
+      );
+      let personId: string;
+      if (existing) {
+        personId = existing.id;
+      } else {
+        const p: Person = {
+          id: newId(),
+          name: trimmed,
+          relationship: "",
+          interests: [],
+          notes: placeName ? `Met during a conversation at ${placeName}.` : "",
+          style_notes: "",
+          created_at: Date.now(),
+        };
+        await db.people.add(p);
+        setAllPeople((cur) => [...cur, p].sort((a, b) => a.name.localeCompare(b.name)));
+        personId = p.id;
+      }
+      await confirmKnownSpeaker(label, personId);
+    },
+    [allPeople, placeName, confirmKnownSpeaker],
+  );
+
 
   // Expand James's truncated typing via LLM, then speak the expanded version
   const expandAndSpeak = useCallback(async () => {
