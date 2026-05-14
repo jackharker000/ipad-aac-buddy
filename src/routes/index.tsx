@@ -433,12 +433,10 @@ function Home() {
       setPartial("");
       setSuggestions([]);
       setSpeakerMap({});
-      setJamesLabel(undefined);
       lastShownRef.current = [];
-      livePrintsRef.current = new Map();
-      persistedThisSessionRef.current = new Set();
-      recognisedRef.current = {};
-      speakerCounterRef.current = 0;
+      diarizerRef.current.reset();
+      setClusterStatus({});
+      clusterStatusRef.current = {};
 
       const conv: Conversation = {
         id,
@@ -489,90 +487,14 @@ function Home() {
       try {
         if (cap) cap.stop();
       } catch {}
+      // Re-persist confirmed voiceprints with the latest centroids (we may
+      // have collected many more samples since the user pressed Confirm).
       try {
-        const liveEntries = [...livePrintsRef.current.entries()];
-        const mapped = speakerMapRef.current;
-        // 1. Persist voiceprints for already-mapped speakers (the strong case).
-        for (const [label, personId] of Object.entries(mapped)) {
-          const live = livePrintsRef.current.get(label);
-          if (live && live.count >= 1) {
-            await recordVoiceprint(personId, live.centroid);
+        for (const [label, personId] of Object.entries(speakerMapRef.current)) {
+          const cluster = diarizerRef.current.get(label);
+          if (cluster && cluster.count >= 1) {
+            await recordVoiceprint(personId, cluster.centroid);
           }
-        }
-        // 2. For every live cluster that is STILL unmapped at session end,
-        // create a placeholder Person ("Guest …") and persist its voiceprint.
-        // This guarantees every distinct voice we heard ends up with a saved
-        // fingerprint and a row in the People list — the user can rename it
-        // afterwards. We require a minimum sample count to avoid persisting
-        // single noisy bursts.
-        const allSegs = cid
-          ? await db.transcript_segments
-              .where("conversation_id")
-              .equals(cid)
-              .toArray()
-          : [];
-        const segsByLabel = new Map<string, TranscriptSegment[]>();
-        for (const s of allSegs) {
-          const arr = segsByLabel.get(s.speaker_label) ?? [];
-          arr.push(s);
-          segsByLabel.set(s.speaker_label, arr);
-        }
-        const introduced = extractIntroducedNames(allSegs);
-        const introByLabel = new Map<string, string>();
-        for (const it of introduced) introByLabel.set(it.speaker_label, it.name);
-
-        const mappedPersonIds = new Set(Object.values(mapped));
-        const placeLabel = placeName ? ` at ${placeName}` : "";
-        const stamp = new Date().toLocaleString(undefined, {
-          month: "short",
-          day: "numeric",
-          hour: "2-digit",
-          minute: "2-digit",
-        });
-        let guestIdx = 0;
-        const newRoster = [...personIdsRef.current];
-        const newSpeakerMap = { ...mapped };
-        for (const [label, live] of liveEntries) {
-          if (mapped[label]) continue; // already mapped above
-          if (live.count < 2) continue; // too little audio to persist
-          // Skip clusters that are clearly James himself (by jamesLabel)
-          if (label === jamesLabelRef.current) continue;
-          guestIdx += 1;
-          const introName = introByLabel.get(label);
-          const personName =
-            introName ?? `Guest ${stamp}${guestIdx > 1 ? ` (${guestIdx})` : ""}`;
-          const newPerson: Person = {
-            id: newId(),
-            name: personName,
-            relationship: "",
-            interests: [],
-            notes: introName
-              ? `Auto-added — first met during a conversation${placeLabel}.`
-              : `Auto-added from a recorded conversation${placeLabel}. Rename me.`,
-            style_notes: "",
-            created_at: Date.now(),
-          };
-          await db.people.add(newPerson);
-          await recordVoiceprint(newPerson.id, live.centroid);
-          newSpeakerMap[label] = newPerson.id;
-          if (!newRoster.includes(newPerson.id) && !mappedPersonIds.has(newPerson.id)) {
-            newRoster.push(newPerson.id);
-          }
-          console.debug("[voiceprint] placeholder person created", {
-            label,
-            personId: newPerson.id,
-            name: personName,
-            samples: live.count,
-          });
-        }
-        if (cid && (newRoster.length !== personIdsRef.current.length ||
-          Object.keys(newSpeakerMap).length !== Object.keys(mapped).length)) {
-          personIdsRef.current = newRoster;
-          speakerMapRef.current = newSpeakerMap;
-          await db.conversations.update(cid, {
-            person_ids: newRoster,
-            speaker_map: newSpeakerMap,
-          });
         }
       } catch (err) {
         console.warn("final voiceprint persist failed", err);
@@ -651,60 +573,7 @@ function Home() {
     }
   }, [active, stopping, scribe, summarizeFn, placeName]);
 
-  // Auto speaker mapping
-  useEffect(() => {
-    if (!active || committed.length === 0) return;
-    let cancelled = false;
-    (async () => {
-      // 1. Auto-create Person rows for anyone who introduces themselves
-      const created = await autoCreateIntroducedPeople(
-        committed,
-        allPeople,
-        { placeId: placeIdRef.current },
-      );
-      let working = allPeople;
-      if (created.length > 0 && !cancelled) {
-        working = [...allPeople, ...created];
-        setAllPeople(working);
-        // Add new arrivals to active conversation roster
-        const newIds = created.map((p) => p.id);
-        const merged = Array.from(
-          new Set([...personIdsRef.current, ...newIds]),
-        );
-        personIdsRef.current = merged;
-        setSelectedPersonIds(merged);
-        if (conversationIdRef.current) {
-          await db.conversations.update(conversationIdRef.current, {
-            person_ids: merged,
-          });
-        }
-        for (const p of created) toast.success(`Met ${p.name} — added to people`);
-      }
-
-      const candidates = working.filter((p) =>
-        personIdsRef.current.includes(p.id),
-      );
-      if (candidates.length === 0) return;
-      const { mapping } = autoMapSpeakers({
-        segments: committed,
-        candidates,
-        current: speakerMapRef.current,
-        // James never speaks aloud — every diarized voice is a non-James person.
-      });
-      const changed = Object.keys(mapping).some(
-        (k) => mapping[k] !== speakerMapRef.current[k],
-      );
-      if (changed && conversationIdRef.current && !cancelled) {
-        setSpeakerMap(mapping);
-        db.conversations.update(conversationIdRef.current, {
-          speaker_map: mapping,
-        });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [committed, allPeople, active]);
+  // (No auto-mapping effect: speakers are confirmed only via the SpeakerPanel.)
 
   // Auto-fetch suggestions
   // Tracks the (transcriptLen + mood) signature of the last AI call so we
