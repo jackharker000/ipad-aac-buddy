@@ -22,11 +22,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
   db,
   getSettings,
   newId,
@@ -46,18 +41,18 @@ import {
   expandUtterance,
 } from "@/lib/aac.functions";
 import { buildConversationContext, suggestPeopleAtPlace } from "@/lib/context";
-import { autoMapSpeakers, labelTranscriptForPrompt } from "@/lib/speaker-id";
-import { autoCreateIntroducedPeople, extractIntroducedNames } from "@/lib/auto-person";
+import { labelTranscriptForPrompt } from "@/lib/speaker-id";
+import { extractIntroducedNames } from "@/lib/auto-person";
 import { seedJamesIfNeeded } from "@/lib/seed";
 import {
   VoiceCapture,
   computeMfccMean,
-  mergeIntoCentroid,
   recordVoiceprint,
   bestMatch,
-  cosineSim,
+  Diarizer,
 } from "@/lib/voiceprint";
 import { VOICEPRINT_MATCH_THRESHOLD } from "@/lib/db";
+import { SpeakerPanel, type ClusterRow, type ClusterStatus } from "@/components/SpeakerPanel";
 
 export const Route = createFileRoute("/")({
   component: Home,
