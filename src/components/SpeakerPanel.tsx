@@ -320,6 +320,7 @@ function ClusterCard({
   }
 
   // ---------- Unknown ----------
+  if (cluster.status.kind !== "unknown") return null;
   const suggestions = cluster.status.suggestions ?? [];
   return (
     <div className="rounded-xl border border-border bg-secondary/40 p-2 text-sm">
