@@ -40,8 +40,10 @@ import {
   synthesizeSpeech,
   expandUtterance,
   classifyConversationArc,
+  predictMood,
 } from "@/lib/aac.functions";
 import { type ConversationArc, type ArcCacheEntry, isArcDue, ARC_MIN_CONFIDENCE } from "@/lib/arc";
+import { isMoodDue, MOOD_MIN_CONFIDENCE, effectiveMood as resolveEffectiveMood } from "@/lib/mood";
 import { buildConversationContext, suggestPeopleAtPlace } from "@/lib/context";
 import { labelTranscriptForPrompt } from "@/lib/speaker-id";
 import { extractIntroducedNames } from "@/lib/auto-person";
@@ -199,11 +201,24 @@ function Home() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
   const lastShownRef = useRef<string[]>([]);
-  const [mood, setMood] = useState<MoodId>("normal");
-  const moodRef = useRef<MoodId>("normal");
+  // Tier 3.3 — split mood into manual (user-set) and predicted (AI-inferred).
+  // Effective mood = manual ?? predicted ?? "normal" — manual always wins,
+  // and prediction is suppressed entirely while a manual override exists.
+  const [manualMood, setManualMood] = useState<MoodId | null>(null);
+  const [predictedMood, setPredictedMood] = useState<MoodId | null>(null);
+  const effectiveMood: MoodId = useMemo(
+    () => resolveEffectiveMood(manualMood, predictedMood) as MoodId,
+    [manualMood, predictedMood],
+  );
+  const effectiveMoodRef = useRef<MoodId>("normal");
   useEffect(() => {
-    moodRef.current = mood;
-  }, [mood]);
+    effectiveMoodRef.current = effectiveMood;
+  }, [effectiveMood]);
+  const manualMoodRef = useRef<MoodId | null>(null);
+  useEffect(() => {
+    manualMoodRef.current = manualMood;
+  }, [manualMood]);
+  const predictMoodFn = useServerFn(predictMood);
   // Tier 3.4 — when the current suggestion grid was rendered to the user,
   // used to compute tap latency for performance ranking.
   const suggestionsShownAtRef = useRef<number>(0);
@@ -502,6 +517,10 @@ function Home() {
       clusterStatusRef.current = {};
       // Tier 3 — reset per-conversation prediction caches.
       arcCacheRef.current = null;
+      // Tier 3.3 — clear mood predictions on a fresh conversation. Manual
+      // mood is also cleared so the user starts from a clean slate.
+      setPredictedMood(null);
+      setManualMood(null);
 
       const conv: Conversation = {
         id,
@@ -635,6 +654,10 @@ function Home() {
         .catch(() => {
           /* non-critical */
         });
+      // Tier 3.3 — clear mood predictions so they don't leak into the next
+      // conversation.
+      setPredictedMood(null);
+      setManualMood(null);
     }
   }, [active, stopping, scribe, summarizeFn, placeName]);
 
@@ -646,7 +669,7 @@ function Home() {
   const lastSuggestKeyRef = useRef<string>("");
   const refreshSuggestions = useCallback(async () => {
     if (loadingSuggestions || !active) return;
-    const key = `${committed.length}:${moodRef.current}`;
+    const key = `${committed.length}:${effectiveMoodRef.current}`;
     if (key === lastSuggestKeyRef.current) return;
     lastSuggestKeyRef.current = key;
     setLoadingSuggestions(true);
@@ -687,6 +710,46 @@ function Home() {
             .catch(() => arcCacheRef.current?.arc ?? null)
         : Promise.resolve(arcCacheRef.current?.arc ?? null);
 
+      // Tier 3.3 — predict mood every few turns. Skipped entirely when a
+      // manual override is active (the user always wins). Prosody comes
+      // from the existing live mic buffer.
+      if (!manualMoodRef.current && isMoodDue(committed.length) && recent.length > 0) {
+        const prosody = (() => {
+          try {
+            return captureRef.current?.recentProsody(15) ?? null;
+          } catch {
+            return null;
+          }
+        })();
+        void predictMoodFn({
+          data: {
+            recentTranscript: recent,
+            previousMood: predictedMood ?? undefined,
+            prosody: prosody
+              ? {
+                  otherMeanRms: prosody.meanRms,
+                  otherRmsVariance: prosody.rmsVariance,
+                  otherSpectralCentroid: prosody.spectralCentroid,
+                }
+              : undefined,
+            model: fastModelRef.current,
+          },
+        })
+          .then((result) => {
+            if (manualMoodRef.current) return; // manual override won race
+            if (
+              result?.mood &&
+              result.confidence >= MOOD_MIN_CONFIDENCE &&
+              result.mood !== "normal"
+            ) {
+              setPredictedMood(result.mood as MoodId);
+            }
+          })
+          .catch(() => {
+            /* non-critical */
+          });
+      }
+
       const [ctx, arc] = await Promise.all([
         buildConversationContext({
           personIds: personIdsRef.current,
@@ -705,7 +768,7 @@ function Home() {
           styleProfileJson: ctx.styleProfileJson,
           alreadyShown: lastShownRef.current.slice(-20),
           model: fastModelRef.current,
-          mood: moodRef.current,
+          mood: effectiveMoodRef.current,
           categoryBias: categoryBiasRef.current,
           arc: arc ?? undefined,
         },
@@ -750,7 +813,7 @@ function Home() {
     }, 1500);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [committed.length, active, mood]);
+  }, [committed.length, active, effectiveMood]);
 
   // Speak via TTS
   const speak = useCallback(
@@ -1181,28 +1244,41 @@ function Home() {
               ))}
             </div>
             {/* Mood selector — biases suggestions toward this emotional tone */}
+            {/* Tier 3.3 — pills set `manualMood`; an inferred `predictedMood`
+                surfaces as a small auto-badge until James overrides it. */}
             <div className="flex flex-wrap items-center gap-1.5 border-t border-border p-2">
               <span className="mr-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Mood
               </span>
               {MOODS.map((m) => {
-                const selected = mood === m.id;
+                const selected = manualMood === m.id || (!manualMood && predictedMood === m.id);
+                const isAuto = !manualMood && predictedMood === m.id;
                 return (
                   <button
                     key={m.id}
                     type="button"
-                    onClick={() => setMood(m.id)}
+                    onClick={() => setManualMood(m.id)}
                     aria-pressed={selected}
                     className={`rounded-full border-2 px-5 py-2.5 text-base font-medium transition ${
                       selected
-                        ? `${m.color} border-transparent shadow`
+                        ? `${m.color} ${isAuto ? "border-dashed border-foreground/40" : "border-transparent"} shadow`
                         : "border-border bg-background text-muted-foreground hover:bg-secondary"
                     }`}
                   >
-                    {m.label}
+                    {isAuto ? `auto: ${m.label.toLowerCase()}` : m.label}
                   </button>
                 );
               })}
+              {manualMood && (
+                <button
+                  type="button"
+                  onClick={() => setManualMood(null)}
+                  aria-label="Clear manual mood and use auto"
+                  className="ml-1 rounded-full border border-border bg-background px-3 py-2 text-xs font-medium text-muted-foreground hover:bg-secondary"
+                >
+                  Clear ×
+                </button>
+              )}
             </div>
           </section>
 
