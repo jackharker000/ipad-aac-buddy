@@ -91,7 +91,12 @@ export function SpeakerPanel({
     });
   }, [clusters, people, participantIds]);
 
-  function nameForLabel(label: string): string {
+  function nameForSegment(s: TranscriptSegment): string {
+    // Per-segment override from user reassignment wins over cluster mapping.
+    if (s.person_id) {
+      return peopleById.get(s.person_id)?.name ?? s.speaker_label;
+    }
+    const label = s.speaker_label;
     if (label === JAMES_SELF_LABEL) return "Me";
     const c = clusters.find((c) => c.label === label);
     if (c?.status.kind === "confirmed") {
@@ -133,7 +138,7 @@ export function SpeakerPanel({
                   title="Tap to reassign who said this"
                 >
                   <span className="mr-2 text-xs font-medium text-muted-foreground">
-                    {nameForLabel(s.speaker_label)}
+                    {nameForSegment(s)}
                   </span>
                   {s.text}
                 </button>

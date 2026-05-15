@@ -801,7 +801,7 @@ function Home() {
               if (p) confirmedNames[lbl] = p.name;
             }
             const recentForAI = committedRef.current.slice(-15).map((s) => {
-              const pid = speakerMapRef.current[s.speaker_label];
+              const pid = s.person_id ?? speakerMapRef.current[s.speaker_label];
               const p = pid ? allPeople.find((pp) => pp.id === pid) : null;
               return { speaker: p?.name ?? s.speaker_label, text: s.text };
             });
@@ -1153,7 +1153,15 @@ function Home() {
           .toArray();
         const transcript = segs
           .sort((a, b) => a.ts - b.ts)
-          .map((s) => ({ speaker: s.speaker_label, text: s.text }));
+          .map((s) => {
+            // Per-segment person_id override (from manual reassignment) wins
+            // so the post-conversation summary sees the corrected attribution.
+            if (s.person_id) {
+              const p = allPeople.find((pp) => pp.id === s.person_id);
+              if (p) return { speaker: p.name, text: s.text };
+            }
+            return { speaker: s.speaker_label, text: s.text };
+          });
 
         if (transcript.length > 0) {
           const peopleNames = (await db.people.bulkGet(personIdsRef.current))
@@ -1264,10 +1272,14 @@ function Home() {
     setLoadingSuggestions(true);
     try {
       const peopleById = new Map(allPeople.map((p) => [p.id, p] as const));
-      const rawRecent = committed.slice(-8).map((s) => ({
-        speaker: s.speaker_label,
-        text: s.text,
-      }));
+      const rawRecent = committed.slice(-8).map((s) => {
+        // Manual reassignment override wins over cluster mapping.
+        if (s.person_id) {
+          const p = peopleById.get(s.person_id);
+          if (p) return { speaker: p.name, text: s.text };
+        }
+        return { speaker: s.speaker_label, text: s.text };
+      });
       const recent = labelTranscriptForPrompt(
         rawRecent,
         speakerMapRef.current,
@@ -1680,65 +1692,42 @@ function Home() {
     [],
   );
 
-  // Reassign a single transcript segment to a specific person.
-  // If the person already has a confirmed cluster: move the segment label there.
-  // If not: confirm the segment's current cluster for that person.
-  // Either way, if the segment has a stored MFCC, add it to the person's
-  // voiceprint so future conversations recognise them more accurately.
+  // Reassign a single transcript segment to a specific person — affects ONLY
+  // that one segment, never the cluster. Implemented by setting `person_id`
+  // on the segment as a per-line override; cluster state stays untouched.
+  // If the segment has a stored MFCC, add it to the person's voiceprint so
+  // future conversations recognise them better (the learning signal the user
+  // wants from a correction).
   const handleReassignSegment = useCallback(
     async (segmentId: string, personId: string) => {
       const segment = committedRef.current.find((s) => s.id === segmentId);
       if (!segment) return;
       const person = allPeople.find((p) => p.id === personId);
       if (!person) return;
-
-      // Does this person already have a confirmed cluster in this session?
-      const existingLabel = Object.entries(speakerMapRef.current).find(
-        ([, pid]) => pid === personId,
-      )?.[0];
-
-      if (existingLabel && existingLabel !== segment.speaker_label) {
-        // Move just this segment to the person's confirmed cluster.
-        setCommitted((prev) =>
-          prev.map((s) =>
-            s.id === segmentId ? { ...s, speaker_label: existingLabel } : s,
-          ),
-        );
-        await db.transcript_segments.update(segmentId, {
-          speaker_label: existingLabel,
-        });
-        toast.success(`Moved to ${person.name}`);
-      } else if (!existingLabel) {
-        // Person has no cluster yet — confirm the segment's cluster for them.
-        await confirmKnownSpeaker(segment.speaker_label, personId);
-        // confirmKnownSpeaker already shows a toast.
-      } else {
-        // Segment is already attributed to this person's cluster — nothing to do.
+      if (segment.person_id === personId) {
         toast.info(`Already attributed to ${person.name}`);
         return;
       }
 
-      // Voiceprint improvement: if the segment has a stored MFCC, add it to the
-      // person's voiceprint now, bypassing the cluster-centroid averaging that
-      // happens at session end. This gives a clean per-utterance sample.
+      setCommitted((prev) =>
+        prev.map((s) => (s.id === segmentId ? { ...s, person_id: personId } : s)),
+      );
+      await db.transcript_segments.update(segmentId, { person_id: personId });
+      toast.success(`Marked as ${person.name}`);
+
+      // Add the segment's MFCC to this person's stored voiceprint so the
+      // correction actually teaches the model. Centroid average update only —
+      // no new contribution log entry per correction (avoids the log blowing
+      // up when the user fixes many lines in one session).
       if (segment.mfcc && segment.mfcc.length === 20) {
         try {
           await recordVoiceprint(personId, segment.mfcc);
-          await db.voiceprint_contributions.add({
-            id: newId(),
-            person_id: personId,
-            conversation_id: conversationIdRef.current ?? undefined,
-            source: "auto",
-            mfcc: segment.mfcc.slice(),
-            ts: Date.now(),
-            preview_text: `Corrected: "${segment.text.slice(0, 60)}"`,
-          });
         } catch (err) {
           console.warn("voiceprint update after reassign failed", err);
         }
       }
     },
-    [allPeople, confirmKnownSpeaker],
+    [allPeople],
   );
 
   const forceNewSpeaker = useCallback(() => {
@@ -1763,10 +1752,13 @@ function Home() {
     setExpanding(true);
     try {
       const peopleById = new Map(allPeople.map((p) => [p.id, p] as const));
-      const rawRecent = committed.slice(-12).map((s) => ({
-        speaker: s.speaker_label,
-        text: s.text,
-      }));
+      const rawRecent = committed.slice(-12).map((s) => {
+        if (s.person_id) {
+          const p = peopleById.get(s.person_id);
+          if (p) return { speaker: p.name, text: s.text };
+        }
+        return { speaker: s.speaker_label, text: s.text };
+      });
       const recent = labelTranscriptForPrompt(
         rawRecent,
         speakerMapRef.current,
