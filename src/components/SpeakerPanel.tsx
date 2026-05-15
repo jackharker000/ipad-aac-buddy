@@ -272,6 +272,7 @@ function ClusterCard({
     const status = cluster.status;
     const person = people.find((p) => p.id === status.personId);
     const suggestions = status.suggestions ?? [];
+    const confidenceLabel = status.sim >= 0.90 ? "Sounds like" : status.sim >= 0.83 ? "Probably" : "Maybe";
     return (
       <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-2 text-sm">
         <div className="flex items-center gap-1.5">
@@ -282,7 +283,7 @@ function ClusterCard({
           </span>
         </div>
         <p className="mt-1 text-xs">
-          Sounds like <span className="font-semibold">{person?.name ?? "?"}</span>
+          {confidenceLabel} <span className="font-semibold">{person?.name ?? "?"}</span>
         </p>
         <div className="mt-1.5 flex gap-1.5">
           <button

@@ -235,6 +235,9 @@ function Home() {
   // When James presses "Ask" on a specific cluster, the next time that
   // cluster speaks we attribute any heard self-intro name back to it.
   const expectingNameForClusterRef = useRef<string | null>(null);
+  // Require 2 consecutive voiceprint matches before suggesting a speaker to
+  // reduce false positives from short or noisy utterances.
+  const pendingVoiceprintMatchRef = useRef<Map<string, { personId: string; matchCount: number }>>(new Map());
   useEffect(() => {
     speakerMapRef.current = speakerMap;
   }, [speakerMap]);
@@ -355,12 +358,26 @@ function Home() {
               VOICEPRINT_MATCH_THRESHOLD,
             );
             if (match) {
-              nextStatus = {
-                kind: "suggested",
-                personId: match.print.person_id,
-                sim: match.sim,
-                suggestions: status?.suggestions ?? [],
-              };
+              // Require 2 consecutive matches for the same person before surfacing
+              // a suggestion — avoids false-positive chips from single noisy utterances.
+              const pending = pendingVoiceprintMatchRef.current.get(speakerLabel);
+              if (pending?.personId === match.print.person_id) {
+                const newCount = pending.matchCount + 1;
+                pendingVoiceprintMatchRef.current.set(speakerLabel, { personId: match.print.person_id, matchCount: newCount });
+                if (newCount >= 2) {
+                  nextStatus = {
+                    kind: "suggested",
+                    personId: match.print.person_id,
+                    sim: match.sim,
+                    suggestions: status?.suggestions ?? [],
+                  };
+                }
+              } else {
+                // First match or different person — reset counter
+                pendingVoiceprintMatchRef.current.set(speakerLabel, { personId: match.print.person_id, matchCount: 1 });
+              }
+            } else {
+              pendingVoiceprintMatchRef.current.delete(speakerLabel);
             }
           }
 
@@ -492,6 +509,7 @@ function Home() {
       diarizerRef.current.reset();
       setClusterStatus({});
       clusterStatusRef.current = {};
+      pendingVoiceprintMatchRef.current.clear();
 
       const conv: Conversation = {
         id,
@@ -657,6 +675,16 @@ function Home() {
         place: placeRef.current,
         event: selectedEventRef.current ?? undefined,
       });
+      // Detect if a question was just asked so the AI can prioritise answers.
+      const jamesLabel = jamesLabelRef.current ?? "__james_self__";
+      const QUESTION_STARTERS = /^(what|how|when|where|why|who|which|would|could|should|is|are|do|did|will|can)\b/i;
+      const lastNonJames = committed
+        .filter((s) => s.speaker_label !== jamesLabel && s.speaker_label !== "__james_self__")
+        .slice(-2);
+      const questionAsked = lastNonJames.some((s) => {
+        const t = s.text.trim();
+        return t.endsWith("?") || QUESTION_STARTERS.test(t);
+      });
       const r = await suggestFn({
         data: {
           recentTranscript: recent,
@@ -668,6 +696,7 @@ function Home() {
           alreadyShown: lastShownRef.current.slice(-20),
           model: fastModelRef.current,
           mood: moodRef.current,
+          questionAsked,
         },
       });
       if (r.suggestions?.length) {
@@ -702,9 +731,12 @@ function Home() {
 
   useEffect(() => {
     if (!active) return;
+    // First call (no transcript yet): shorter delay so James has opening
+    // suggestions within ~800ms of pressing Start.
+    const delay = committed.length === 0 ? 800 : 1500;
     const t = setTimeout(() => {
       refreshSuggestions();
-    }, 1500);
+    }, delay);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [committed.length, active, mood]);
@@ -928,7 +960,9 @@ function Home() {
           jamesProfile: ctx.jamesProfile,
           people: ctx.people,
           place: ctx.place,
-          model: fastModelRef.current,
+          // Use smart model for expansion — it's a one-shot operation so the
+          // extra latency is acceptable, and quality matters more than speed here.
+          model: smartModelRef.current,
         },
       });
       const spoken = (r.expanded || raw).trim();

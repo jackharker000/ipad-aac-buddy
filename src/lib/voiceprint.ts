@@ -232,6 +232,8 @@ export function bestMatch(
 ): { print: Voiceprint; sim: number } | null {
   let best: { print: Voiceprint; sim: number } | null = null;
   for (const p of prints) {
+    // Skip voiceprints stored with a different MFCC dimensionality (after an upgrade).
+    if (p.centroid.length !== vector.length) continue;
     const sim = cosineSim(vector, p.centroid);
     if (!best || sim > best.sim) best = { print: p, sim };
   }
@@ -250,9 +252,12 @@ export function bestMatch(
  */
 export type Cluster = { label: string; centroid: number[]; count: number };
 
+type ClusterEntry = { centroid: number[]; count: number; spread: number };
+
 export class Diarizer {
-  private clustersMap = new Map<string, { centroid: number[]; count: number }>();
+  private clustersMap = new Map<string, ClusterEntry>();
   private counter = 0;
+  // mergeThreshold is the baseline; actual threshold per cluster adapts to its spread.
   constructor(public mergeThreshold = 0.82) {}
 
   reset() {
@@ -273,8 +278,21 @@ export class Diarizer {
     }
     let label: string;
     let isNew = false;
-    if (bestLabel && bestSim >= this.mergeThreshold) {
-      label = bestLabel;
+    if (bestLabel) {
+      const prev = this.clustersMap.get(bestLabel)!;
+      // Adaptive threshold: tight clusters (low spread) accept merges more
+      // readily; broad clusters (high spread) require stronger similarity.
+      // spread ∈ [0, 0.2] → threshold ∈ [0.76, 0.88]
+      const adaptiveThreshold = Math.min(0.88, Math.max(0.76,
+        0.76 + (prev.spread / 0.2) * 0.12,
+      ));
+      if (bestSim >= adaptiveThreshold) {
+        label = bestLabel;
+      } else {
+        this.counter += 1;
+        label = `Speaker ${this.counter}`;
+        isNew = true;
+      }
     } else {
       this.counter += 1;
       label = `Speaker ${this.counter}`;
@@ -282,7 +300,13 @@ export class Diarizer {
     }
     const prev = this.clustersMap.get(label);
     const merged = mergeIntoCentroid(prev?.centroid, prev?.count ?? 0, mfcc);
-    this.clustersMap.set(label, merged);
+    // Update running mean of intra-cluster dissimilarity to track spread.
+    const simToCentroid = prev ? cosineSim(mfcc, prev.centroid) : 1.0;
+    const prevCount = prev?.count ?? 0;
+    const newSpread = prevCount > 0
+      ? ((prev!.spread * prevCount) + (1 - simToCentroid)) / (prevCount + 1)
+      : 0;
+    this.clustersMap.set(label, { centroid: merged.centroid, count: merged.count, spread: newSpread });
     return { label, sim: bestSim, isNew };
   }
 

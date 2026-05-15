@@ -211,7 +211,7 @@ export type PersonDocument = {
   created_at: number;
 };
 
-export const MFCC_COEFFS = 13;
+export const MFCC_COEFFS = 20;
 /** Cosine-similarity threshold above which an unknown speaker is auto-matched to a stored voiceprint.
  *  MFCC means across short utterances from the same speaker typically land in
  *  the 0.78–0.92 range, so 0.86 was too strict and almost never triggered.

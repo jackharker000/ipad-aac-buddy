@@ -289,6 +289,7 @@ const suggestionsSchema = z.object({
   mood: z
     .enum(["normal", "calm", "excited", "sad", "upset", "empathetic", "amused"])
     .optional(),
+  questionAsked: z.boolean().optional(),
 });
 
 const SUGGESTION_CATEGORIES = [
@@ -367,7 +368,11 @@ STRICT PRIVACY & SCOPE RULES — these override everything else:
 - James's general profile (background, interests, humor, life context) is fair game because it is general knowledge about him. But specific stories or sensitive disclosures (health, family struggles, work problems, opinions about others) must NOT be carried into a conversation with someone different unless that exact topic also appears in the present people's own memories/follow-ups.
 - When in doubt about whether something is private, leave it out and prefer a neutral question or in-context reply instead.
 
-Mix categories: direct answers, questions back, follow-ups about past topics with THESE people, planned points, light humor when appropriate, "give me a moment" stalls. Avoid repeating any text in "alreadyShown". Each suggestion must be under 16 words and feel natural to say out loud. Prefer concrete references over generic small talk ONLY when those references come from the present people's own memories/follow-ups.`;
+Each suggestion must be under 16 words and feel natural to say out loud. Avoid repeating any text in "alreadyShown". Prefer concrete references over generic small talk ONLY when those references come from the present people's own memories/follow-ups.`;
+
+    const questionGuidance = data.questionAsked
+      ? "A question was just asked. Prioritise direct, specific answers — include at least 3 answer suggestions. The other slots can be follow-ups or conversation-movers."
+      : "Distribute the 6 suggestions: 2 direct responses to what was just said, 2 conversation-movers (deepen a topic or gently shift it), 1 practical or action suggestion, 1 humorous or light option. Vary tone clearly.";
 
     const user = `${profileBlock}
 ${peopleBlock}
@@ -379,7 +384,8 @@ ${moodBlock}
 ${transcriptText || "(no transcript yet — conversation just starting)"}
 
 ${data.alreadyShown?.length ? `# Already shown (do NOT repeat)\n${data.alreadyShown.join(" | ")}\n` : ""}
-Return 10 ranked suggestions in James's voice. Provide a wide variety so James has plenty of useful options to pick from.`;
+${questionGuidance}
+Return exactly 6 suggestions in James's voice.`;
 
     const target = resolveChatTarget(data.model);
     const res = await fetch(target.url, {
@@ -403,7 +409,7 @@ Return 10 ranked suggestions in James's voice. Provide a wide variety so James h
                   suggestions: {
                     type: "array",
                     minItems: 6,
-                    maxItems: 9,
+                    maxItems: 6,
                     items: {
                       type: "object",
                       properties: {
