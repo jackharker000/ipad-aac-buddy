@@ -31,6 +31,7 @@ export function SpeakerPanel({
   partial,
   clusters,
   people,
+  participantIds,
   participantCount,
   onConfirmKnown,
   onRejectSuggestion,
@@ -44,6 +45,8 @@ export function SpeakerPanel({
   partial: string;
   clusters: ClusterRow[];
   people: Person[];
+  /** IDs of all people declared as "in the room" for this conversation. */
+  participantIds?: string[];
   participantCount?: number;
   onConfirmKnown: (label: string, personId: string) => void;
   onRejectSuggestion: (label: string) => void;
@@ -137,7 +140,35 @@ export function SpeakerPanel({
               You declared {participantCount} {participantCount === 1 ? "person" : "people"} — confirm who's who to improve accuracy.
             </div>
           )}
-          {clusters.length === 0 && (
+          {/* Participants declared for this conversation who haven't spoken yet */}
+          {(participantIds ?? [])
+            .filter((pid) => {
+              // Hide once they're confirmed or visible as a cluster
+              const alreadyConfirmed = clusters.some(
+                (c) => c.status.kind === "confirmed" && c.status.personId === pid,
+              );
+              const alreadySuggested = clusters.some(
+                (c) =>
+                  (c.status.kind === "suggested" || c.status.kind === "unknown") &&
+                  (c.status as any).personId === pid,
+              );
+              return !alreadyConfirmed && !alreadySuggested;
+            })
+            .map((pid) => {
+              const person = peopleById.get(pid);
+              if (!person) return null;
+              return (
+                <div
+                  key={pid}
+                  className="flex items-center gap-2 rounded-xl border border-dashed border-border bg-muted/20 px-3 py-2 text-xs text-muted-foreground"
+                >
+                  <span className="size-2 rounded-full bg-muted-foreground/40" />
+                  <span className="font-medium">{person.name}</span>
+                  <span className="ml-auto italic">hasn't spoken yet</span>
+                </div>
+              );
+            })}
+          {clusters.length === 0 && (participantIds ?? []).length === 0 && (
             <p className="text-xs italic text-muted-foreground">
               Voices will appear here as they speak.
             </p>

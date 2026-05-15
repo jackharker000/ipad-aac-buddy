@@ -253,6 +253,12 @@ function Home() {
   const pendingClustersRef = useRef<
     Map<string, { firstSeenTs: number; utteranceCount: number; promoted: boolean }>
   >(new Map());
+  // Voiceprints pre-loaded for declared participants at conversation start.
+  // Used to suggest the right person immediately when their voice is first
+  // heard, bypassing the 2-utterance pending gate.
+  const participantVoiceprintsRef = useRef<
+    Array<{ personId: string; centroid: number[] }>
+  >([]);
   // Keep a fresh copy of `committed` accessible inside stale scribe callback.
   const committedRef = useRef<TranscriptSegment[]>([]);
   useEffect(() => {
@@ -337,75 +343,66 @@ function Home() {
         speakerLabel = lastSeg?.speaker_label ?? "Speaker ?";
       }
 
-      // -------- Ghost-cluster collapse (0a, enhanced) --------
-      // Whenever an utterance lands in an unknown cluster (whether brand-new
-      // or accumulating), check whether the cluster's centroid actually matches
-      // an already-confirmed speaker's stored voiceprint at a relaxed threshold.
-      // If so, silently merge the ghost cluster into the confirmed one and
-      // relabel any prior segments so the transcript stays consistent.
-      // Uses the cluster's running centroid (more accurate than a single MFCC
-      // for clusters that have accumulated multiple utterances).
-      const GHOST_MATCH_THRESHOLD = 0.75;
-      {
-        const curStatus = clusterStatusRef.current[speakerLabel];
-        const isUnknown = !curStatus || curStatus.kind === "unknown";
-        if (mfcc && isUnknown) {
-          const cluster = diarizerRef.current.get(speakerLabel);
-          const centroidForMatch = cluster?.centroid ?? mfcc;
-          for (const [confirmedLabel, confirmedPersonId] of Object.entries(
-            speakerMapRef.current,
-          )) {
-            if (confirmedLabel === speakerLabel) continue;
-            const storedVp = await db.voiceprints.get(confirmedPersonId);
-            if (
-              storedVp &&
-              storedVp.centroid.length === centroidForMatch.length
-            ) {
-              const sim = cosineSim(centroidForMatch, storedVp.centroid);
-              if (sim >= GHOST_MATCH_THRESHOLD) {
-                const fromLabel = speakerLabel;
-                const mergedOk = diarizerRef.current.mergeClusters(
-                  fromLabel,
-                  confirmedLabel,
+      // -------- Ghost-cluster collapse --------
+      // When a BRAND-NEW cluster is created (assignNew=true), check whether its
+      // single-utterance MFCC closely matches an already-confirmed speaker's
+      // stored voiceprint. If so it's almost certainly the same person speaking
+      // under different acoustic conditions — silently merge back.
+      //
+      // Threshold 0.88 sits in the within-speaker range (0.78–0.95) and above
+      // the typical inter-speaker range (0.50–0.80), so we only merge when it's
+      // unambiguously the same person. Running this only on brand-new clusters
+      // (not every utterance of every unknown cluster) prevents real 2nd speakers
+      // from being absorbed into a confirmed speaker as their centroid drifts.
+      const GHOST_MATCH_THRESHOLD = 0.88;
+      if (mfcc && assignNew && !clusterStatusRef.current[speakerLabel]) {
+        for (const [confirmedLabel, confirmedPersonId] of Object.entries(
+          speakerMapRef.current,
+        )) {
+          if (confirmedLabel === speakerLabel) continue;
+          const storedVp = await db.voiceprints.get(confirmedPersonId);
+          if (storedVp && storedVp.centroid.length === mfcc.length) {
+            const sim = cosineSim(mfcc, storedVp.centroid);
+            if (sim >= GHOST_MATCH_THRESHOLD) {
+              const fromLabel = speakerLabel;
+              const mergedOk = diarizerRef.current.mergeClusters(
+                fromLabel,
+                confirmedLabel,
+              );
+              if (mergedOk) {
+                // Relabel any prior segments attributed to this ghost cluster.
+                setCommitted((prev) =>
+                  prev.map((s) =>
+                    s.speaker_label === fromLabel
+                      ? { ...s, speaker_label: confirmedLabel }
+                      : s,
+                  ),
                 );
-                if (mergedOk) {
-                  // Relabel prior segments in committed state and DB so the
-                  // transcript shows the confirmed speaker for all utterances
-                  // that were attributed to this ghost cluster.
-                  setCommitted((prev) =>
-                    prev.map((s) =>
-                      s.speaker_label === fromLabel
-                        ? { ...s, speaker_label: confirmedLabel }
-                        : s,
-                    ),
-                  );
-                  const cid = conversationIdRef.current;
-                  if (cid) {
-                    const segs = await db.transcript_segments
-                      .where("conversation_id")
-                      .equals(cid)
-                      .and((s) => s.speaker_label === fromLabel)
-                      .toArray();
-                    for (const seg of segs) {
-                      await db.transcript_segments.update(seg.id, {
-                        speaker_label: confirmedLabel,
-                      });
-                    }
+                const cid = conversationIdRef.current;
+                if (cid) {
+                  const segs = await db.transcript_segments
+                    .where("conversation_id")
+                    .equals(cid)
+                    .and((s) => s.speaker_label === fromLabel)
+                    .toArray();
+                  for (const seg of segs) {
+                    await db.transcript_segments.update(seg.id, {
+                      speaker_label: confirmedLabel,
+                    });
                   }
-                  // Clean up tracking refs for the dissolved label.
-                  pendingClustersRef.current.delete(fromLabel);
-                  pendingVoiceprintMatchRef.current.delete(fromLabel);
-                  aiSpeakerIdSentRef.current.delete(fromLabel);
-                  if (clusterStatusRef.current[fromLabel]) {
-                    const nextStatus = { ...clusterStatusRef.current };
-                    delete nextStatus[fromLabel];
-                    clusterStatusRef.current = nextStatus;
-                    setClusterStatus(nextStatus);
-                  }
-                  speakerLabel = confirmedLabel;
-                  assignNew = false;
-                  break;
                 }
+                pendingClustersRef.current.delete(fromLabel);
+                pendingVoiceprintMatchRef.current.delete(fromLabel);
+                aiSpeakerIdSentRef.current.delete(fromLabel);
+                if (clusterStatusRef.current[fromLabel]) {
+                  const nextStatus = { ...clusterStatusRef.current };
+                  delete nextStatus[fromLabel];
+                  clusterStatusRef.current = nextStatus;
+                  setClusterStatus(nextStatus);
+                }
+                speakerLabel = confirmedLabel;
+                assignNew = false;
+                break;
               }
             }
           }
@@ -450,7 +447,12 @@ function Home() {
       // the voice is strongly isolated from all other clusters, or the cluster
       // has accumulated ≥2 utterances.
       const PROMOTE_AFTER_UTTERANCES = 2;
-      const ISOLATION_PROMOTE_THRESHOLD = 0.55;
+      // Research shows inter-speaker MFCC cosine similarity is typically
+      // 0.50–0.75. Threshold 0.70 means: if the new voice scores < 0.70
+      // against all existing clusters it's clearly distinct → promote
+      // immediately. Same-speaker ghosts (0.75–0.85) still wait for 2
+      // utterances before becoming visible.
+      const ISOLATION_PROMOTE_THRESHOLD = 0.70;
       if (mfcc) {
         if (assignNew) {
           const allClusters = diarizerRef.current.clusters();
@@ -482,6 +484,54 @@ function Home() {
               utteranceCount: newCount,
               promoted: newCount >= PROMOTE_AFTER_UTTERANCES,
             });
+          }
+        }
+      }
+
+      // -------- Participant voiceprint quick-match --------
+      // For brand-new clusters, compare against pre-loaded voiceprints of
+      // declared participants at a lower threshold (0.72). A match immediately
+      // promotes the cluster (bypassing the 2-utterance pending gate) and sets
+      // its status to "suggested" so the user sees a one-tap confirmation chip
+      // on the speaker's very first utterance. User confirmation is still
+      // required — this never silently confirms.
+      if (mfcc && assignNew && participantVoiceprintsRef.current.length > 0) {
+        const confirmedPersonIds = new Set(Object.values(speakerMapRef.current));
+        const curStatus = clusterStatusRef.current[speakerLabel];
+        if (!curStatus || curStatus.kind === "unknown") {
+          const PARTICIPANT_MATCH_THRESHOLD = 0.72;
+          let bestPvp: { personId: string; sim: number } | null = null;
+          for (const pvp of participantVoiceprintsRef.current) {
+            if (confirmedPersonIds.has(pvp.personId)) continue;
+            if (pvp.centroid.length !== mfcc.length) continue;
+            const sim = cosineSim(mfcc, pvp.centroid);
+            if (
+              sim >= PARTICIPANT_MATCH_THRESHOLD &&
+              (!bestPvp || sim > bestPvp.sim)
+            ) {
+              bestPvp = { personId: pvp.personId, sim };
+            }
+          }
+          if (bestPvp) {
+            // Promote pending cluster so it becomes visible in the panel.
+            const pendingEntry = pendingClustersRef.current.get(speakerLabel);
+            if (pendingEntry) {
+              pendingClustersRef.current.set(speakerLabel, {
+                ...pendingEntry,
+                promoted: true,
+              });
+            }
+            const nextStatus = {
+              ...clusterStatusRef.current,
+              [speakerLabel]: {
+                kind: "suggested" as const,
+                personId: bestPvp.personId,
+                sim: bestPvp.sim,
+                suggestions: [],
+              },
+            };
+            clusterStatusRef.current = nextStatus;
+            setClusterStatus(nextStatus);
           }
         }
       }
@@ -692,8 +742,10 @@ function Home() {
         (t) => t > segStartAbsMs + 200 && t < segEndAbsMs - 200,
       );
 
+      // 0.5s minimum lets us split short interruptions; 2-word minimum
+      // ensures both halves have enough content for MFCC computation.
       const canSplit =
-        cap && shiftsInSeg.length > 0 && d.words && d.words.length >= 2 && spoken >= 0.8;
+        cap && shiftsInSeg.length > 0 && d.words && d.words.length >= 2 && spoken >= 0.5;
 
       if (canSplit) {
         try {
@@ -856,6 +908,23 @@ function Home() {
       aiSpeakerIdSentRef.current.clear();
       speakerShiftTimestampsRef.current = [];
       pendingClustersRef.current.clear();
+      participantVoiceprintsRef.current = [];
+      // Pre-load voiceprints for declared participants so the first utterance
+      // from each gets an immediate suggestion chip rather than waiting for
+      // 2+ utterances or a high-confidence standalone match.
+      if (selectedPersonIds.length > 0) {
+        db.voiceprints
+          .where("person_id")
+          .anyOf(selectedPersonIds)
+          .toArray()
+          .then((prints) => {
+            participantVoiceprintsRef.current = prints.map((vp) => ({
+              personId: vp.person_id,
+              centroid: vp.centroid,
+            }));
+          })
+          .catch(() => {});
+      }
 
       const conv: Conversation = {
         id,
@@ -1698,6 +1767,7 @@ function Home() {
             partial={partial}
             clusters={clusterRows}
             people={allPeople}
+            participantIds={selectedPersonIds}
             participantCount={peopleInConvo.length}
             onConfirmKnown={confirmKnownSpeaker}
             onRejectSuggestion={rejectSuggestion}
