@@ -17,8 +17,15 @@
  * then runs 2.2 / 2.3 / 2.4 in `Promise.all`.
  */
 
-import { db, getJamesProfile, type Person, type TranscriptSegment, MFCC_COEFFS } from "./db";
-import { cosineSim } from "./voiceprint";
+import {
+  db,
+  getJamesProfile,
+  type Person,
+  type Voiceprint,
+  type TranscriptSegment,
+  MFCC_COEFFS,
+} from "./db";
+import { cosineSim, rebuildVoiceprintFromContributions } from "./voiceprint";
 import { kmeansRediarize, type UtteranceVec } from "./rediarize";
 import { aiRediarizeTieBreaker } from "./aac.functions";
 import { toast } from "sonner";
@@ -265,11 +272,31 @@ function humanNameForSegment(
 }
 
 /* -------------------------------------------------------------------------- */
-/* 2.2 / 2.3 / 2.4 stubs — implementations land in subsequent feature commits.*/
+/* 2.2 — Voiceprint rebuild                                                   */
 /* -------------------------------------------------------------------------- */
 
-export async function rebuildVoiceprintsAfterStop(_ctx: Tier2Ctx): Promise<void> {
-  /* Implemented in 2.2 commit. */
+export async function rebuildVoiceprintsAfterStop(ctx: Tier2Ctx): Promise<void> {
+  // Touch everyone in this conversation + anyone with stale prints (>7 days).
+  const STALE_MS = 7 * 24 * 60 * 60 * 1000;
+  const stale = await db.voiceprints
+    .filter((vp: Voiceprint) => (vp.last_rebuilt_at ?? 0) < Date.now() - STALE_MS)
+    .toArray();
+  const ids = new Set<string>([...ctx.personIds, ...stale.map((vp) => vp.person_id)]);
+
+  let rebuilt = 0;
+  for (const pid of ids) {
+    try {
+      const outcome = await rebuildVoiceprintFromContributions(pid);
+      if (outcome && !outcome.aborted) rebuilt += 1;
+    } catch (e) {
+      console.warn("[tier2.2] rebuild failed for", pid, e);
+    }
+  }
+  if (rebuilt > 0) {
+    toast.success(`Rebuilt ${rebuilt} voiceprint${rebuilt === 1 ? "" : "s"}`, {
+      id: "tier2-rebuild",
+    });
+  }
 }
 
 export async function enrichProfilesAfterStop(_ctx: Tier2Ctx): Promise<void> {
