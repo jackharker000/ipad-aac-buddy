@@ -13,6 +13,11 @@ import Meyda from "meyda";
 import { db, MFCC_COEFFS, type Voiceprint } from "./db";
 
 const FRAME = 512;
+
+/** Only update a cluster's running centroid when the utterance MFCC is at
+ *  least this similar to the existing centroid. Keeps outlier utterances from
+ *  drifting the centroid away from a confirmed speaker's true voice. */
+export const CENTROID_UPDATE_THRESHOLD = 0.76;
 const RMS_GATE = 0.012; // skip near-silent frames
 
 // Meyda is configured globally; set defaults once.
@@ -41,9 +46,9 @@ export class VoiceCapture {
     onShift: (timestampMs: number) => void,
     options: { intervalMs?: number; windowSec?: number; threshold?: number } = {},
   ) {
-    const intervalMs = options.intervalMs ?? 350;
+    const intervalMs = options.intervalMs ?? 200;
     const windowSec = options.windowSec ?? 0.5;
-    const threshold = options.threshold ?? 0.72;
+    const threshold = options.threshold ?? 0.68;
     this.stopShiftMonitor();
     this.shiftPrevMfcc = null;
     this.shiftTimer = setInterval(() => {
@@ -339,7 +344,14 @@ export class Diarizer {
       label = `Speaker ${this.counter}`;
       isNew = true;
     }
-    this.mergeUtterance(label, mfcc);
+    // Centroid guard: only update the running centroid when the utterance is
+    // sufficiently similar to the current centroid. This prevents drift from
+    // noisy or misassigned utterances while still assigning the cluster label.
+    const cluster = this.clustersMap.get(label);
+    const preMergeSim = cluster ? cosineSim(mfcc, cluster.centroid) : 1.0;
+    if (preMergeSim >= CENTROID_UPDATE_THRESHOLD) {
+      this.mergeUtterance(label, mfcc);
+    }
     return { label, sim: bestSim, isNew };
   }
 

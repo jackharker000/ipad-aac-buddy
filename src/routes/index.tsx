@@ -51,6 +51,7 @@ import {
   recordVoiceprint,
   bestMatch,
   Diarizer,
+  cosineSim,
 } from "@/lib/voiceprint";
 import { VOICEPRINT_MATCH_THRESHOLD } from "@/lib/db";
 import { SpeakerPanel, type ClusterRow, type ClusterStatus, type SuggestedName } from "@/components/SpeakerPanel";
@@ -328,6 +329,54 @@ function Home() {
         speakerLabel = lastSeg?.speaker_label ?? "Speaker ?";
       }
 
+      // -------- Ghost-cluster collapse (0a) --------
+      // If this is a brand-new cluster label and we have an MFCC, check whether
+      // it actually belongs to an already-confirmed speaker's stored voiceprint.
+      const GHOST_MATCH_THRESHOLD = 0.75;
+      if (mfcc && assignNew && !clusterStatusRef.current[speakerLabel]) {
+        for (const [confirmedLabel, confirmedPersonId] of Object.entries(speakerMapRef.current)) {
+          const storedVp = await db.voiceprints.get(confirmedPersonId);
+          if (storedVp && storedVp.centroid.length === mfcc.length) {
+            const sim = cosineSim(mfcc, storedVp.centroid);
+            if (sim >= GHOST_MATCH_THRESHOLD) {
+              // Silent auto-merge: collapse new ghost cluster back to confirmed speaker
+              diarizerRef.current.mergeClusters(speakerLabel, confirmedLabel);
+              speakerLabel = confirmedLabel;
+              assignNew = false;
+              break;
+            }
+          }
+        }
+      }
+
+      // -------- Participant-constrained cluster cap (0b) --------
+      // If the label is still a new cluster AND participants were declared,
+      // prevent runaway cluster creation by merging into the best-matching
+      // existing cluster when we're already at the cap.
+      if (mfcc && assignNew && !clusterStatusRef.current[speakerLabel] && peopleInConvo.length > 0) {
+        const existingClusters = diarizerRef.current.clusters();
+        // Count clusters that existed before this new one was created
+        const priorCount = existingClusters.length - 1; // new cluster already added
+        if (priorCount >= peopleInConvo.length + 1) {
+          // Find the existing cluster (excluding the new one) with best cosine sim
+          let bestExistingLabel: string | null = null;
+          let bestExistingSim = -1;
+          for (const c of existingClusters) {
+            if (c.label === speakerLabel) continue;
+            const sim = cosineSim(mfcc, c.centroid);
+            if (sim > bestExistingSim) {
+              bestExistingSim = sim;
+              bestExistingLabel = c.label;
+            }
+          }
+          if (bestExistingLabel) {
+            diarizerRef.current.mergeClusters(speakerLabel, bestExistingLabel);
+            speakerLabel = bestExistingLabel;
+            assignNew = false;
+          }
+        }
+      }
+
       console.debug("[diarize]", {
         chosen: speakerLabel,
         sim: assignSim.toFixed(3),
@@ -531,11 +580,11 @@ function Home() {
       const segEndAbsMs = Date.now();
       const segStartAbsMs = segEndAbsMs - spoken * 1000;
       const shiftsInSeg = speakerShiftTimestampsRef.current.filter(
-        (t) => t > segStartAbsMs + 400 && t < segEndAbsMs - 400,
+        (t) => t > segStartAbsMs + 200 && t < segEndAbsMs - 200,
       );
 
       const canSplit =
-        cap && shiftsInSeg.length > 0 && d.words && d.words.length >= 4 && spoken >= 2.0;
+        cap && shiftsInSeg.length > 0 && d.words && d.words.length >= 2 && spoken >= 0.8;
 
       if (canSplit) {
         try {
@@ -1522,6 +1571,7 @@ function Home() {
             partial={partial}
             clusters={clusterRows}
             people={allPeople}
+            participantCount={peopleInConvo.length}
             onConfirmKnown={confirmKnownSpeaker}
             onRejectSuggestion={rejectSuggestion}
             onConfirmNew={confirmNewSpeaker}

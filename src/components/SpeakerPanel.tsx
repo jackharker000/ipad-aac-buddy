@@ -31,6 +31,7 @@ export function SpeakerPanel({
   partial,
   clusters,
   people,
+  participantCount,
   onConfirmKnown,
   onRejectSuggestion,
   onConfirmNew,
@@ -43,6 +44,7 @@ export function SpeakerPanel({
   partial: string;
   clusters: ClusterRow[];
   people: Person[];
+  participantCount?: number;
   onConfirmKnown: (label: string, personId: string) => void;
   onRejectSuggestion: (label: string) => void;
   onConfirmNew: (label: string, name: string) => void;
@@ -125,6 +127,11 @@ export function SpeakerPanel({
           </div>
         </div>
         <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
+          {participantCount != null && participantCount > 0 && clusters.length > participantCount && (
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-800 dark:text-amber-300">
+              You declared {participantCount} {participantCount === 1 ? "person" : "people"} — confirm who's who to improve accuracy.
+            </div>
+          )}
           {clusters.length === 0 && (
             <p className="text-xs italic text-muted-foreground">
               Voices will appear here as they speak.
