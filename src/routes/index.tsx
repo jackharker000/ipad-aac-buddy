@@ -44,6 +44,7 @@ import {
   synthesizeSpeech,
   expandUtterance,
   identifySpeakerFromContext,
+  aiSplitTranscriptChunk,
 } from "@/lib/aac.functions";
 import { buildConversationContext, suggestPeopleAtPlace } from "@/lib/context";
 import { labelTranscriptForPrompt } from "@/lib/speaker-id";
@@ -309,6 +310,7 @@ function Home() {
   const summarizeFn = useServerFn(summarizeConversation);
   const expandFn = useServerFn(expandUtterance);
   const identifyFn = useServerFn(identifySpeakerFromContext);
+  const aiSplitFn = useServerFn(aiSplitTranscriptChunk);
 
   // Per-utterance processing — extracted so we can call it twice when we
   // split a Scribe chunk that spans two speakers.
@@ -907,6 +909,105 @@ function Home() {
           }
         } catch (err) {
           console.warn("[diarize] split failed, falling back to single-utterance", err);
+        }
+      }
+
+      // ---------- AI-fallback split ----------
+      // If MFCC didn't detect a shift but the chunk text looks like it could
+      // contain two speakers (long chunk, multiple sentences, Q+A pattern),
+      // ask the AI to inspect it. Only fire when there are 2+ declared
+      // participants so the AI has candidate names to choose between, and
+      // only on chunks long enough to plausibly contain a speaker change.
+      const wordsArr: any[] = d.words ?? [];
+      const wordCount = wordsArr.length;
+      const looksMultiSpeaker = (() => {
+        if (wordCount < 5 || spoken < 1.5) return false;
+        // mid-chunk sentence-ending punctuation (not just at very end)
+        const body = text.slice(0, -1);
+        const midPunct = body.match(/[.?!]\s+\S/g);
+        return !!midPunct && midPunct.length >= 1;
+      })();
+      if (
+        cap &&
+        !shiftsInSeg.length &&
+        looksMultiSpeaker &&
+        peopleInConvo.length >= 2 &&
+        wordCount >= 5 &&
+        wordCount <= 80
+      ) {
+        try {
+          const recent = committedRef.current.slice(-6).map((s) => {
+            const pid = speakerMapRef.current[s.speaker_label];
+            const p = pid ? allPeople.find((pp) => pp.id === pid) : null;
+            return { speaker: p?.name ?? s.speaker_label, text: s.text };
+          });
+          const confirmedSpeakers: Record<string, string> = {};
+          for (const [lbl, pid] of Object.entries(speakerMapRef.current)) {
+            const p = allPeople.find((pp) => pp.id === pid);
+            if (p) confirmedSpeakers[lbl] = p.name;
+          }
+          const candidateNames = peopleInConvo.map((p) => p.name);
+          const aiRes = await aiSplitFn({
+            data: {
+              recentTranscript: recent,
+              chunkText: text,
+              wordCount,
+              candidateNames,
+              confirmedSpeakers,
+              model: fastModelRef.current,
+            },
+          });
+          console.debug("[diarize] ai split result", aiRes);
+          if (
+            aiRes.splitAtWord > 0 &&
+            aiRes.splitAtWord < wordCount &&
+            aiRes.confidence >= 0.7
+          ) {
+            const splitWordIdx = aiRes.splitAtWord;
+            const firstStart = wordsArr[0].start ?? 0;
+            const splitWord = wordsArr[splitWordIdx];
+            // Time from chunk start to the split point, in seconds.
+            const splitSecFromChunkStart =
+              (splitWord.start ?? 0) - firstStart;
+            const totalSec = spoken + 1.0;
+            const totalPcm = cap.recentSlice(totalSec, 0);
+            // Mirror the MFCC-shift split logic: compute sample offset from
+            // the END of totalPcm (which corresponds to ~now).
+            const splitSampleFromEnd = Math.floor(
+              (spoken - splitSecFromChunkStart) * cap.sampleRate,
+            );
+            const splitAt = Math.max(
+              512 * 4,
+              Math.min(
+                totalPcm.length - 512 * 4,
+                totalPcm.length - splitSampleFromEnd,
+              ),
+            );
+            const prePcm = totalPcm.subarray(0, splitAt);
+            const postPcm = totalPcm.subarray(splitAt);
+            const preMfcc = computeMfccMean(prePcm, cap.sampleRate);
+            const postMfcc = computeMfccMean(postPcm, cap.sampleRate);
+            const preText = wordsArr
+              .slice(0, splitWordIdx)
+              .map((w) => w.text ?? "")
+              .join(" ")
+              .trim();
+            const postText = wordsArr
+              .slice(splitWordIdx)
+              .map((w) => w.text ?? "")
+              .join(" ")
+              .trim();
+            if (preText && postText && preMfcc && postMfcc) {
+              await processUtterance(preText, preMfcc, {});
+              await processUtterance(postText, postMfcc, {
+                forceNewCluster: true,
+                allowSelfIntroOverride: false,
+              });
+              return;
+            }
+          }
+        } catch (err) {
+          console.warn("[diarize] AI split failed, falling through", err);
         }
       }
 
