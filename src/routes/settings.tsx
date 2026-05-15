@@ -1722,34 +1722,13 @@ function MemoryList({ items }: { items: { id: string; text: string }[] }) {
 }
 
 function VoiceprintSection({ personId }: { personId: string }) {
-  const vp = useLiveQuery(() => db.voiceprints.get(personId), [personId]);
   return (
     <Section
       icon={<Mic className="size-4" />}
       title="Voice recognition"
-      empty="No voice fingerprint yet — one will be learned automatically the next time they speak in a recorded conversation."
+      empty=""
     >
-      {vp ? (
-        <div className="flex items-center justify-between rounded-lg border border-border bg-secondary/30 px-3 py-2 text-sm">
-          <div>
-            <div className="font-medium">Voice learned</div>
-            <div className="text-xs text-muted-foreground">
-              {vp.sample_count} sample{vp.sample_count === 1 ? "" : "s"} ·
-              updated {new Date(vp.updated_at).toLocaleDateString()}
-            </div>
-          </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={async () => {
-              await deleteVoiceprint(personId);
-              toast.success("Voiceprint forgotten");
-            }}
-          >
-            Forget voice
-          </Button>
-        </div>
-      ) : null}
+      <VoiceSampleRecorder personId={personId} />
     </Section>
   );
 }
