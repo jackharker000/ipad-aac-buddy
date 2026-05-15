@@ -68,7 +68,12 @@ export function SpeakerPanel({
     if (c?.status.kind === "confirmed") {
       return peopleById.get(c.status.personId)?.name ?? label;
     }
-    return label;
+    if (c) return label;
+    // Cluster is hidden (pending hysteresis) — show a neutral marker so the
+    // transcript line still has a speaker indicator. When the cluster is
+    // eventually promoted (or merged into a confirmed speaker) the proper
+    // name appears retroactively.
+    return "…";
   }
 
   return (

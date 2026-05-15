@@ -245,6 +245,14 @@ function Home() {
   const speakerShiftTimestampsRef = useRef<number[]>([]);
   // Track which unknown clusters have already had AI context-ID fired (once per cluster).
   const aiSpeakerIdSentRef = useRef<Set<string>>(new Set());
+  // Hysteresis: brand-new clusters start as "pending" and don't appear in the
+  // SpeakerPanel until promoted. Promotion requires at least one of: ≥2
+  // utterances, user-triggered, self-intro detected, strongly isolated voice,
+  // or first cluster in the conversation. Prevents one-off ghost clusters from
+  // noise/distance/interruption from polluting the speaker roster.
+  const pendingClustersRef = useRef<
+    Map<string, { firstSeenTs: number; utteranceCount: number; promoted: boolean }>
+  >(new Map());
   // Keep a fresh copy of `committed` accessible inside stale scribe callback.
   const committedRef = useRef<TranscriptSegment[]>([]);
   useEffect(() => {
@@ -329,21 +337,76 @@ function Home() {
         speakerLabel = lastSeg?.speaker_label ?? "Speaker ?";
       }
 
-      // -------- Ghost-cluster collapse (0a) --------
-      // If this is a brand-new cluster label and we have an MFCC, check whether
-      // it actually belongs to an already-confirmed speaker's stored voiceprint.
+      // -------- Ghost-cluster collapse (0a, enhanced) --------
+      // Whenever an utterance lands in an unknown cluster (whether brand-new
+      // or accumulating), check whether the cluster's centroid actually matches
+      // an already-confirmed speaker's stored voiceprint at a relaxed threshold.
+      // If so, silently merge the ghost cluster into the confirmed one and
+      // relabel any prior segments so the transcript stays consistent.
+      // Uses the cluster's running centroid (more accurate than a single MFCC
+      // for clusters that have accumulated multiple utterances).
       const GHOST_MATCH_THRESHOLD = 0.75;
-      if (mfcc && assignNew && !clusterStatusRef.current[speakerLabel]) {
-        for (const [confirmedLabel, confirmedPersonId] of Object.entries(speakerMapRef.current)) {
-          const storedVp = await db.voiceprints.get(confirmedPersonId);
-          if (storedVp && storedVp.centroid.length === mfcc.length) {
-            const sim = cosineSim(mfcc, storedVp.centroid);
-            if (sim >= GHOST_MATCH_THRESHOLD) {
-              // Silent auto-merge: collapse new ghost cluster back to confirmed speaker
-              diarizerRef.current.mergeClusters(speakerLabel, confirmedLabel);
-              speakerLabel = confirmedLabel;
-              assignNew = false;
-              break;
+      {
+        const curStatus = clusterStatusRef.current[speakerLabel];
+        const isUnknown = !curStatus || curStatus.kind === "unknown";
+        if (mfcc && isUnknown) {
+          const cluster = diarizerRef.current.get(speakerLabel);
+          const centroidForMatch = cluster?.centroid ?? mfcc;
+          for (const [confirmedLabel, confirmedPersonId] of Object.entries(
+            speakerMapRef.current,
+          )) {
+            if (confirmedLabel === speakerLabel) continue;
+            const storedVp = await db.voiceprints.get(confirmedPersonId);
+            if (
+              storedVp &&
+              storedVp.centroid.length === centroidForMatch.length
+            ) {
+              const sim = cosineSim(centroidForMatch, storedVp.centroid);
+              if (sim >= GHOST_MATCH_THRESHOLD) {
+                const fromLabel = speakerLabel;
+                const mergedOk = diarizerRef.current.mergeClusters(
+                  fromLabel,
+                  confirmedLabel,
+                );
+                if (mergedOk) {
+                  // Relabel prior segments in committed state and DB so the
+                  // transcript shows the confirmed speaker for all utterances
+                  // that were attributed to this ghost cluster.
+                  setCommitted((prev) =>
+                    prev.map((s) =>
+                      s.speaker_label === fromLabel
+                        ? { ...s, speaker_label: confirmedLabel }
+                        : s,
+                    ),
+                  );
+                  const cid = conversationIdRef.current;
+                  if (cid) {
+                    const segs = await db.transcript_segments
+                      .where("conversation_id")
+                      .equals(cid)
+                      .and((s) => s.speaker_label === fromLabel)
+                      .toArray();
+                    for (const seg of segs) {
+                      await db.transcript_segments.update(seg.id, {
+                        speaker_label: confirmedLabel,
+                      });
+                    }
+                  }
+                  // Clean up tracking refs for the dissolved label.
+                  pendingClustersRef.current.delete(fromLabel);
+                  pendingVoiceprintMatchRef.current.delete(fromLabel);
+                  aiSpeakerIdSentRef.current.delete(fromLabel);
+                  if (clusterStatusRef.current[fromLabel]) {
+                    const nextStatus = { ...clusterStatusRef.current };
+                    delete nextStatus[fromLabel];
+                    clusterStatusRef.current = nextStatus;
+                    setClusterStatus(nextStatus);
+                  }
+                  speakerLabel = confirmedLabel;
+                  assignNew = false;
+                  break;
+                }
+              }
             }
           }
         }
@@ -370,9 +433,55 @@ function Home() {
             }
           }
           if (bestExistingLabel) {
-            diarizerRef.current.mergeClusters(speakerLabel, bestExistingLabel);
+            const fromLabel = speakerLabel;
+            diarizerRef.current.mergeClusters(fromLabel, bestExistingLabel);
+            pendingClustersRef.current.delete(fromLabel);
             speakerLabel = bestExistingLabel;
             assignNew = false;
+          }
+        }
+      }
+
+      // -------- Pending-cluster hysteresis --------
+      // Hide brand-new clusters from the SpeakerPanel until we have stronger
+      // evidence they're a real distinct speaker. Promotion happens when at
+      // least one of these holds: it's the first cluster of the conversation,
+      // the user explicitly pressed "New", a self-introduction was detected,
+      // the voice is strongly isolated from all other clusters, or the cluster
+      // has accumulated ≥2 utterances.
+      const PROMOTE_AFTER_UTTERANCES = 2;
+      const ISOLATION_PROMOTE_THRESHOLD = 0.55;
+      if (mfcc) {
+        if (assignNew) {
+          const allClusters = diarizerRef.current.clusters();
+          const isFirstCluster = allClusters.length === 1;
+          const userTriggered = !!opts.forceNewCluster;
+          let maxSimToOthers = 0;
+          for (const c of allClusters) {
+            if (c.label === speakerLabel) continue;
+            const s = cosineSim(mfcc, c.centroid);
+            if (s > maxSimToOthers) maxSimToOthers = s;
+          }
+          const isStronglyIsolated = maxSimToOthers < ISOLATION_PROMOTE_THRESHOLD;
+          const promoteNow =
+            isFirstCluster ||
+            userTriggered ||
+            introOverride ||
+            isStronglyIsolated;
+          pendingClustersRef.current.set(speakerLabel, {
+            firstSeenTs: Date.now(),
+            utteranceCount: 1,
+            promoted: promoteNow,
+          });
+        } else {
+          const pending = pendingClustersRef.current.get(speakerLabel);
+          if (pending && !pending.promoted) {
+            const newCount = pending.utteranceCount + 1;
+            pendingClustersRef.current.set(speakerLabel, {
+              ...pending,
+              utteranceCount: newCount,
+              promoted: newCount >= PROMOTE_AFTER_UTTERANCES,
+            });
           }
         }
       }
@@ -746,6 +855,7 @@ function Home() {
       pendingVoiceprintMatchRef.current.clear();
       aiSpeakerIdSentRef.current.clear();
       speakerShiftTimestampsRef.current = [];
+      pendingClustersRef.current.clear();
 
       const conv: Conversation = {
         id,
@@ -1061,10 +1171,21 @@ function Home() {
   );
 
   // Build cluster rows from the diarizer + cluster-status state for the SpeakerPanel.
+  // Pending unpromoted clusters are filtered out — they exist in the diarizer
+  // (so utterances still cluster correctly) but don't appear in the UI until
+  // we have stronger evidence they're a real distinct speaker.
   const clusterRows = useMemo<ClusterRow[]>(() => {
     const rows: ClusterRow[] = [];
     for (const c of diarizerRef.current.clusters()) {
       const status = clusterStatus[c.label] ?? { kind: "unknown" as const };
+      const pending = pendingClustersRef.current.get(c.label);
+      const isConfirmed = status.kind === "confirmed";
+      const isSuggested = status.kind === "suggested";
+      // Always show confirmed/suggested clusters even if they happen to still
+      // have a pending entry (e.g. confirmation arrived before promotion).
+      if (pending && !pending.promoted && !isConfirmed && !isSuggested) {
+        continue;
+      }
       rows.push({ label: c.label, count: c.count, status });
     }
     // Stable sort by numeric portion of "Speaker N"
@@ -1081,6 +1202,8 @@ function Home() {
   // ---- Speaker confirmation handlers ----
   const confirmKnownSpeaker = useCallback(
     async (label: string, personId: string) => {
+      // Confirmation overrides any pending hysteresis — the cluster is now real.
+      pendingClustersRef.current.delete(label);
       const cluster = diarizerRef.current.get(label);
       if (cluster) {
         await recordVoiceprint(personId, cluster.centroid);
@@ -1212,6 +1335,10 @@ function Home() {
     async (fromLabel: string, toLabel: string) => {
       const ok = diarizerRef.current.mergeClusters(fromLabel, toLabel);
       if (!ok) return;
+      // Drop any pending/aux tracking for the dissolved label.
+      pendingClustersRef.current.delete(fromLabel);
+      pendingVoiceprintMatchRef.current.delete(fromLabel);
+      aiSpeakerIdSentRef.current.delete(fromLabel);
 
       // Relabel all transcript segments in state and DB.
       setCommitted((prev) =>
