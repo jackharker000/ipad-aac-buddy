@@ -239,6 +239,9 @@ function Home() {
   // Require 2 consecutive voiceprint matches before suggesting a speaker to
   // reduce false positives from short or noisy utterances.
   const pendingVoiceprintMatchRef = useRef<Map<string, { personId: string; matchCount: number }>>(new Map());
+  // Timestamps (ms) of detected speaker shifts during the current session.
+  // Used to split Scribe-committed chunks that span multiple speakers.
+  const speakerShiftTimestampsRef = useRef<number[]>([]);
   // Track which unknown clusters have already had AI context-ID fired (once per cluster).
   const aiSpeakerIdSentRef = useRef<Set<string>>(new Set());
   // Keep a fresh copy of `committed` accessible inside stale scribe callback.
@@ -261,101 +264,82 @@ function Home() {
   const expandFn = useServerFn(expandUtterance);
   const identifyFn = useServerFn(identifySpeakerFromContext);
 
-  const scribe = useScribe({
-    modelId: "scribe_v2_realtime",
-    commitStrategy: CommitStrategy.VAD,
-    includeTimestamps: true,
-    onPartialTranscript: (d: { text: string }) => setPartial(d.text ?? ""),
-    onCommittedTranscriptWithTimestamps: async (d: any) => {
-      const text = (d.text ?? "").trim();
+  // Per-utterance processing — extracted so we can call it twice when we
+  // split a Scribe chunk that spans two speakers.
+  const processUtterance = useCallback(
+    async (
+      text: string,
+      mfcc: number[] | null,
+      opts: { forceNewCluster?: boolean; allowSelfIntroOverride?: boolean } = {},
+    ): Promise<void> => {
       if (!text || !conversationIdRef.current) return;
-      setPartial("");
 
-      // -------- Compute MFCC for this segment first so we can run our own
-      // local diarization regardless of what Scribe returns.
-      const cap = captureRef.current;
-      let mfcc: number[] | null = null;
-      let spoken = 0;
-      if (cap && d.words && d.words.length > 0) {
-        try {
-          const firstW = d.words[0];
-          const lastW = d.words[d.words.length - 1];
-          spoken = (lastW.end ?? 0) - (firstW.start ?? 0);
-          if (spoken >= 0.5) {
-            const dur = Math.max(1.2, spoken);
-            const pcm = cap.recentSlice(dur, 1.0);
-            mfcc = computeMfccMean(pcm, cap.sampleRate);
-          }
-        } catch (err) {
-          console.warn("[voiceprint] mfcc compute failed", err);
-        }
-      }
-
-      // -------- Pick a canonical speaker label for this segment.
-      // Single source of truth: the local Diarizer. We deliberately ignore
-      // Scribe's speaker_id — in our tests it produced one label for whole
-      // multi-speaker recordings, which then poisoned downstream mapping.
-      // Utterances that were too quiet/short to MFCC stick to the previous
-      // label so we don't invent ghost clusters from "uh huh".
+      // -------- Pick a canonical speaker label.
       let speakerLabel: string;
       let assignSim = -1;
       let assignNew = false;
       let introOverride = false;
+
       if (mfcc) {
-        // Textual override: if the speaker introduces themselves with a name
-        // that conflicts with the cluster their MFCC would merge into, force
-        // a fresh cluster. Two adult voices on the same mic often share
-        // enough MFCC similarity to be mis-merged; the textual self-intro is
-        // a far stronger signal of "different speaker".
-        const introducedName = extractIntroducedNames([
-          { text, speaker_label: "" },
-        ])[0]?.name;
-        let forceNew = false;
-        if (introducedName) {
-          const preview = diarizerRef.current.peek(mfcc);
-          if (preview.label && preview.wouldMerge) {
-            const previewStatus = clusterStatusRef.current[preview.label];
-            // Find who that cluster is currently attributed to (confirmed
-            // or stored-voiceprint-suggested) — they're our reference identity.
-            let attributedName: string | undefined;
-            if (previewStatus?.kind === "confirmed") {
-              attributedName = allPeople.find((p) => p.id === previewStatus.personId)?.name;
-            } else if (previewStatus?.kind === "suggested") {
-              attributedName = allPeople.find((p) => p.id === previewStatus.personId)?.name;
-            }
-            if (attributedName && attributedName.toLowerCase() !== introducedName.toLowerCase()) {
-              forceNew = true;
-              console.debug("[diarize] self-intro override → forcing new cluster", {
-                introducedName,
-                wouldHaveMergedInto: preview.label,
-                attributedTo: attributedName,
-                sim: preview.sim.toFixed(3),
-              });
+        if (opts.forceNewCluster) {
+          const r = diarizerRef.current.assignNew(mfcc);
+          speakerLabel = r.label;
+          assignSim = r.sim;
+          assignNew = true;
+        } else {
+          let forceNew = false;
+          if (opts.allowSelfIntroOverride !== false) {
+            const introducedName = extractIntroducedNames([
+              { text, speaker_label: "" },
+            ])[0]?.name;
+            if (introducedName) {
+              const preview = diarizerRef.current.peek(mfcc);
+              if (preview.label && preview.wouldMerge) {
+                const previewStatus = clusterStatusRef.current[preview.label];
+                let attributedName: string | undefined;
+                if (previewStatus?.kind === "confirmed") {
+                  attributedName = allPeople.find(
+                    (p) => p.id === previewStatus.personId,
+                  )?.name;
+                } else if (previewStatus?.kind === "suggested") {
+                  attributedName = allPeople.find(
+                    (p) => p.id === previewStatus.personId,
+                  )?.name;
+                }
+                if (
+                  attributedName &&
+                  attributedName.toLowerCase() !== introducedName.toLowerCase()
+                ) {
+                  forceNew = true;
+                  introOverride = true;
+                }
+              }
             }
           }
+          const r = forceNew
+            ? diarizerRef.current.assignNew(mfcc)
+            : diarizerRef.current.assign(mfcc);
+          speakerLabel = r.label;
+          assignSim = r.sim;
+          assignNew = r.isNew;
         }
-        const r = forceNew
-          ? diarizerRef.current.assignNew(mfcc)
-          : diarizerRef.current.assign(mfcc);
-        speakerLabel = r.label;
-        assignSim = r.sim;
-        assignNew = r.isNew;
-        introOverride = forceNew;
       } else {
-        const lastSeg = committed[committed.length - 1];
+        const lastSeg = committedRef.current[committedRef.current.length - 1];
         speakerLabel = lastSeg?.speaker_label ?? "Speaker ?";
       }
+
       console.debug("[diarize]", {
         chosen: speakerLabel,
         sim: assignSim.toFixed(3),
         isNew: assignNew,
         introOverride,
+        forcedNew: !!opts.forceNewCluster,
         clusters: diarizerRef.current.clusters().length,
       });
 
       const seg: TranscriptSegment = {
         id: newId(),
-        conversation_id: conversationIdRef.current,
+        conversation_id: conversationIdRef.current!,
         speaker_label: speakerLabel,
         text,
         ts: Date.now(),
@@ -363,35 +347,22 @@ function Home() {
       setCommitted((prev) => [...prev, seg]);
       await db.transcript_segments.add(seg);
 
-      // -------- Recognition pass (suggestion only — never auto-confirms).
-      // For brand-new clusters, or any cluster still in `unknown` state, try
-      // to match this cluster's running centroid against saved voiceprints.
-      // Confirmed clusters keep their identity. Already-suggested clusters
-      // keep their previous suggestion (stable until James acts on it).
+      // -------- Recognition pass (suggestion-only).
       try {
         const cluster = diarizerRef.current.get(speakerLabel);
         const status = clusterStatusRef.current[speakerLabel];
         if (cluster && status?.kind !== "confirmed") {
-          // Always look for self-introduction names in this segment.
           const introHere = extractIntroducedNames([
             { text, speaker_label: speakerLabel },
           ])[0]?.name;
-          // Determine source: ask-reply if this cluster matches the one we
-          // just asked, otherwise self-intro.
           const askTarget = expectingNameForClusterRef.current;
           const isAskReply =
-            askTarget !== null &&
-            (askTarget === speakerLabel || askTarget === "");
-          // Resolve attribution target: ask-reply attributes back to the
-          // cluster Ask was clicked on (if it was a per-cluster ask).
+            askTarget !== null && (askTarget === speakerLabel || askTarget === "");
           const attributionLabel =
-            isAskReply && askTarget && askTarget !== ""
-              ? askTarget
-              : speakerLabel;
+            isAskReply && askTarget && askTarget !== "" ? askTarget : speakerLabel;
 
           let nextStatus: ClusterStatus | undefined;
-          // Only run voiceprint match for unknown clusters that haven't been
-          // matched yet — keep stable suggestions once shown.
+
           if (!status || status.kind === "unknown") {
             const confirmedIds = new Set(Object.values(speakerMapRef.current));
             const allPrints = await db.voiceprints.toArray();
@@ -408,14 +379,14 @@ function Home() {
               excludedIds,
             );
             if (match) {
-              // High-confidence (≥ 0.88): surface suggestion immediately.
-              // Lower confidence (0.80–0.88): require 2 consecutive matches to
-              // avoid false-positive chips from single noisy utterances.
               const highConf = match.sim >= 0.88;
               const pending = pendingVoiceprintMatchRef.current.get(speakerLabel);
               if (pending?.personId === match.print.person_id) {
                 const newCount = pending.matchCount + 1;
-                pendingVoiceprintMatchRef.current.set(speakerLabel, { personId: match.print.person_id, matchCount: newCount });
+                pendingVoiceprintMatchRef.current.set(speakerLabel, {
+                  personId: match.print.person_id,
+                  matchCount: newCount,
+                });
                 if (highConf || newCount >= 2) {
                   nextStatus = {
                     kind: "suggested",
@@ -425,7 +396,10 @@ function Home() {
                   };
                 }
               } else {
-                pendingVoiceprintMatchRef.current.set(speakerLabel, { personId: match.print.person_id, matchCount: 1 });
+                pendingVoiceprintMatchRef.current.set(speakerLabel, {
+                  personId: match.print.person_id,
+                  matchCount: 1,
+                });
                 if (highConf) {
                   nextStatus = {
                     kind: "suggested",
@@ -440,7 +414,6 @@ function Home() {
             }
           }
 
-          // Append intro name as a suggestion chip on the attribution target.
           if (introHere) {
             const targetStatus =
               attributionLabel === speakerLabel
@@ -463,7 +436,6 @@ function Home() {
               clusterStatusRef.current = next;
               setClusterStatus(next);
             }
-            // Consume the ask target if attribution succeeded.
             if (isAskReply) expectingNameForClusterRef.current = null;
           }
 
@@ -476,10 +448,11 @@ function Home() {
             setClusterStatus(next);
           }
 
-          // After 3+ utterances on an unknown cluster, fire a one-shot AI
-          // context identification in the background.
+          // AI context-based identification (one-shot per cluster, 3+ utterances)
           const clusterCount = cluster?.count ?? 0;
-          const curStatusKind = (nextStatus ?? clusterStatusRef.current[speakerLabel])?.kind;
+          const curStatusKind = (
+            nextStatus ?? clusterStatusRef.current[speakerLabel]
+          )?.kind;
           if (
             clusterCount >= 3 &&
             curStatusKind !== "confirmed" &&
@@ -487,13 +460,11 @@ function Home() {
             !aiSpeakerIdSentRef.current.has(speakerLabel)
           ) {
             aiSpeakerIdSentRef.current.add(speakerLabel);
-            // Build confirmed speaker name map
             const confirmedNames: Record<string, string> = {};
             for (const [lbl, pid] of Object.entries(speakerMapRef.current)) {
               const p = allPeople.find((pp) => pp.id === pid);
               if (p) confirmedNames[lbl] = p.name;
             }
-            // Use fresh committed via ref
             const recentForAI = committedRef.current.slice(-15).map((s) => {
               const pid = speakerMapRef.current[s.speaker_label];
               const p = pid ? allPeople.find((pp) => pp.id === pid) : null;
@@ -533,6 +504,108 @@ function Home() {
       } catch (err) {
         console.warn("voiceprint match failed", err);
       }
+    },
+    [allPeople, identifyFn],
+  );
+
+  const scribe = useScribe({
+    modelId: "scribe_v2_realtime",
+    commitStrategy: CommitStrategy.VAD,
+    includeTimestamps: true,
+    onPartialTranscript: (d: { text: string }) => setPartial(d.text ?? ""),
+    onCommittedTranscriptWithTimestamps: async (d: any) => {
+      const text = (d.text ?? "").trim();
+      if (!text || !conversationIdRef.current) return;
+      setPartial("");
+
+      const cap = captureRef.current;
+      // Compute the chunk's duration from word timestamps
+      let spoken = 0;
+      if (cap && d.words && d.words.length > 0) {
+        const firstW = d.words[0];
+        const lastW = d.words[d.words.length - 1];
+        spoken = (lastW.end ?? 0) - (firstW.start ?? 0);
+      }
+
+      // Determine if we should split this chunk by mid-chunk speaker shift.
+      const segEndAbsMs = Date.now();
+      const segStartAbsMs = segEndAbsMs - spoken * 1000;
+      const shiftsInSeg = speakerShiftTimestampsRef.current.filter(
+        (t) => t > segStartAbsMs + 400 && t < segEndAbsMs - 400,
+      );
+
+      const canSplit =
+        cap && shiftsInSeg.length > 0 && d.words && d.words.length >= 4 && spoken >= 2.0;
+
+      if (canSplit) {
+        try {
+          const shiftTs = shiftsInSeg[0];
+          const firstStart = d.words[0].start ?? 0;
+          const shiftSecFromUtteranceStart =
+            (shiftTs - segStartAbsMs) / 1000;
+          const splitWordIdx = d.words.findIndex(
+            (w: any) => (w.start ?? 0) - firstStart >= shiftSecFromUtteranceStart,
+          );
+
+          if (splitWordIdx > 1 && splitWordIdx < d.words.length - 1) {
+            const totalSec = spoken + 1.0;
+            const totalPcm = cap.recentSlice(totalSec, 0);
+            const splitSampleFromEnd = Math.floor(
+              ((Date.now() - shiftTs) / 1000) * cap.sampleRate,
+            );
+            const splitSampleFromStart = totalPcm.length - splitSampleFromEnd;
+            // FRAME size is 512 — need at least 4 frames per half
+            if (splitSampleFromStart > 512 * 4 && splitSampleFromEnd > 512 * 4) {
+              const prePcm = totalPcm.subarray(0, splitSampleFromStart);
+              const postPcm = totalPcm.subarray(splitSampleFromStart);
+              const preMfcc = computeMfccMean(prePcm, cap.sampleRate);
+              const postMfcc = computeMfccMean(postPcm, cap.sampleRate);
+              if (preMfcc && postMfcc) {
+                const preText = d.words
+                  .slice(0, splitWordIdx)
+                  .map((w: any) => w.text ?? "")
+                  .join(" ")
+                  .trim();
+                const postText = d.words
+                  .slice(splitWordIdx)
+                  .map((w: any) => w.text ?? "")
+                  .join(" ")
+                  .trim();
+                console.debug("[diarize] split chunk at shift", {
+                  shiftAtSec: shiftSecFromUtteranceStart.toFixed(2),
+                  preText,
+                  postText,
+                });
+                // Consume the shift timestamp
+                speakerShiftTimestampsRef.current =
+                  speakerShiftTimestampsRef.current.filter((t) => t !== shiftTs);
+                if (preText) await processUtterance(preText, preMfcc, {});
+                if (postText)
+                  await processUtterance(postText, postMfcc, {
+                    forceNewCluster: true,
+                    allowSelfIntroOverride: false,
+                  });
+                return;
+              }
+            }
+          }
+        } catch (err) {
+          console.warn("[diarize] split failed, falling back to single-utterance", err);
+        }
+      }
+
+      // No split — single utterance path.
+      let mfcc: number[] | null = null;
+      if (cap && d.words && d.words.length > 0 && spoken >= 0.5) {
+        try {
+          const dur = Math.max(1.2, spoken);
+          const pcm = cap.recentSlice(dur, 1.0);
+          mfcc = computeMfccMean(pcm, cap.sampleRate);
+        } catch (err) {
+          console.warn("[voiceprint] mfcc compute failed", err);
+        }
+      }
+      await processUtterance(text, mfcc, { allowSelfIntroOverride: true });
     },
   });
 
@@ -623,6 +696,7 @@ function Home() {
       clusterStatusRef.current = {};
       pendingVoiceprintMatchRef.current.clear();
       aiSpeakerIdSentRef.current.clear();
+      speakerShiftTimestampsRef.current = [];
 
       const conv: Conversation = {
         id,
@@ -643,6 +717,13 @@ function Home() {
         const cap = new VoiceCapture();
         await cap.start();
         captureRef.current = cap;
+        cap.startShiftMonitor((ts) => {
+          speakerShiftTimestampsRef.current.push(ts);
+          // Trim to the last 30 seconds
+          const cutoff = Date.now() - 30000;
+          speakerShiftTimestampsRef.current =
+            speakerShiftTimestampsRef.current.filter((t) => t > cutoff);
+        });
         console.debug("[voiceprint] capture started", {
           sampleRate: cap.sampleRate,
         });
@@ -680,6 +761,20 @@ function Home() {
           const cluster = diarizerRef.current.get(label);
           if (cluster && cluster.count >= 1) {
             await recordVoiceprint(personId, cluster.centroid);
+            const examples = committedRef.current
+              .filter((s) => s.speaker_label === label)
+              .slice(-3)
+              .map((s) => s.text)
+              .join(" / ");
+            await db.voiceprint_contributions.add({
+              id: newId(),
+              person_id: personId,
+              conversation_id: cid ?? undefined,
+              source: "auto",
+              mfcc: cluster.centroid.slice(),
+              ts: Date.now(),
+              preview_text: examples || undefined,
+            });
           }
         }
       } catch (err) {
@@ -938,7 +1033,24 @@ function Home() {
   const confirmKnownSpeaker = useCallback(
     async (label: string, personId: string) => {
       const cluster = diarizerRef.current.get(label);
-      if (cluster) await recordVoiceprint(personId, cluster.centroid);
+      if (cluster) {
+        await recordVoiceprint(personId, cluster.centroid);
+        // Capture a recent example from this cluster for the user to verify later.
+        const examples = committedRef.current
+          .filter((s) => s.speaker_label === label)
+          .slice(-3)
+          .map((s) => s.text)
+          .join(" / ");
+        await db.voiceprint_contributions.add({
+          id: newId(),
+          person_id: personId,
+          conversation_id: conversationIdRef.current ?? undefined,
+          source: "auto",
+          mfcc: cluster.centroid.slice(),
+          ts: Date.now(),
+          preview_text: examples || undefined,
+        });
+      }
       // Update speakerMap (only confirmed entries) and conversation roster.
       const nextMap = { ...speakerMapRef.current };
       // Remove any prior label for this person

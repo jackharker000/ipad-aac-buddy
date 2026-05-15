@@ -30,6 +30,46 @@ export class VoiceCapture {
   startTimeMs = 0;
   sampleRate = 16000;
   private maxSamples = 0;
+  private shiftTimer: ReturnType<typeof setInterval> | null = null;
+  private shiftPrevMfcc: number[] | null = null;
+
+  /** Periodically computes MFCC on the last ~500ms of audio. When the
+   *  cosine similarity to the previous window drops below `threshold`,
+   *  fires `onShift(Date.now())` — a likely speaker change point. Used
+   *  to split Scribe commits that span multiple speakers without a pause. */
+  startShiftMonitor(
+    onShift: (timestampMs: number) => void,
+    options: { intervalMs?: number; windowSec?: number; threshold?: number } = {},
+  ) {
+    const intervalMs = options.intervalMs ?? 350;
+    const windowSec = options.windowSec ?? 0.5;
+    const threshold = options.threshold ?? 0.72;
+    this.stopShiftMonitor();
+    this.shiftPrevMfcc = null;
+    this.shiftTimer = setInterval(() => {
+      if (!this.ctx || this.bufferLen < this.sampleRate * windowSec) return;
+      try {
+        const pcm = this.recentSlice(windowSec, 0);
+        const mfcc = computeMfccMean(pcm, this.sampleRate);
+        if (!mfcc) return;
+        if (this.shiftPrevMfcc) {
+          const sim = cosineSim(mfcc, this.shiftPrevMfcc);
+          if (sim < threshold) {
+            try { onShift(Date.now()); } catch {}
+          }
+        }
+        this.shiftPrevMfcc = mfcc;
+      } catch {}
+    }, intervalMs);
+  }
+
+  stopShiftMonitor() {
+    if (this.shiftTimer) {
+      clearInterval(this.shiftTimer);
+      this.shiftTimer = null;
+    }
+    this.shiftPrevMfcc = null;
+  }
 
   async start() {
     if (this.ctx) return;
@@ -119,6 +159,7 @@ export class VoiceCapture {
   }
 
   stop() {
+    this.stopShiftMonitor();
     try {
       this.processor?.disconnect();
     } catch {}
