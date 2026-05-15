@@ -43,7 +43,7 @@ import {
 import { buildConversationContext, suggestPeopleAtPlace } from "@/lib/context";
 import { labelTranscriptForPrompt } from "@/lib/speaker-id";
 import { extractIntroducedNames } from "@/lib/auto-person";
-import { seedJamesIfNeeded } from "@/lib/seed";
+import { seedJamesIfNeeded, backfillSuggestionsLogPersonIds } from "@/lib/seed";
 import {
   VoiceCapture,
   computeMfccMean,
@@ -240,6 +240,10 @@ function Home() {
   }, [speakerMap]);
   useEffect(() => {
     seedJamesIfNeeded();
+    // === Tier 1.1: one-time backfill of person_id on historical
+    // suggestions_log rows so style-evidence aggregation has signal from
+    // pre-existing conversations. ===
+    void backfillSuggestionsLogPersonIds();
   }, []);
 
   // Server fns
@@ -665,6 +669,8 @@ function Home() {
           place: ctx.place,
           event: ctx.event,
           styleProfileJson: ctx.styleProfileJson,
+          // === Tier 1.1: style evidence ===
+          styleEvidence: ctx.styleEvidence,
           alreadyShown: lastShownRef.current.slice(-20),
           model: fastModelRef.current,
           mood: moodRef.current,
@@ -677,11 +683,28 @@ function Home() {
           ...r.suggestions.map((s: Suggestion) => s.text),
         ].slice(-30);
         const now = Date.now();
-        if (conversationIdRef.current) {
+        const cid = conversationIdRef.current;
+        if (cid) {
+          // === Tier 1.1: mark displaced rows as ignored ===
+          // Any prior rows in this conversation that the user didn't pick AND
+          // aren't being re-emitted by this batch are now "ignored". This
+          // gives `deadPhrases` real signal across refreshes.
+          const newTexts = new Set((r.suggestions as Suggestion[]).map((s) => s.text));
+          try {
+            await db.suggestions_log
+              .where("conversation_id")
+              .equals(cid)
+              .and((l) => !l.selected && l.displaced_at == null && !newTexts.has(l.text))
+              .modify({ displaced_at: now, ignored: true });
+          } catch (err) {
+            console.warn("mark displaced rows failed", err);
+          }
+          // === Tier 1.1: tag new rows with person_id ===
+          const primaryPersonId = personIdsRef.current[0];
           await db.suggestions_log.bulkAdd(
             (r.suggestions as Suggestion[]).map((s) => ({
               id: newId(),
-              conversation_id: conversationIdRef.current!,
+              conversation_id: cid,
               text: s.text,
               category: s.category,
               source: "ai",
@@ -689,6 +712,7 @@ function Home() {
               selected: false,
               ignored: false,
               spoken: false,
+              person_id: primaryPersonId,
             })),
           );
         }

@@ -275,6 +275,34 @@ const jamesProfileSchema = z.object({
   freeform: z.string().optional(),
 });
 
+// === Tier 1.1: style evidence schema ===
+const styleEvidencePerPersonSchema = z.object({
+  personId: z.string(),
+  name: z.string(),
+  topCategories: z.array(
+    z.object({
+      category: z.string(),
+      pickRate: z.number(),
+      n: z.number(),
+    }),
+  ),
+  avgLenPicked: z.number(),
+  avgLenEdited: z.number(),
+  avgWordsAddedOnEdit: z.number(),
+  avgWordsRemovedOnEdit: z.number(),
+  editFormalityShift: z.enum(["more_casual", "more_formal", "neutral"]),
+  deadPhrases: z.array(z.string()),
+  recentPickedSamples: z.array(z.string()),
+  recentEditedSamples: z.array(z.object({ from: z.string(), to: z.string() })),
+});
+const styleEvidenceSchema = z.object({
+  perPerson: z.array(styleEvidencePerPersonSchema),
+  global: z.object({
+    avgLenPicked: z.number(),
+    topPickedCategories: z.array(z.object({ category: z.string(), pickRate: z.number() })),
+  }),
+});
+
 const suggestionsSchema = z.object({
   recentTranscript: z
     .array(z.object({ speaker: z.string(), text: z.string() }))
@@ -284,7 +312,10 @@ const suggestionsSchema = z.object({
   place: placeCtxSchema.optional(),
   event: eventCtxSchema.optional(),
   styleProfileJson: z.string().optional(),
-  alreadyShown: z.array(z.string()).max(40).optional(),
+  // Tier 1.3 raised this from 40 → 80 so cross-session dead phrases can be
+  // appended to the session-shown list without truncating either source.
+  alreadyShown: z.array(z.string()).max(80).optional(),
+  styleEvidence: styleEvidenceSchema.optional(),
   model: z.string().optional(),
   mood: z
     .enum(["normal", "calm", "excited", "sad", "upset", "empathetic", "amused"])
@@ -344,6 +375,106 @@ Strongly bias suggestions toward making these key points and asking these key qu
       ? `# Learned style profile (JSON)\n${data.styleProfileJson}\n`
       : "";
 
+    // === Tier 1.1: style evidence block ===
+    // Block order (so other tiers can slot in cleanly):
+    // profile → people → place → event → style_profile → [Tier 3.1 retrieved_memories]
+    //   → style_evidence → [Tier 3.2 arc] → [Tier 3.3 mood] → [Tier 3.4 category_bias]
+    const styleEvidenceBlock = (() => {
+      const ev = data.styleEvidence;
+      if (!ev) return "";
+      const hasPer = ev.perPerson.some(
+        (p) =>
+          p.topCategories.length > 0 ||
+          p.avgLenPicked > 0 ||
+          p.deadPhrases.length > 0 ||
+          p.recentPickedSamples.length > 0 ||
+          p.recentEditedSamples.length > 0,
+      );
+      const hasGlobal = ev.global.avgLenPicked > 0 || ev.global.topPickedCategories.length > 0;
+      if (!hasPer && !hasGlobal) return "";
+
+      const lines: string[] = [];
+      lines.push("# Style evidence (what James actually picks vs. ignores)");
+      lines.push(
+        "For each present person, the recent suggestion log shows which categories he picks, how he edits, and what to avoid.",
+      );
+      for (const p of ev.perPerson) {
+        const fewSamples =
+          p.topCategories.length === 0 &&
+          p.avgLenPicked === 0 &&
+          p.deadPhrases.length === 0 &&
+          p.recentPickedSamples.length === 0 &&
+          p.recentEditedSamples.length === 0;
+        if (fewSamples) continue;
+        lines.push("");
+        lines.push(`## With ${p.name}`);
+        if (p.topCategories.length) {
+          const catStr = p.topCategories
+            .map((c) => `${c.category} ${Math.round(c.pickRate * 100)}% (${c.n})`)
+            .join("; ");
+          lines.push(`- Picks by category (rate, n): ${catStr}`);
+        }
+        if (p.avgLenPicked || p.avgLenEdited) {
+          lines.push(
+            `- Avg picked length: ${p.avgLenPicked} chars; avg edited: ${p.avgLenEdited} chars.`,
+          );
+        }
+        if (p.avgWordsAddedOnEdit || p.avgWordsRemovedOnEdit) {
+          const verb =
+            p.editFormalityShift === "more_casual"
+              ? "loosens"
+              : p.editFormalityShift === "more_formal"
+                ? "tightens"
+                : "tweaks";
+          lines.push(
+            `- When he edits, he typically ${verb} the wording (+${p.avgWordsAddedOnEdit} / -${p.avgWordsRemovedOnEdit} words).`,
+          );
+        }
+        if (p.recentPickedSamples.length) {
+          lines.push(
+            `- Examples he kept: ${p.recentPickedSamples.map((t) => `"${t}"`).join("; ")}`,
+          );
+        }
+        if (p.recentEditedSamples.length) {
+          lines.push(
+            `- Examples he rewrote: ${p.recentEditedSamples
+              .map((s) => `"${s.from}" → "${s.to}"`)
+              .join("; ")}`,
+          );
+        }
+        if (p.deadPhrases.length) {
+          lines.push(
+            `- DO NOT propose (these were shown ≥3 times and ignored every time): ${p.deadPhrases
+              .map((t) => `"${t}"`)
+              .join("; ")}`,
+          );
+        }
+      }
+      if (hasGlobal) {
+        lines.push("");
+        lines.push("# Global");
+        const globalLineParts: string[] = [];
+        if (ev.global.avgLenPicked) {
+          globalLineParts.push(`avg picked length ${ev.global.avgLenPicked} chars`);
+        }
+        if (ev.global.topPickedCategories.length) {
+          globalLineParts.push(
+            `top categories: ${ev.global.topPickedCategories
+              .map((c) => `${c.category} ${Math.round(c.pickRate * 100)}%`)
+              .join(", ")}`,
+          );
+        }
+        if (globalLineParts.length) {
+          lines.push(`- Across people: ${globalLineParts.join("; ")}.`);
+        }
+      }
+      lines.push("");
+      lines.push(
+        'Calibrate this batch of 6 toward the patterns above. Skew categories and length toward "Picks by category" and "Avg picked length". Never emit anything in DO NOT propose. If a person has fewer than 5 logged suggestions, fall back to global patterns and don\'t over-fit.',
+      );
+      return lines.join("\n") + "\n";
+    })();
+
     const moodGuidance: Record<string, string> = {
       normal: "",
       calm: "James's current mood: CALM and relaxed. Suggestions should sound measured, gentle, unhurried, and grounded. Avoid exclamation marks or high-energy phrasing.",
@@ -369,12 +500,15 @@ STRICT PRIVACY & SCOPE RULES — these override everything else:
 
 Mix categories: direct answers, questions back, follow-ups about past topics with THESE people, planned points, light humor when appropriate, "give me a moment" stalls. Avoid repeating any text in "alreadyShown". Each suggestion must be under 16 words and feel natural to say out loud. Prefer concrete references over generic small talk ONLY when those references come from the present people's own memories/follow-ups.`;
 
+    // Block order — keep in sync with the comment above `styleEvidenceBlock`:
+    // profile → people → place → event → style_profile → [Tier 3.1 retrieved_memories]
+    //   → style_evidence → [Tier 3.2 arc] → [Tier 3.3 mood] → [Tier 3.4 category_bias]
     const user = `${profileBlock}
 ${peopleBlock}
 ${placeBlock}
 ${eventBlock}
 ${styleBlock}
-${moodBlock}
+${styleEvidenceBlock}${moodBlock}
 # Live conversation so far
 ${transcriptText || "(no transcript yet — conversation just starting)"}
 
