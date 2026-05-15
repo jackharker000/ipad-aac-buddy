@@ -55,21 +55,19 @@ function resolveChatTarget(model: string | undefined): {
 
 /* ------------------------- ElevenLabs: Scribe token ------------------------- */
 
-export const createScribeToken = createServerFn({ method: "POST" }).handler(
-  async () => {
-    const apiKey = requireElevenLabsApiKey();
-    const res = await fetch(
-      "https://api.elevenlabs.io/v1/single-use-token/realtime_scribe",
-      { method: "POST", headers: { "xi-api-key": apiKey } },
-    );
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(err || `Token request failed: ${res.status}`);
-    }
-    const data = (await res.json()) as { token: string };
-    return { token: data.token };
-  },
-);
+export const createScribeToken = createServerFn({ method: "POST" }).handler(async () => {
+  const apiKey = requireElevenLabsApiKey();
+  const res = await fetch("https://api.elevenlabs.io/v1/single-use-token/realtime_scribe", {
+    method: "POST",
+    headers: { "xi-api-key": apiKey },
+  });
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(err || `Token request failed: ${res.status}`);
+  }
+  const data = (await res.json()) as { token: string };
+  return { token: data.token };
+});
 
 /* --------------------------------- TTS ------------------------------------- */
 
@@ -112,44 +110,42 @@ export const synthesizeSpeech = createServerFn({ method: "POST" })
 
 /* --------------------------- ElevenLabs: voices ---------------------------- */
 
-export const listVoices = createServerFn({ method: "GET" }).handler(
-  async () => {
-    const apiKey = requireElevenLabsApiKey();
-    const res = await fetch("https://api.elevenlabs.io/v2/voices?page_size=50", {
-      headers: { "xi-api-key": apiKey },
-    });
-    if (!res.ok) {
-      // Fallback to a curated list if account has no Voices:Read
-      return {
-        voices: [
-          { voice_id: "EXAVITQu4vr4xnSDxMaL", name: "Sarah", labels: {} },
-          { voice_id: "JBFqnCBsd6RMkjVDRZzb", name: "George", labels: {} },
-          { voice_id: "TX3LPaxmHKxFdv7VOQHJ", name: "Liam", labels: {} },
-          { voice_id: "Xb7hH8MSUJpSbSDYk0k2", name: "Alice", labels: {} },
-          { voice_id: "iP95p4xoKVk53GoZ742B", name: "Chris", labels: {} },
-          { voice_id: "nPczCjzI2devNBz1zQrb", name: "Brian", labels: {} },
-          { voice_id: "pFZP5JQG7iQjIQuC4Bku", name: "Lily", labels: {} },
-          { voice_id: "FGY2WhTYpPnrIDTdsKH5", name: "Laura", labels: {} },
-        ],
-      };
-    }
-    const data = (await res.json()) as {
-      voices: Array<{
-        voice_id: string;
-        name: string;
-        labels?: Record<string, string>;
-        category?: string;
-      }>;
-    };
+export const listVoices = createServerFn({ method: "GET" }).handler(async () => {
+  const apiKey = requireElevenLabsApiKey();
+  const res = await fetch("https://api.elevenlabs.io/v2/voices?page_size=50", {
+    headers: { "xi-api-key": apiKey },
+  });
+  if (!res.ok) {
+    // Fallback to a curated list if account has no Voices:Read
     return {
-      voices: data.voices.map((v) => ({
-        voice_id: v.voice_id,
-        name: v.name,
-        labels: v.labels ?? {},
-      })),
+      voices: [
+        { voice_id: "EXAVITQu4vr4xnSDxMaL", name: "Sarah", labels: {} },
+        { voice_id: "JBFqnCBsd6RMkjVDRZzb", name: "George", labels: {} },
+        { voice_id: "TX3LPaxmHKxFdv7VOQHJ", name: "Liam", labels: {} },
+        { voice_id: "Xb7hH8MSUJpSbSDYk0k2", name: "Alice", labels: {} },
+        { voice_id: "iP95p4xoKVk53GoZ742B", name: "Chris", labels: {} },
+        { voice_id: "nPczCjzI2devNBz1zQrb", name: "Brian", labels: {} },
+        { voice_id: "pFZP5JQG7iQjIQuC4Bku", name: "Lily", labels: {} },
+        { voice_id: "FGY2WhTYpPnrIDTdsKH5", name: "Laura", labels: {} },
+      ],
     };
-  },
-);
+  }
+  const data = (await res.json()) as {
+    voices: Array<{
+      voice_id: string;
+      name: string;
+      labels?: Record<string, string>;
+      category?: string;
+    }>;
+  };
+  return {
+    voices: data.voices.map((v) => ({
+      voice_id: v.voice_id,
+      name: v.name,
+      labels: v.labels ?? {},
+    })),
+  };
+});
 
 /* --------------------- ElevenLabs: Voice Design (TTV) ---------------------- */
 
@@ -276,9 +272,7 @@ const jamesProfileSchema = z.object({
 });
 
 const suggestionsSchema = z.object({
-  recentTranscript: z
-    .array(z.object({ speaker: z.string(), text: z.string() }))
-    .max(40),
+  recentTranscript: z.array(z.object({ speaker: z.string(), text: z.string() })).max(40),
   jamesProfile: jamesProfileSchema.optional(),
   people: z.array(personCtxSchema).optional(),
   place: placeCtxSchema.optional(),
@@ -286,9 +280,23 @@ const suggestionsSchema = z.object({
   styleProfileJson: z.string().optional(),
   alreadyShown: z.array(z.string()).max(40).optional(),
   model: z.string().optional(),
-  mood: z
-    .enum(["normal", "calm", "excited", "sad", "upset", "empathetic", "amused"])
+  mood: z.enum(["normal", "calm", "excited", "sad", "upset", "empathetic", "amused"]).optional(),
+  // Tier 3.1 — semantic retrieval results, formatted by the client.
+  retrievedMemories: z.array(z.string()).max(12).optional(),
+  // Tier 3.2 — conversation-arc tag.
+  arc: z
+    .enum([
+      "greeting",
+      "catching_up",
+      "decision",
+      "venting",
+      "wrapping_up",
+      "logistics",
+      "small_talk",
+    ])
     .optional(),
+  // Tier 3.4 — per-category performance bias derived from suggestion logs.
+  categoryBias: z.record(z.string(), z.enum(["trusted", "neutral", "near-miss"])).optional(),
 });
 
 const SUGGESTION_CATEGORIES = [
@@ -305,6 +313,7 @@ const SUGGESTION_CATEGORIES = [
 export const generateSuggestions = createServerFn({ method: "POST" })
   .inputValidator((d) => suggestionsSchema.parse(d))
   .handler(async ({ data }) => {
+    /* Block order: profile → people → place → event → style_profile → retrieved_memories → [Tier 1 style_evidence] → arc → mood → category_bias */
     const transcriptText = data.recentTranscript
       .slice(-8)
       .map((s) => `${s.speaker}: ${s.text}`)
@@ -319,12 +328,12 @@ ${jp.background ? `Background: ${jp.background}\n` : ""}${jp.personality ? `Pers
     const peopleBlock = data.people?.length
       ? `# People in this conversation
 ${data.people
-          .map(
-            (p) =>
-              `## ${p.name}${p.relationship ? ` (${p.relationship})` : ""}
+  .map(
+    (p) =>
+      `## ${p.name}${p.relationship ? ` (${p.relationship})` : ""}
 ${p.interests?.length ? `Interests: ${p.interests.join(", ")}\n` : ""}${p.notes ? `Notes: ${p.notes}\n` : ""}${p.style_notes ? `How James talks with them: ${p.style_notes}\n` : ""}${p.recentMemories?.length ? `Recent memories with them:\n- ${p.recentMemories.join("\n- ")}\n` : ""}${p.followUps?.length ? `Open follow-ups to bring up:\n- ${p.followUps.join("\n- ")}\n` : ""}`,
-          )
-          .join("\n")}`
+  )
+  .join("\n")}`
       : "";
 
     const placeBlock = data.place
@@ -344,17 +353,63 @@ Strongly bias suggestions toward making these key points and asking these key qu
       ? `# Learned style profile (JSON)\n${data.styleProfileJson}\n`
       : "";
 
+    // Tier 3.1 — semantically retrieved memories (formatted by client).
+    const retrievedBlock = data.retrievedMemories?.length
+      ? `# Retrieved memories (semantically relevant to the current moment)
+${data.retrievedMemories.map((m) => `- ${m}`).join("\n")}
+`
+      : "";
+
+    // Tier 3.2 — conversation arc guidance.
+    const arcGuidance: Record<string, string> = {
+      greeting:
+        "Conversation arc: GREETING — opening, hellos, initial pleasantries. Keep replies short, warm, low-info. Mirror their energy.",
+      catching_up:
+        "Conversation arc: CATCHING UP — trading recent news, life updates. Lean on open questions and brief updates from James's own life context.",
+      decision:
+        'Conversation arc: DECISION — they are deciding something concrete. Favour committal options — "yes", "let\'s", "I\'d rather". Short and definite.',
+      venting:
+        'Conversation arc: VENTING — the other person is expressing frustration or sadness and wants to be heard. Empathetic validation FIRST ("that sounds hard"), no fixes, gentle follow-ups.',
+      wrapping_up:
+        'Conversation arc: WRAPPING UP — signing off, goodbyes. Use closure-friendly phrasing ("good to talk", "speak soon") and confirm any agreed next step.',
+      logistics:
+        "Conversation arc: LOGISTICS — practical coordination of times, addresses, scheduling. Be precise, factual, time/place oriented; ask for clarification if missing.",
+      small_talk:
+        "Conversation arc: SMALL TALK — light topical chat with no decision or update. Stay light, occasionally humorous, easy to bounce off.",
+    };
+    const arcBlock = data.arc ? `# Conversation arc: ${data.arc}\n${arcGuidance[data.arc]}\n` : "";
+
     const moodGuidance: Record<string, string> = {
       normal: "",
       calm: "James's current mood: CALM and relaxed. Suggestions should sound measured, gentle, unhurried, and grounded. Avoid exclamation marks or high-energy phrasing.",
-      excited: "James's current mood: EXCITED and energetic. Suggestions should feel enthusiastic, upbeat, and animated. Use lively language and the occasional exclamation where natural, but still in his real voice.",
+      excited:
+        "James's current mood: EXCITED and energetic. Suggestions should feel enthusiastic, upbeat, and animated. Use lively language and the occasional exclamation where natural, but still in his real voice.",
       sad: "James's current mood: SAD or low. Suggestions should be quieter, more reflective, sometimes wistful. It's okay to acknowledge feelings, give shorter answers, or politely deflect.",
-      upset: "James's current mood: UPSET, frustrated or annoyed. Suggestions can be more blunt, firm, or short. He may want to push back, set a limit, or end a topic. Stay respectful but don't sugarcoat.",
-      empathetic: "James's current mood: EMPATHETIC. He wants to support the other person. Suggestions should validate feelings, ask caring follow-up questions, and offer warmth before any opinions.",
-      amused: "James's current mood: AMUSED and playful. Lean into his humor and signature phrases. Light teasing, jokes, and playful comebacks are welcome where they fit his style.",
+      upset:
+        "James's current mood: UPSET, frustrated or annoyed. Suggestions can be more blunt, firm, or short. He may want to push back, set a limit, or end a topic. Stay respectful but don't sugarcoat.",
+      empathetic:
+        "James's current mood: EMPATHETIC. He wants to support the other person. Suggestions should validate feelings, ask caring follow-up questions, and offer warmth before any opinions.",
+      amused:
+        "James's current mood: AMUSED and playful. Lean into his humor and signature phrases. Light teasing, jokes, and playful comebacks are welcome where they fit his style.",
     };
     const moodBlock =
       data.mood && data.mood !== "normal" ? `# Mood\n${moodGuidance[data.mood]}\n` : "";
+
+    // Tier 3.4 — surface per-category performance bias from suggestion logs.
+    const bias = data.categoryBias ?? {};
+    const trusted = Object.entries(bias)
+      .filter(([, label]) => label === "trusted")
+      .map(([cat]) => cat);
+    const nearMiss = Object.entries(bias)
+      .filter(([, label]) => label === "near-miss")
+      .map(([cat]) => cat);
+    const categoryBiasBlock =
+      trusted.length || nearMiss.length
+        ? `# Category performance signals
+These categories have proven RELIABLE for James — preferred when natural: ${trusted.length ? trusted.join(", ") : "(none yet)"}
+These categories have under-performed (slow tap or often edited) — when used, generate with MORE diversity and a stronger personal voice, not generic phrasings: ${nearMiss.length ? nearMiss.join(", ") : "(none yet)"}
+`
+        : "";
 
     const presentNames = (data.people ?? []).map((p) => p.name);
     const presentList = presentNames.length ? presentNames.join(", ") : "(only James)";
@@ -374,12 +429,18 @@ ${peopleBlock}
 ${placeBlock}
 ${eventBlock}
 ${styleBlock}
+${retrievedBlock}
+${arcBlock}
 ${moodBlock}
+${categoryBiasBlock}
 # Live conversation so far
 ${transcriptText || "(no transcript yet — conversation just starting)"}
 
 ${data.alreadyShown?.length ? `# Already shown (do NOT repeat)\n${data.alreadyShown.join(" | ")}\n` : ""}
 Return 10 ranked suggestions in James's voice. Provide a wide variety so James has plenty of useful options to pick from.`;
+
+    // Tier 3.4 — when categories are under-performing, increase exploration.
+    const temperature = nearMiss.length > 0 ? 0.9 : 0.7;
 
     const target = resolveChatTarget(data.model);
     const res = await fetch(target.url, {
@@ -387,6 +448,7 @@ Return 10 ranked suggestions in James's voice. Provide a wide variety so James h
       headers: target.headers,
       body: JSON.stringify({
         model: target.model,
+        temperature,
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
@@ -449,9 +511,7 @@ Return 10 ranked suggestions in James's voice. Provide a wide variety so James h
 /* ----------------------- AI: auto-summary on Stop -------------------------- */
 
 const summarySchema = z.object({
-  transcript: z.array(
-    z.object({ speaker: z.string(), text: z.string() }),
-  ),
+  transcript: z.array(z.object({ speaker: z.string(), text: z.string() })),
   placeName: z.string().optional(),
   peopleNames: z.array(z.string()).optional(),
   model: z.string().optional(),
@@ -461,9 +521,7 @@ export const summarizeConversation = createServerFn({ method: "POST" })
   .inputValidator((d) => summarySchema.parse(d))
   .handler(async ({ data }) => {
     const target = resolveChatTarget(data.model ?? "google/gemini-2.5-flash");
-    const transcriptText = data.transcript
-      .map((s) => `${s.speaker}: ${s.text}`)
-      .join("\n");
+    const transcriptText = data.transcript.map((s) => `${s.speaker}: ${s.text}`).join("\n");
 
     if (!transcriptText.trim()) {
       return {
@@ -774,7 +832,7 @@ ${jp.background ? `Background: ${jp.background}\n` : ""}${jp.personality ? `Pers
       : "";
 
     const existingBlock =
-      (data.existingPoints?.length || data.existingQuestions?.length)
+      data.existingPoints?.length || data.existingQuestions?.length
         ? `# Already drafted (offer DIFFERENT, complementary items)\n${data.existingPoints?.length ? `Points:\n- ${data.existingPoints.join("\n- ")}\n` : ""}${data.existingQuestions?.length ? `Questions:\n- ${data.existingQuestions.join("\n- ")}\n` : ""}`
         : "";
 
@@ -950,7 +1008,8 @@ Produce one polished version (the recommended one) plus 3 alternative variations
     }
     const json = (await res.json()) as any;
     const argStr = json.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
-    if (!argStr) return { recommended: data.rawText, alternatives: [], error: "No tool call returned" };
+    if (!argStr)
+      return { recommended: data.rawText, alternatives: [], error: "No tool call returned" };
     try {
       const parsed = JSON.parse(argStr) as {
         recommended: string;

@@ -44,6 +44,7 @@ import { buildConversationContext, suggestPeopleAtPlace } from "@/lib/context";
 import { labelTranscriptForPrompt } from "@/lib/speaker-id";
 import { extractIntroducedNames } from "@/lib/auto-person";
 import { seedJamesIfNeeded } from "@/lib/seed";
+import { loadRecentBias, type CategoryBiasLabel } from "@/lib/suggestion-stats";
 import {
   VoiceCapture,
   computeMfccMean,
@@ -52,7 +53,12 @@ import {
   Diarizer,
 } from "@/lib/voiceprint";
 import { VOICEPRINT_MATCH_THRESHOLD } from "@/lib/db";
-import { SpeakerPanel, type ClusterRow, type ClusterStatus, type SuggestedName } from "@/components/SpeakerPanel";
+import {
+  SpeakerPanel,
+  type ClusterRow,
+  type ClusterStatus,
+  type SuggestedName,
+} from "@/components/SpeakerPanel";
 
 export const Route = createFileRoute("/")({
   component: Home,
@@ -84,10 +90,7 @@ const QUICK_PHRASES = [
 ];
 
 /** Append a suggestion chip onto a cluster status, de-duped by name. */
-function mergeSuggestion(
-  status: ClusterStatus,
-  chip: SuggestedName,
-): ClusterStatus {
+function mergeSuggestion(status: ClusterStatus, chip: SuggestedName): ClusterStatus {
   if (status.kind === "confirmed") return status;
   const cur = status.suggestions ?? [];
   if (cur.some((s) => s.name.toLowerCase() === chip.name.toLowerCase())) {
@@ -199,6 +202,12 @@ function Home() {
   useEffect(() => {
     moodRef.current = mood;
   }, [mood]);
+  // Tier 3.4 — when the current suggestion grid was rendered to the user,
+  // used to compute tap latency for performance ranking.
+  const suggestionsShownAtRef = useRef<number>(0);
+  // Tier 3.4 — per-category performance bias loaded from suggestion logs.
+  // Refreshed on mount and after each conversation ends.
+  const categoryBiasRef = useRef<Record<string, CategoryBiasLabel>>({});
 
   // Speech
   const [draft, setDraft] = useState("");
@@ -240,6 +249,18 @@ function Home() {
   }, [speakerMap]);
   useEffect(() => {
     seedJamesIfNeeded();
+    // Tier 3 mount-time setup: load category bias (3.4) in parallel with
+    // any other background bootstrap. Embedding backfill (3.1) wires in
+    // separately once it lands.
+    void Promise.all([
+      loadRecentBias()
+        .then((bias) => {
+          categoryBiasRef.current = bias;
+        })
+        .catch(() => {
+          /* non-critical */
+        }),
+    ]);
   }, []);
 
   // Server fns
@@ -324,21 +345,16 @@ function Home() {
         const status = clusterStatusRef.current[speakerLabel];
         if (cluster && status?.kind !== "confirmed") {
           // Always look for self-introduction names in this segment.
-          const introHere = extractIntroducedNames([
-            { text, speaker_label: speakerLabel },
-          ])[0]?.name;
+          const introHere = extractIntroducedNames([{ text, speaker_label: speakerLabel }])[0]
+            ?.name;
           // Determine source: ask-reply if this cluster matches the one we
           // just asked, otherwise self-intro.
           const askTarget = expectingNameForClusterRef.current;
-          const isAskReply =
-            askTarget !== null &&
-            (askTarget === speakerLabel || askTarget === "");
+          const isAskReply = askTarget !== null && (askTarget === speakerLabel || askTarget === "");
           // Resolve attribution target: ask-reply attributes back to the
           // cluster Ask was clicked on (if it was a per-cluster ask).
           const attributionLabel =
-            isAskReply && askTarget && askTarget !== ""
-              ? askTarget
-              : speakerLabel;
+            isAskReply && askTarget && askTarget !== "" ? askTarget : speakerLabel;
 
           let nextStatus: ClusterStatus | undefined;
           // Only run voiceprint match for unknown clusters that haven't been
@@ -346,14 +362,8 @@ function Home() {
           if (!status || status.kind === "unknown") {
             const confirmedIds = new Set(Object.values(speakerMapRef.current));
             const allPrints = await db.voiceprints.toArray();
-            const candidates = allPrints.filter(
-              (p) => !confirmedIds.has(p.person_id),
-            );
-            const match = bestMatch(
-              cluster.centroid,
-              candidates,
-              VOICEPRINT_MATCH_THRESHOLD,
-            );
+            const candidates = allPrints.filter((p) => !confirmedIds.has(p.person_id));
+            const match = bestMatch(cluster.centroid, candidates, VOICEPRINT_MATCH_THRESHOLD);
             if (match) {
               nextStatus = {
                 kind: "suggested",
@@ -415,8 +425,7 @@ function Home() {
       if (cancelled) return;
       setVoiceId(s.voice_id);
       setIpadModel(s.ipad_model ?? "auto");
-      fastModelRef.current =
-        s.fast_model ?? s.suggestion_model ?? "google/gemini-2.5-flash-lite";
+      fastModelRef.current = s.fast_model ?? s.suggestion_model ?? "google/gemini-2.5-flash-lite";
       smartModelRef.current = s.smart_model ?? "google/gemini-2.5-pro";
 
       const people = await db.people.orderBy("name").toArray();
@@ -429,10 +438,7 @@ function Home() {
         try {
           const pos = await getCurrentPosition();
           if (cancelled) return;
-          const match = await findNearestPlace(
-            pos.coords.latitude,
-            pos.coords.longitude,
-          );
+          const match = await findNearestPlace(pos.coords.latitude, pos.coords.longitude);
           if (match) {
             placeIdRef.current = match.place.id;
             placeRef.current = match.place;
@@ -458,11 +464,7 @@ function Home() {
     if (active) return;
     let cancelled = false;
     (async () => {
-      const r = await db.conversations
-        .orderBy("started_at")
-        .reverse()
-        .limit(5)
-        .toArray();
+      const r = await db.conversations.orderBy("started_at").reverse().limit(5).toArray();
       if (!cancelled) setRecent(r);
       if (!cancelled && r[0] && !lastConversationIdRef.current) {
         lastConversationIdRef.current = r[0].id;
@@ -517,9 +519,7 @@ function Home() {
         });
       } catch (err) {
         console.warn("voice fingerprint capture unavailable", err);
-        toast.warning(
-          "Voice recognition unavailable — speakers won't be auto-identified.",
-        );
+        toast.warning("Voice recognition unavailable — speakers won't be auto-identified.");
         captureRef.current = null;
       }
       setActive(true);
@@ -558,10 +558,7 @@ function Home() {
       if (cid) {
         await db.conversations.update(cid, { ended_at: endedAt });
 
-        const segs = await db.transcript_segments
-          .where("conversation_id")
-          .equals(cid)
-          .toArray();
+        const segs = await db.transcript_segments.where("conversation_id").equals(cid).toArray();
         const transcript = segs
           .sort((a, b) => a.ts - b.ts)
           .map((s) => ({ speaker: s.speaker_label, text: s.text }));
@@ -587,10 +584,7 @@ function Home() {
             const primary = personIdsRef.current[0];
             await db.memories.bulkAdd(
               r.memories.map(
-                (m: {
-                  text: string;
-                  kind: "fact" | "preference" | "event" | "todo";
-                }) => ({
+                (m: { text: string; kind: "fact" | "preference" | "event" | "todo" }) => ({
                   id: newId(),
                   conversation_id: cid,
                   place_id: placeIdRef.current,
@@ -625,6 +619,14 @@ function Home() {
       setActive(false);
       setStopping(false);
       conversationIdRef.current = null;
+      // Tier 3.4 — refresh category bias from updated logs.
+      void loadRecentBias()
+        .then((bias) => {
+          categoryBiasRef.current = bias;
+        })
+        .catch(() => {
+          /* non-critical */
+        });
     }
   }, [active, stopping, scribe, summarizeFn, placeName]);
 
@@ -668,10 +670,14 @@ function Home() {
           alreadyShown: lastShownRef.current.slice(-20),
           model: fastModelRef.current,
           mood: moodRef.current,
+          categoryBias: categoryBiasRef.current,
         },
       });
       if (r.suggestions?.length) {
         setSuggestions(r.suggestions as Suggestion[]);
+        // Tier 3.4 — mark when the grid is shown so we can compute tap
+        // latency for the next selection.
+        suggestionsShownAtRef.current = Date.now();
         lastShownRef.current = [
           ...lastShownRef.current,
           ...r.suggestions.map((s: Suggestion) => s.text),
@@ -720,8 +726,7 @@ function Home() {
         await audio.play();
         // Record James's spoken line as a transcript segment so the next
         // suggestion refresh sees it as part of the conversation.
-        const targetCid =
-          conversationIdRef.current ?? lastConversationIdRef.current;
+        const targetCid = conversationIdRef.current ?? lastConversationIdRef.current;
         if (targetCid) {
           const selfLabel = jamesLabelRef.current ?? JAMES_SELF_LABEL;
           const seg: TranscriptSegment = {
@@ -744,9 +749,14 @@ function Home() {
             .and((l) => l.text === meta.suggestion!.text && !l.selected)
             .toArray();
           if (logs[0]) {
+            // Tier 3.4 — record how long the grid was visible before the
+            // tap. Only meaningful when the grid was actually shown first.
+            const shownAt = suggestionsShownAtRef.current;
+            const timeToTapMs = shownAt > 0 ? Math.max(0, Date.now() - shownAt) : undefined;
             await db.suggestions_log.update(logs[0].id, {
               selected: true,
               spoken: true,
+              ...(typeof timeToTapMs === "number" ? { time_to_tap_ms: timeToTapMs } : {}),
             });
           }
         } else if (targetCid) {
@@ -790,47 +800,41 @@ function Home() {
   }, [clusterStatus, committed.length]);
 
   // ---- Speaker confirmation handlers ----
-  const confirmKnownSpeaker = useCallback(
-    async (label: string, personId: string) => {
-      const cluster = diarizerRef.current.get(label);
-      if (cluster) await recordVoiceprint(personId, cluster.centroid);
-      // Update speakerMap (only confirmed entries) and conversation roster.
-      const nextMap = { ...speakerMapRef.current };
-      // Remove any prior label for this person
-      for (const k of Object.keys(nextMap))
-        if (nextMap[k] === personId) delete nextMap[k];
-      nextMap[label] = personId;
-      speakerMapRef.current = nextMap;
-      setSpeakerMap(nextMap);
-      const nextStatus = {
-        ...clusterStatusRef.current,
-        [label]: { kind: "confirmed" as const, personId },
-      };
-      clusterStatusRef.current = nextStatus;
-      setClusterStatus(nextStatus);
-      if (!personIdsRef.current.includes(personId)) {
-        const merged = [...personIdsRef.current, personId];
-        personIdsRef.current = merged;
-        setSelectedPersonIds(merged);
-      }
-      if (conversationIdRef.current) {
-        await db.conversations.update(conversationIdRef.current, {
-          speaker_map: nextMap,
-          person_ids: personIdsRef.current,
-        });
-      }
-      const p = await db.people.get(personId);
-      if (p) toast.success(`Confirmed ${p.name}`);
-    },
-    [],
-  );
+  const confirmKnownSpeaker = useCallback(async (label: string, personId: string) => {
+    const cluster = diarizerRef.current.get(label);
+    if (cluster) await recordVoiceprint(personId, cluster.centroid);
+    // Update speakerMap (only confirmed entries) and conversation roster.
+    const nextMap = { ...speakerMapRef.current };
+    // Remove any prior label for this person
+    for (const k of Object.keys(nextMap)) if (nextMap[k] === personId) delete nextMap[k];
+    nextMap[label] = personId;
+    speakerMapRef.current = nextMap;
+    setSpeakerMap(nextMap);
+    const nextStatus = {
+      ...clusterStatusRef.current,
+      [label]: { kind: "confirmed" as const, personId },
+    };
+    clusterStatusRef.current = nextStatus;
+    setClusterStatus(nextStatus);
+    if (!personIdsRef.current.includes(personId)) {
+      const merged = [...personIdsRef.current, personId];
+      personIdsRef.current = merged;
+      setSelectedPersonIds(merged);
+    }
+    if (conversationIdRef.current) {
+      await db.conversations.update(conversationIdRef.current, {
+        speaker_map: nextMap,
+        person_ids: personIdsRef.current,
+      });
+    }
+    const p = await db.people.get(personId);
+    if (p) toast.success(`Confirmed ${p.name}`);
+  }, []);
 
   const rejectSuggestion = useCallback((label: string) => {
     const cur = clusterStatusRef.current[label];
     const carried =
-      cur && (cur.kind === "suggested" || cur.kind === "unknown")
-        ? cur.suggestions
-        : undefined;
+      cur && (cur.kind === "suggested" || cur.kind === "unknown") ? cur.suggestions : undefined;
     const next = {
       ...clusterStatusRef.current,
       [label]: { kind: "unknown" as const, suggestions: carried },
@@ -844,9 +848,7 @@ function Home() {
       const trimmed = name.trim();
       if (!trimmed) return;
       // Re-use existing person if name (first-name) matches
-      const existing = allPeople.find(
-        (p) => p.name.toLowerCase() === trimmed.toLowerCase(),
-      );
+      const existing = allPeople.find((p) => p.name.toLowerCase() === trimmed.toLowerCase());
       let personId: string;
       if (existing) {
         personId = existing.id;
@@ -898,7 +900,6 @@ function Home() {
     [speak],
   );
 
-
   // Expand James's truncated typing via LLM, then speak the expanded version
   const expandAndSpeak = useCallback(async () => {
     const raw = draft.trim();
@@ -944,504 +945,476 @@ function Home() {
 
   return (
     <ScaledShell ipadModel={ipadModel}>
-    <main className="flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
-      {/* Top control bar — always visible, designed for landscape iPad */}
-      <header className="flex shrink-0 items-stretch gap-2 border-b border-border bg-card px-3 py-3">
-        {/* Combined Record / Stop button — green when idle, red when recording */}
-        <button
-          onClick={active ? handleStop : handleStart}
-          disabled={stopping}
-          aria-label={active ? "Stop conversation" : "Start conversation"}
-          className={`flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl text-white shadow-sm transition-all active:scale-95 ${
-            stopping
-              ? "bg-rose-300 ring-2 ring-rose-400"
-              : active
-                ? "bg-rose-600 hover:bg-rose-500"
-                : "bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50"
-          }`}
-        >
-          {active ? (
-            <>
-              <Square className="size-7" />
-              <span className="text-sm font-medium">Stop</span>
-            </>
-          ) : (
-            <>
-              <Mic className="size-7" />
-              <span className="text-sm font-medium">Record</span>
-            </>
-          )}
-        </button>
+      <main className="flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
+        {/* Top control bar — always visible, designed for landscape iPad */}
+        <header className="flex shrink-0 items-stretch gap-2 border-b border-border bg-card px-3 py-3">
+          {/* Combined Record / Stop button — green when idle, red when recording */}
+          <button
+            onClick={active ? handleStop : handleStart}
+            disabled={stopping}
+            aria-label={active ? "Stop conversation" : "Start conversation"}
+            className={`flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl text-white shadow-sm transition-all active:scale-95 ${
+              stopping
+                ? "bg-rose-300 ring-2 ring-rose-400"
+                : active
+                  ? "bg-rose-600 hover:bg-rose-500"
+                  : "bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50"
+            }`}
+          >
+            {active ? (
+              <>
+                <Square className="size-7" />
+                <span className="text-sm font-medium">Stop</span>
+              </>
+            ) : (
+              <>
+                <Mic className="size-7" />
+                <span className="text-sm font-medium">Record</span>
+              </>
+            )}
+          </button>
 
-        {/* Text entry — fills remaining width so it stays visible above the on-screen keyboard */}
-        <div className="flex flex-1 flex-col gap-1">
-          {lastExpansion && (
-            <div className="flex items-start gap-2 rounded-md border border-border bg-secondary/40 px-2 py-1 text-xs">
-              <Sparkles className="mt-0.5 size-3 shrink-0 text-primary" />
-              <div className="flex-1 leading-snug">
-                <span className="text-muted-foreground">Spoke: </span>
-                <span className="font-medium">{lastExpansion.expanded}</span>
-                <span className="ml-2 text-muted-foreground">
-                  (typed: “{lastExpansion.raw}”)
-                </span>
+          {/* Text entry — fills remaining width so it stays visible above the on-screen keyboard */}
+          <div className="flex flex-1 flex-col gap-1">
+            {lastExpansion && (
+              <div className="flex items-start gap-2 rounded-md border border-border bg-secondary/40 px-2 py-1 text-xs">
+                <Sparkles className="mt-0.5 size-3 shrink-0 text-primary" />
+                <div className="flex-1 leading-snug">
+                  <span className="text-muted-foreground">Spoke: </span>
+                  <span className="font-medium">{lastExpansion.expanded}</span>
+                  <span className="ml-2 text-muted-foreground">(typed: “{lastExpansion.raw}”)</span>
+                </div>
+                <button
+                  onClick={() => setLastExpansion(null)}
+                  className="text-muted-foreground hover:text-foreground"
+                  aria-label="Dismiss"
+                >
+                  <X className="size-3" />
+                </button>
               </div>
-              <button
-                onClick={() => setLastExpansion(null)}
-                className="text-muted-foreground hover:text-foreground"
-                aria-label="Dismiss"
-              >
-                <X className="size-3" />
-              </button>
+            )}
+            <div className="flex flex-1 items-end gap-2">
+              <Textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    expandAndSpeak();
+                  }
+                }}
+                placeholder="Type roughly — AI will clarify and speak it…"
+                className="h-[120px] min-h-[120px] flex-1 resize-none text-base"
+              />
             </div>
+          </div>
+
+          {/* Speak button — same size as Record */}
+          <button
+            onClick={expandAndSpeak}
+            disabled={speaking || expanding || !draft.trim()}
+            aria-label="Speak"
+            className="flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl bg-primary text-primary-foreground shadow-sm transition-all active:scale-95 hover:bg-primary/90 disabled:opacity-50"
+          >
+            {expanding ? (
+              <Sparkles className="size-7 animate-pulse" />
+            ) : (
+              <Volume2 className="size-7" />
+            )}
+            <span className="text-sm font-medium">{expanding ? "Clarifying" : "Speak"}</span>
+          </button>
+
+          {/* Recent conversations */}
+          <Link
+            to="/recent"
+            aria-label="Recent conversations"
+            className="flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl border border-border bg-secondary/40 text-foreground transition hover:bg-secondary"
+          >
+            <History className="size-7" />
+            <span className="text-sm font-medium">Recent</span>
+          </Link>
+
+          {/* Reply helpers — Messages / Email / Facebook combined */}
+          <Link
+            to="/helpers"
+            aria-label="Reply helpers for Messages, Email and Facebook"
+            className="flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl border border-border bg-secondary/40 text-foreground transition hover:bg-secondary"
+          >
+            <Reply className="size-7" />
+            <span className="text-sm font-medium">Helpers</span>
+          </Link>
+
+          {/* Settings */}
+          <Link
+            to="/settings"
+            aria-label="Settings"
+            className="flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl border border-border bg-secondary/40 text-muted-foreground transition hover:bg-secondary"
+          >
+            <SettingsIcon className="size-7" />
+            <span className="text-sm font-medium text-foreground">Settings</span>
+          </Link>
+        </header>
+
+        {/* Status / context strip */}
+        <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border bg-card/60 px-3 py-4 text-base text-muted-foreground">
+          <button
+            onClick={() => setShowPeoplePicker(true)}
+            className="flex items-center gap-2 rounded-full border border-border bg-secondary/40 px-5 py-3 text-base hover:bg-secondary"
+          >
+            <Users className="size-5" />
+            {peopleInConvo.length === 0
+              ? "Choose people"
+              : peopleInConvo.map((p) => p.name).join(", ")}
+          </button>
+          {placeName && (
+            <span className="flex items-center gap-2 rounded-full border border-border bg-secondary/40 px-5 py-3">
+              <MapPin className="size-5" /> {placeName}
+            </span>
           )}
-          <div className="flex flex-1 items-end gap-2">
-            <Textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  expandAndSpeak();
-                }
-              }}
-              placeholder="Type roughly — AI will clarify and speak it…"
-              className="h-[120px] min-h-[120px] flex-1 resize-none text-base"
+          <button
+            onClick={() => setShowEventPicker(true)}
+            className={`flex items-center gap-2 rounded-full border px-5 py-3 text-base transition ${
+              selectedEvent
+                ? "border-primary/40 bg-primary/10 text-foreground"
+                : "border-border bg-secondary/40 hover:bg-secondary"
+            }`}
+          >
+            <Calendar className="size-5" />
+            {selectedEvent ? selectedEvent.name : "Event (optional)"}
+          </button>
+          {active && (
+            <span className="flex items-center gap-1.5 text-destructive">
+              <span className="inline-block size-2 animate-pulse rounded-full bg-destructive" />
+              Recording
+            </span>
+          )}
+        </div>
+
+        {/* Main two-column area: suggestions (80%) + speaker panel (20%) */}
+        <div className="flex min-h-0 flex-1 gap-2 p-2">
+          {/* Suggestions — 3 cols × 4 rows, 80% width */}
+          <section className="flex min-h-0 w-4/5 flex-col rounded-2xl border border-border bg-card/40">
+            <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
+              <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                <Sparkles className="size-4" /> Suggestions
+              </h2>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={refreshSuggestions}
+                disabled={loadingSuggestions || !active}
+              >
+                {loadingSuggestions ? "Thinking…" : "Refresh"}
+              </Button>
+            </div>
+            <div className="grid min-h-0 flex-1 grid-cols-3 grid-rows-3 gap-2 overflow-hidden p-2">
+              {!active && suggestions.length === 0 && (
+                <Card className="col-span-3 row-span-3 flex items-center justify-center p-5 text-center text-sm text-muted-foreground">
+                  Press the green mic button to start a conversation. Suggestions will appear here.
+                </Card>
+              )}
+              {active && suggestions.length === 0 && !loadingSuggestions && (
+                <Card className="col-span-3 row-span-3 flex items-center justify-center p-5 text-center text-sm text-muted-foreground">
+                  Listening… suggestions will appear after a few words.
+                </Card>
+              )}
+              {suggestions.slice(0, 9).map((s, i) => (
+                <button
+                  key={`${i}-${s.text}`}
+                  onClick={() => speak(s.text, { suggestion: s })}
+                  disabled={speaking}
+                  className={`flex h-full min-h-0 w-full items-center justify-center rounded-2xl border-2 p-3 text-center text-xl font-medium leading-snug transition-transform active:scale-[0.98] ${categoryClass(s.category)}`}
+                >
+                  <span className="line-clamp-5">{s.text}</span>
+                </button>
+              ))}
+            </div>
+            {/* Quick phrases */}
+            <div className="grid grid-cols-5 gap-1.5 border-t border-border p-2">
+              {QUICK_PHRASES.map((p) => (
+                <Button
+                  key={p}
+                  variant="secondary"
+                  className="h-16 rounded-xl px-3 text-base font-medium leading-tight whitespace-normal"
+                  onClick={() => speak(p)}
+                  disabled={speaking}
+                >
+                  {p}
+                </Button>
+              ))}
+            </div>
+            {/* Mood selector — biases suggestions toward this emotional tone */}
+            <div className="flex flex-wrap items-center gap-1.5 border-t border-border p-2">
+              <span className="mr-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Mood
+              </span>
+              {MOODS.map((m) => {
+                const selected = mood === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setMood(m.id)}
+                    aria-pressed={selected}
+                    className={`rounded-full border-2 px-5 py-2.5 text-base font-medium transition ${
+                      selected
+                        ? `${m.color} border-transparent shadow`
+                        : "border-border bg-background text-muted-foreground hover:bg-secondary"
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          {/* Speaker panel — 20% width */}
+          <div className="flex min-h-0 w-1/5 flex-col">
+            <SpeakerPanel
+              segments={committed}
+              partial={partial}
+              clusters={clusterRows}
+              people={allPeople}
+              onConfirmKnown={confirmKnownSpeaker}
+              onRejectSuggestion={rejectSuggestion}
+              onConfirmNew={confirmNewSpeaker}
+              onAskName={askSpeakerName}
+              onClearConfirmed={clearConfirmedSpeaker}
             />
           </div>
         </div>
 
-        {/* Speak button — same size as Record */}
-        <button
-          onClick={expandAndSpeak}
-          disabled={speaking || expanding || !draft.trim()}
-          aria-label="Speak"
-          className="flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl bg-primary text-primary-foreground shadow-sm transition-all active:scale-95 hover:bg-primary/90 disabled:opacity-50"
-        >
-          {expanding ? (
-            <Sparkles className="size-7 animate-pulse" />
-          ) : (
-            <Volume2 className="size-7" />
-          )}
-          <span className="text-sm font-medium">
-            {expanding ? "Clarifying" : "Speak"}
-          </span>
-        </button>
-
-        {/* Recent conversations */}
-        <Link
-          to="/recent"
-          aria-label="Recent conversations"
-          className="flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl border border-border bg-secondary/40 text-foreground transition hover:bg-secondary"
-        >
-          <History className="size-7" />
-          <span className="text-sm font-medium">Recent</span>
-        </Link>
-
-        {/* Reply helpers — Messages / Email / Facebook combined */}
-        <Link
-          to="/helpers"
-          aria-label="Reply helpers for Messages, Email and Facebook"
-          className="flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl border border-border bg-secondary/40 text-foreground transition hover:bg-secondary"
-        >
-          <Reply className="size-7" />
-          <span className="text-sm font-medium">Helpers</span>
-        </Link>
-
-        {/* Settings */}
-        <Link
-          to="/settings"
-          aria-label="Settings"
-          className="flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl border border-border bg-secondary/40 text-muted-foreground transition hover:bg-secondary"
-        >
-          <SettingsIcon className="size-7" />
-          <span className="text-sm font-medium text-foreground">Settings</span>
-        </Link>
-      </header>
-
-      {/* Status / context strip */}
-      <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border bg-card/60 px-3 py-4 text-base text-muted-foreground">
-        <button
-          onClick={() => setShowPeoplePicker(true)}
-          className="flex items-center gap-2 rounded-full border border-border bg-secondary/40 px-5 py-3 text-base hover:bg-secondary"
-        >
-          <Users className="size-5" />
-          {peopleInConvo.length === 0
-            ? "Choose people"
-            : peopleInConvo.map((p) => p.name).join(", ")}
-        </button>
-        {placeName && (
-          <span className="flex items-center gap-2 rounded-full border border-border bg-secondary/40 px-5 py-3">
-            <MapPin className="size-5" /> {placeName}
-          </span>
-        )}
-        <button
-          onClick={() => setShowEventPicker(true)}
-          className={`flex items-center gap-2 rounded-full border px-5 py-3 text-base transition ${
-            selectedEvent
-              ? "border-primary/40 bg-primary/10 text-foreground"
-              : "border-border bg-secondary/40 hover:bg-secondary"
-          }`}
-        >
-          <Calendar className="size-5" />
-          {selectedEvent ? selectedEvent.name : "Event (optional)"}
-        </button>
-        {active && (
-          <span className="flex items-center gap-1.5 text-destructive">
-            <span className="inline-block size-2 animate-pulse rounded-full bg-destructive" />
-            Recording
-          </span>
-        )}
-      </div>
-
-      {/* Main two-column area: suggestions (80%) + speaker panel (20%) */}
-      <div className="flex min-h-0 flex-1 gap-2 p-2">
-        {/* Suggestions — 3 cols × 4 rows, 80% width */}
-        <section className="flex min-h-0 w-4/5 flex-col rounded-2xl border border-border bg-card/40">
-          <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
-            <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-              <Sparkles className="size-4" /> Suggestions
-            </h2>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={refreshSuggestions}
-              disabled={loadingSuggestions || !active}
-            >
-              {loadingSuggestions ? "Thinking…" : "Refresh"}
-            </Button>
-          </div>
-          <div className="grid min-h-0 flex-1 grid-cols-3 grid-rows-3 gap-2 overflow-hidden p-2">
-            {!active && suggestions.length === 0 && (
-              <Card className="col-span-3 row-span-3 flex items-center justify-center p-5 text-center text-sm text-muted-foreground">
-                Press the green mic button to start a conversation. Suggestions
-                will appear here.
-              </Card>
-            )}
-            {active && suggestions.length === 0 && !loadingSuggestions && (
-              <Card className="col-span-3 row-span-3 flex items-center justify-center p-5 text-center text-sm text-muted-foreground">
-                Listening… suggestions will appear after a few words.
-              </Card>
-            )}
-            {suggestions.slice(0, 9).map((s, i) => (
-              <button
-                key={`${i}-${s.text}`}
-                onClick={() => speak(s.text, { suggestion: s })}
-                disabled={speaking}
-                className={`flex h-full min-h-0 w-full items-center justify-center rounded-2xl border-2 p-3 text-center text-xl font-medium leading-snug transition-transform active:scale-[0.98] ${categoryClass(s.category)}`}
-              >
-                <span className="line-clamp-5">{s.text}</span>
-              </button>
-            ))}
-          </div>
-          {/* Quick phrases */}
-          <div className="grid grid-cols-5 gap-1.5 border-t border-border p-2">
-            {QUICK_PHRASES.map((p) => (
-              <Button
-                key={p}
-                variant="secondary"
-                className="h-16 rounded-xl px-3 text-base font-medium leading-tight whitespace-normal"
-                onClick={() => speak(p)}
-                disabled={speaking}
-              >
-                {p}
-              </Button>
-            ))}
-          </div>
-          {/* Mood selector — biases suggestions toward this emotional tone */}
-          <div className="flex flex-wrap items-center gap-1.5 border-t border-border p-2">
-            <span className="mr-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Mood
-            </span>
-            {MOODS.map((m) => {
-              const selected = mood === m.id;
-              return (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => setMood(m.id)}
-                  aria-pressed={selected}
-                  className={`rounded-full border-2 px-5 py-2.5 text-base font-medium transition ${
-                    selected
-                      ? `${m.color} border-transparent shadow`
-                      : "border-border bg-background text-muted-foreground hover:bg-secondary"
-                  }`}
-                >
-                  {m.label}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        {/* Speaker panel — 20% width */}
-        <div className="flex min-h-0 w-1/5 flex-col">
-          <SpeakerPanel
-            segments={committed}
-            partial={partial}
-            clusters={clusterRows}
-            people={allPeople}
-            onConfirmKnown={confirmKnownSpeaker}
-            onRejectSuggestion={rejectSuggestion}
-            onConfirmNew={confirmNewSpeaker}
-            onAskName={askSpeakerName}
-            onClearConfirmed={clearConfirmedSpeaker}
-          />
-        </div>
-      </div>
-
-      {/* People picker modal */}
-      {showPeoplePicker && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => setShowPeoplePicker(false)}
-        >
-          <Card
-            className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden p-0"
-            onClick={(e) => e.stopPropagation()}
+        {/* People picker modal */}
+        {showPeoplePicker && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            onClick={() => setShowPeoplePicker(false)}
           >
-            <div className="flex items-center justify-between border-b border-border px-5 py-3">
-              <h3 className="flex items-center gap-2 text-lg font-semibold">
-                <Users className="size-5" /> Who's in this conversation?
-              </h3>
-              <button
-                onClick={() => setShowPeoplePicker(false)}
-                className="rounded-full p-2 hover:bg-secondary"
-              >
-                <X className="size-5" />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-5">
-              {allPeople.length === 0 ? (
-                <p className="text-sm italic text-muted-foreground">
-                  No people added yet. Add them in{" "}
-                  <Link to="/settings" className="underline">
-                    Settings
-                  </Link>
-                  .
-                </p>
-              ) : (
-                <div className="flex flex-wrap gap-2">
-                  {allPeople.map((p) => {
-                    const sel = selectedPersonIds.includes(p.id);
-                    return (
-                      <button
-                        key={p.id}
-                        onClick={() =>
-                          setSelectedPersonIds((cur) =>
-                            cur.includes(p.id)
-                              ? cur.filter((x) => x !== p.id)
-                              : [...cur, p.id],
-                          )
-                        }
-                        className={`flex items-center gap-2 rounded-full border-2 px-4 py-2 text-base transition-colors ${
-                          sel
-                            ? "border-primary bg-primary/10 text-foreground"
-                            : "border-border bg-secondary/40 text-muted-foreground hover:bg-secondary"
-                        }`}
-                      >
-                        {sel && <Check className="size-4" />}
-                        <span className="font-medium">{p.name}</span>
-                        {p.relationship && (
-                          <span className="text-xs opacity-70">
-                            {p.relationship}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
+            <Card
+              className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden p-0"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-border px-5 py-3">
+                <h3 className="flex items-center gap-2 text-lg font-semibold">
+                  <Users className="size-5" /> Who's in this conversation?
+                </h3>
+                <button
+                  onClick={() => setShowPeoplePicker(false)}
+                  className="rounded-full p-2 hover:bg-secondary"
+                >
+                  <X className="size-5" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-5">
+                {allPeople.length === 0 ? (
+                  <p className="text-sm italic text-muted-foreground">
+                    No people added yet. Add them in{" "}
+                    <Link to="/settings" className="underline">
+                      Settings
+                    </Link>
+                    .
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {allPeople.map((p) => {
+                      const sel = selectedPersonIds.includes(p.id);
+                      return (
+                        <button
+                          key={p.id}
+                          onClick={() =>
+                            setSelectedPersonIds((cur) =>
+                              cur.includes(p.id) ? cur.filter((x) => x !== p.id) : [...cur, p.id],
+                            )
+                          }
+                          className={`flex items-center gap-2 rounded-full border-2 px-4 py-2 text-base transition-colors ${
+                            sel
+                              ? "border-primary bg-primary/10 text-foreground"
+                              : "border-border bg-secondary/40 text-muted-foreground hover:bg-secondary"
+                          }`}
+                        >
+                          {sel && <Check className="size-4" />}
+                          <span className="font-medium">{p.name}</span>
+                          {p.relationship && (
+                            <span className="text-xs opacity-70">{p.relationship}</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <div className="border-t border-border px-5 py-3">
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    className="flex-1 gap-2"
+                    onClick={() => {
+                      setNewPersonName("");
+                      setNewPersonRel("");
+                      setAddingPerson(true);
+                    }}
+                  >
+                    <Plus className="size-4" /> Add new person
+                  </Button>
+                  <Button className="flex-1" onClick={() => setShowPeoplePicker(false)}>
+                    Done
+                  </Button>
                 </div>
-              )}
-            </div>
-            <div className="border-t border-border px-5 py-3">
-              <div className="flex gap-2">
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* Add new person mini-modal */}
+        {addingPerson && (
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+            onClick={() => setAddingPerson(false)}
+          >
+            <Card className="w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+              <h3 className="mb-3 flex items-center gap-2 text-lg font-semibold">
+                <Plus className="size-5" /> Add new person
+              </h3>
+              <div className="space-y-3">
+                <div>
+                  <label className="mb-1 block text-sm font-medium">Name</label>
+                  <input
+                    autoFocus
+                    value={newPersonName}
+                    onChange={(e) => setNewPersonName(e.target.value)}
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-base"
+                    placeholder="e.g. Sarah"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-medium">Relationship (optional)</label>
+                  <input
+                    value={newPersonRel}
+                    onChange={(e) => setNewPersonRel(e.target.value)}
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-base"
+                    placeholder="e.g. care worker, friend"
+                  />
+                </div>
+              </div>
+              <div className="mt-4 flex justify-end gap-2">
+                <Button variant="ghost" onClick={() => setAddingPerson(false)}>
+                  Cancel
+                </Button>
                 <Button
-                  variant="outline"
-                  className="flex-1 gap-2"
-                  onClick={() => {
-                    setNewPersonName("");
-                    setNewPersonRel("");
-                    setAddingPerson(true);
+                  onClick={async () => {
+                    const name = newPersonName.trim();
+                    if (!name) {
+                      toast.error("Name is required");
+                      return;
+                    }
+                    const p: Person = {
+                      id: newId(),
+                      name,
+                      relationship: newPersonRel.trim() || undefined,
+                      interests: [],
+                      notes: "",
+                      style_notes: "",
+                      created_at: Date.now(),
+                    };
+                    await db.people.put(p);
+                    setAllPeople((cur) => [...cur, p].sort((a, b) => a.name.localeCompare(b.name)));
+                    setSelectedPersonIds((cur) => [...cur, p.id]);
+                    setAddingPerson(false);
+                    toast.success(`Added ${p.name}`);
                   }}
                 >
-                  <Plus className="size-4" /> Add new person
+                  Add
                 </Button>
-                <Button
-                  className="flex-1"
-                  onClick={() => setShowPeoplePicker(false)}
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {showEventPicker && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            onClick={() => setShowEventPicker(false)}
+          >
+            <Card
+              className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden p-0"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-border px-5 py-3">
+                <h3 className="flex items-center gap-2 text-lg font-semibold">
+                  <Calendar className="size-5" /> Prepping for an event?
+                </h3>
+                <button
+                  onClick={() => setShowEventPicker(false)}
+                  className="rounded-full p-2 hover:bg-secondary"
                 >
-                  Done
-                </Button>
+                  <X className="size-5" />
+                </button>
               </div>
-            </div>
-          </Card>
-        </div>
-      )}
-
-      {/* Add new person mini-modal */}
-      {addingPerson && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
-          onClick={() => setAddingPerson(false)}
-        >
-          <Card
-            className="w-full max-w-md p-5"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="mb-3 flex items-center gap-2 text-lg font-semibold">
-              <Plus className="size-5" /> Add new person
-            </h3>
-            <div className="space-y-3">
-              <div>
-                <label className="mb-1 block text-sm font-medium">Name</label>
-                <input
-                  autoFocus
-                  value={newPersonName}
-                  onChange={(e) => setNewPersonName(e.target.value)}
-                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-base"
-                  placeholder="e.g. Sarah"
-                />
+              <div className="flex-1 overflow-y-auto p-5">
+                <button
+                  onClick={() => {
+                    setSelectedEvent(null);
+                    setShowEventPicker(false);
+                  }}
+                  className={`mb-3 flex w-full items-center justify-between rounded-lg border-2 px-4 py-2 text-left ${
+                    !selectedEvent
+                      ? "border-primary bg-primary/10"
+                      : "border-border bg-secondary/40 hover:bg-secondary"
+                  }`}
+                >
+                  <span className="font-medium">No event</span>
+                  {!selectedEvent && <Check className="size-4" />}
+                </button>
+                {allEvents.length === 0 ? (
+                  <p className="text-sm italic text-muted-foreground">
+                    No events yet. Create one in{" "}
+                    <Link to="/settings" className="underline">
+                      Settings → Events
+                    </Link>
+                    .
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {allEvents.map((e) => {
+                      const sel = selectedEvent?.id === e.id;
+                      return (
+                        <button
+                          key={e.id}
+                          onClick={() => {
+                            setSelectedEvent(e);
+                            setShowEventPicker(false);
+                          }}
+                          className={`flex w-full items-start justify-between gap-3 rounded-lg border-2 px-4 py-2 text-left ${
+                            sel
+                              ? "border-primary bg-primary/10"
+                              : "border-border bg-secondary/40 hover:bg-secondary"
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate font-medium">{e.name}</div>
+                            {(e.when || e.location) && (
+                              <div className="truncate text-xs text-muted-foreground">
+                                {[e.when, e.location].filter(Boolean).join(" · ")}
+                              </div>
+                            )}
+                          </div>
+                          {sel && <Check className="size-4 shrink-0" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-              <div>
-                <label className="mb-1 block text-sm font-medium">
-                  Relationship (optional)
-                </label>
-                <input
-                  value={newPersonRel}
-                  onChange={(e) => setNewPersonRel(e.target.value)}
-                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-base"
-                  placeholder="e.g. care worker, friend"
-                />
-              </div>
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <Button
-                variant="ghost"
-                onClick={() => setAddingPerson(false)}
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={async () => {
-                  const name = newPersonName.trim();
-                  if (!name) {
-                    toast.error("Name is required");
-                    return;
-                  }
-                  const p: Person = {
-                    id: newId(),
-                    name,
-                    relationship: newPersonRel.trim() || undefined,
-                    interests: [],
-                    notes: "",
-                    style_notes: "",
-                    created_at: Date.now(),
-                  };
-                  await db.people.put(p);
-                  setAllPeople((cur) =>
-                    [...cur, p].sort((a, b) => a.name.localeCompare(b.name)),
-                  );
-                  setSelectedPersonIds((cur) => [...cur, p.id]);
-                  setAddingPerson(false);
-                  toast.success(`Added ${p.name}`);
-                }}
-              >
-                Add
-              </Button>
-            </div>
-          </Card>
-        </div>
-      )}
-
-      {showEventPicker && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => setShowEventPicker(false)}
-        >
-          <Card
-            className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden p-0"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-border px-5 py-3">
-              <h3 className="flex items-center gap-2 text-lg font-semibold">
-                <Calendar className="size-5" /> Prepping for an event?
-              </h3>
-              <button
-                onClick={() => setShowEventPicker(false)}
-                className="rounded-full p-2 hover:bg-secondary"
-              >
-                <X className="size-5" />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-5">
-              <button
-                onClick={() => {
-                  setSelectedEvent(null);
-                  setShowEventPicker(false);
-                }}
-                className={`mb-3 flex w-full items-center justify-between rounded-lg border-2 px-4 py-2 text-left ${
-                  !selectedEvent
-                    ? "border-primary bg-primary/10"
-                    : "border-border bg-secondary/40 hover:bg-secondary"
-                }`}
-              >
-                <span className="font-medium">No event</span>
-                {!selectedEvent && <Check className="size-4" />}
-              </button>
-              {allEvents.length === 0 ? (
-                <p className="text-sm italic text-muted-foreground">
-                  No events yet. Create one in{" "}
-                  <Link to="/settings" className="underline">
-                    Settings → Events
-                  </Link>
-                  .
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {allEvents.map((e) => {
-                    const sel = selectedEvent?.id === e.id;
-                    return (
-                      <button
-                        key={e.id}
-                        onClick={() => {
-                          setSelectedEvent(e);
-                          setShowEventPicker(false);
-                        }}
-                        className={`flex w-full items-start justify-between gap-3 rounded-lg border-2 px-4 py-2 text-left ${
-                          sel
-                            ? "border-primary bg-primary/10"
-                            : "border-border bg-secondary/40 hover:bg-secondary"
-                        }`}
-                      >
-                        <div className="min-w-0">
-                          <div className="truncate font-medium">{e.name}</div>
-                          {(e.when || e.location) && (
-                            <div className="truncate text-xs text-muted-foreground">
-                              {[e.when, e.location].filter(Boolean).join(" · ")}
-                            </div>
-                          )}
-                        </div>
-                        {sel && <Check className="size-4 shrink-0" />}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </Card>
-        </div>
-      )}
-    </main>
+            </Card>
+          </div>
+        )}
+      </main>
     </ScaledShell>
   );
 }
 
-function ScaledShell({
-  ipadModel,
-  children,
-}: {
-  ipadModel: string;
-  children: React.ReactNode;
-}) {
+function ScaledShell({ ipadModel, children }: { ipadModel: string; children: React.ReactNode }) {
   const preset =
     ipadModel !== "auto" && ipadModel in IPAD_PRESETS
       ? IPAD_PRESETS[ipadModel as keyof typeof IPAD_PRESETS]
@@ -1451,16 +1424,13 @@ function ScaledShell({
     h: typeof window === "undefined" ? 834 : window.innerHeight,
   });
   useEffect(() => {
-    const onResize = () =>
-      setVp({ w: window.innerWidth, h: window.innerHeight });
+    const onResize = () => setVp({ w: window.innerWidth, h: window.innerHeight });
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
   if (!preset) {
-    return (
-      <div className="h-screen w-screen overflow-hidden">{children}</div>
-    );
+    return <div className="h-screen w-screen overflow-hidden">{children}</div>;
   }
 
   const scale = Math.min(vp.w / preset.width, vp.h / preset.height);
@@ -1480,4 +1450,3 @@ function ScaledShell({
     </div>
   );
 }
-
