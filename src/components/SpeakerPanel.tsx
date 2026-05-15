@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { Check, X, HelpCircle, Mic2, Pencil, GitMerge, UserPlus, Brain } from "lucide-react";
+import { useEffect, useRef, useState, useMemo } from "react";
+import { Check, X, HelpCircle, Mic2, Pencil, GitMerge, UserPlus, Brain, UserCheck } from "lucide-react";
 import type { Person, TranscriptSegment } from "@/lib/db";
 
 export type SuggestedName = {
@@ -40,6 +40,7 @@ export function SpeakerPanel({
   onClearConfirmed,
   onMerge,
   onForceNew,
+  onReassignSegment,
 }: {
   segments: TranscriptSegment[];
   partial: string;
@@ -55,15 +56,40 @@ export function SpeakerPanel({
   onClearConfirmed: (label: string) => void;
   onMerge: (fromLabel: string, toLabel: string) => void;
   onForceNew: () => void;
+  onReassignSegment?: (segmentId: string, personId: string) => void;
 }) {
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const [reassigningSegId, setReassigningSegId] = useState<string | null>(null);
+
   useEffect(() => {
     const el = transcriptRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [segments.length, partial]);
+    // Dismiss reassign popover when new transcript arrives, so it doesn't
+    // block the latest lines. User can tap again if they need to correct it.
+    if (segments.length > 0) setReassigningSegId(null);
+  }, [segments.length]);
 
   const peopleById = new Map(people.map((p) => [p.id, p] as const));
   const tail = segments.slice(-30);
+
+  // People available in the reassign popover: declared participants +
+  // anyone already confirmed to a cluster in this session. Deduplicated.
+  const reassignOptions = useMemo(() => {
+    const confirmedPeople = clusters
+      .filter((c) => c.status.kind === "confirmed")
+      .map((c) => people.find((p) => p.id === (c.status as any).personId))
+      .filter((p): p is NonNullable<typeof p> => Boolean(p));
+    const declaredPeople = (participantIds ?? [])
+      .map((pid) => people.find((p) => p.id === pid))
+      .filter((p): p is NonNullable<typeof p> => Boolean(p));
+    const all = [...confirmedPeople, ...declaredPeople];
+    const seen = new Set<string>();
+    return all.filter((p) => {
+      if (seen.has(p.id)) return false;
+      seen.add(p.id);
+      return true;
+    });
+  }, [clusters, people, participantIds]);
 
   function nameForLabel(label: string): string {
     if (label === JAMES_SELF_LABEL) return "Me";
@@ -95,14 +121,50 @@ export function SpeakerPanel({
           {tail.length === 0 && !partial && (
             <p className="italic text-muted-foreground">Listening…</p>
           )}
-          {tail.map((s) => (
-            <div key={s.id} className="leading-snug">
-              <span className="mr-2 text-xs font-medium text-muted-foreground">
-                {nameForLabel(s.speaker_label)}
-              </span>
-              {s.text}
-            </div>
-          ))}
+          {tail.map((s) => {
+            const isReassigning = reassigningSegId === s.id;
+            return (
+              <div key={s.id}>
+                <button
+                  onClick={() =>
+                    setReassigningSegId(isReassigning ? null : s.id)
+                  }
+                  className={`w-full rounded px-1 py-0.5 text-left leading-snug transition-colors hover:bg-secondary/50 active:bg-secondary/80 ${isReassigning ? "bg-secondary/60 ring-1 ring-primary/30" : ""}`}
+                  title="Tap to reassign who said this"
+                >
+                  <span className="mr-2 text-xs font-medium text-muted-foreground">
+                    {nameForLabel(s.speaker_label)}
+                  </span>
+                  {s.text}
+                </button>
+                {isReassigning && onReassignSegment && (
+                  <div className="my-0.5 flex flex-wrap items-center gap-1 pl-2">
+                    <span className="text-[10px] text-muted-foreground">
+                      <UserCheck className="inline size-3 mr-0.5" />
+                      Who said this?
+                    </span>
+                    {reassignOptions.map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => {
+                          onReassignSegment(s.id, p.id);
+                          setReassigningSegId(null);
+                        }}
+                        className="rounded-full border border-primary/40 bg-primary/10 px-2.5 py-0.5 text-[11px] font-medium hover:bg-primary/25 active:bg-primary/40"
+                      >
+                        {p.name}
+                      </button>
+                    ))}
+                    {reassignOptions.length === 0 && (
+                      <span className="text-[10px] italic text-muted-foreground">
+                        Confirm a speaker first using the roster below
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
           {partial && (
             <div className="italic leading-snug text-muted-foreground">
               {partial}
@@ -277,7 +339,7 @@ function ClusterCard({
           {mergeTargets.map((t) => {
             const confirmedPerson =
               t.status.kind === "confirmed"
-                ? people.find((p) => p.id === t.status.personId)
+                ? people.find((p) => p.id === (t.status as { kind: "confirmed"; personId: string }).personId)
                 : null;
             return (
               <option key={t.label} value={t.label}>

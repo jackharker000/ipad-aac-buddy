@@ -660,6 +660,7 @@ function Home() {
         speaker_label: speakerLabel,
         text,
         ts: Date.now(),
+        mfcc: mfcc ?? undefined,
       };
       setCommitted((prev) => [...prev, seg]);
       await db.transcript_segments.add(seg);
@@ -1780,6 +1781,67 @@ function Home() {
     [],
   );
 
+  // Reassign a single transcript segment to a specific person.
+  // If the person already has a confirmed cluster: move the segment label there.
+  // If not: confirm the segment's current cluster for that person.
+  // Either way, if the segment has a stored MFCC, add it to the person's
+  // voiceprint so future conversations recognise them more accurately.
+  const handleReassignSegment = useCallback(
+    async (segmentId: string, personId: string) => {
+      const segment = committedRef.current.find((s) => s.id === segmentId);
+      if (!segment) return;
+      const person = allPeople.find((p) => p.id === personId);
+      if (!person) return;
+
+      // Does this person already have a confirmed cluster in this session?
+      const existingLabel = Object.entries(speakerMapRef.current).find(
+        ([, pid]) => pid === personId,
+      )?.[0];
+
+      if (existingLabel && existingLabel !== segment.speaker_label) {
+        // Move just this segment to the person's confirmed cluster.
+        setCommitted((prev) =>
+          prev.map((s) =>
+            s.id === segmentId ? { ...s, speaker_label: existingLabel } : s,
+          ),
+        );
+        await db.transcript_segments.update(segmentId, {
+          speaker_label: existingLabel,
+        });
+        toast.success(`Moved to ${person.name}`);
+      } else if (!existingLabel) {
+        // Person has no cluster yet — confirm the segment's cluster for them.
+        await confirmKnownSpeaker(segment.speaker_label, personId);
+        // confirmKnownSpeaker already shows a toast.
+      } else {
+        // Segment is already attributed to this person's cluster — nothing to do.
+        toast.info(`Already attributed to ${person.name}`);
+        return;
+      }
+
+      // Voiceprint improvement: if the segment has a stored MFCC, add it to the
+      // person's voiceprint now, bypassing the cluster-centroid averaging that
+      // happens at session end. This gives a clean per-utterance sample.
+      if (segment.mfcc && segment.mfcc.length === 20) {
+        try {
+          await recordVoiceprint(personId, segment.mfcc);
+          await db.voiceprint_contributions.add({
+            id: newId(),
+            person_id: personId,
+            conversation_id: conversationIdRef.current ?? undefined,
+            source: "auto",
+            mfcc: segment.mfcc.slice(),
+            ts: Date.now(),
+            preview_text: `Corrected: "${segment.text.slice(0, 60)}"`,
+          });
+        } catch (err) {
+          console.warn("voiceprint update after reassign failed", err);
+        }
+      }
+    },
+    [allPeople, confirmKnownSpeaker],
+  );
+
   const forceNewSpeaker = useCallback(() => {
     diarizerRef.current.forceNextNew();
     toast.info("Ready — next utterance will start a new speaker");
@@ -2087,6 +2149,7 @@ function Home() {
             onClearConfirmed={clearConfirmedSpeaker}
             onMerge={mergeSpeakerClusters}
             onForceNew={forceNewSpeaker}
+            onReassignSegment={handleReassignSegment}
           />
         </div>
       </div>

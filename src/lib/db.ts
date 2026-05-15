@@ -63,6 +63,9 @@ export type TranscriptSegment = {
   embedding?: number[];
   /** Tier 3.1 — model name used to produce `embedding`. */
   embedding_model?: string;
+  /** MFCC vector captured at transcription time — stored so later manual
+   *  speaker reassignments can improve the correct person's voiceprint. */
+  mfcc?: number[];
 };
 
 export type SuggestionLog = {
