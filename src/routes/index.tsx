@@ -17,7 +17,11 @@ import {
   History,
   Plus,
   Reply,
+  AlertCircle,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
+import { VoiceSampleRecorder } from "@/components/VoiceSampleRecorder";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
@@ -178,6 +182,11 @@ function Home() {
   const [addingPerson, setAddingPerson] = useState(false);
   const [newPersonName, setNewPersonName] = useState("");
   const [newPersonRel, setNewPersonRel] = useState("");
+  // Map of person_id -> sample_count for selected participants in the picker.
+  // null entry means "no voiceprint yet". Loaded when the picker opens.
+  const [voiceprintStatus, setVoiceprintStatus] = useState<Record<string, number | null>>({});
+  // Which selected participant has the inline recorder expanded inside the picker.
+  const [expandedRecorderPersonId, setExpandedRecorderPersonId] = useState<string | null>(null);
 
   // Event (optional)
   const [allEvents, setAllEvents] = useState<EventItem[]>([]);
@@ -267,6 +276,28 @@ function Home() {
   useEffect(() => {
     speakerMapRef.current = speakerMap;
   }, [speakerMap]);
+
+  // Refresh voiceprint status for the picker — runs whenever it opens or the
+  // selection changes, so the green/amber badges and inline record buttons
+  // stay in sync after a recording completes.
+  const refreshVoiceprintStatus = useCallback(async () => {
+    if (selectedPersonIds.length === 0) {
+      setVoiceprintStatus({});
+      return;
+    }
+    const prints = await db.voiceprints
+      .where("person_id")
+      .anyOf(selectedPersonIds)
+      .toArray();
+    const map: Record<string, number | null> = {};
+    for (const pid of selectedPersonIds) map[pid] = null;
+    for (const vp of prints) map[vp.person_id] = vp.sample_count;
+    setVoiceprintStatus(map);
+  }, [selectedPersonIds]);
+
+  useEffect(() => {
+    if (showPeoplePicker) void refreshVoiceprintStatus();
+  }, [showPeoplePicker, refreshVoiceprintStatus]);
   useEffect(() => {
     seedJamesIfNeeded();
   }, []);
@@ -1904,6 +1935,103 @@ function Home() {
                       </button>
                     );
                   })}
+                </div>
+              )}
+
+              {/* Voice recognition status & inline recording for the people
+                  selected for this conversation. Recording a voice sample here
+                  means the participant-override path can identify them
+                  correctly from their very first utterance — no guessing. */}
+              {selectedPersonIds.length > 0 && (
+                <div className="mt-5 border-t border-border pt-4">
+                  <div className="mb-2 flex items-center justify-between">
+                    <h4 className="text-sm font-semibold">
+                      Voice recognition
+                    </h4>
+                    <span className="text-xs text-muted-foreground">
+                      Recording a sample makes identification instant & accurate
+                    </span>
+                  </div>
+                  <div className="space-y-2">
+                    {selectedPersonIds.map((pid) => {
+                      const person = allPeople.find((p) => p.id === pid);
+                      if (!person) return null;
+                      const sampleCount = voiceprintStatus[pid];
+                      const hasPrint = sampleCount != null;
+                      const expanded = expandedRecorderPersonId === pid;
+                      return (
+                        <div
+                          key={pid}
+                          className={`rounded-lg border ${
+                            hasPrint
+                              ? "border-emerald-500/30 bg-emerald-500/5"
+                              : "border-amber-500/40 bg-amber-500/5"
+                          }`}
+                        >
+                          <div className="flex items-center gap-3 px-3 py-2">
+                            <span className="font-medium">{person.name}</span>
+                            {hasPrint ? (
+                              <span className="flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400">
+                                <Check className="size-3" />
+                                Voice learned · {sampleCount} sample
+                                {sampleCount === 1 ? "" : "s"}
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400">
+                                <AlertCircle className="size-3" />
+                                No voice sample yet
+                              </span>
+                            )}
+                            <button
+                              onClick={() =>
+                                setExpandedRecorderPersonId(
+                                  expanded ? null : pid,
+                                )
+                              }
+                              className="ml-auto flex items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium hover:bg-secondary"
+                            >
+                              {hasPrint ? (
+                                expanded ? (
+                                  <>
+                                    <ChevronUp className="size-3" /> Hide
+                                  </>
+                                ) : (
+                                  <>
+                                    <Mic className="size-3" /> Re-record
+                                  </>
+                                )
+                              ) : expanded ? (
+                                <>
+                                  <ChevronUp className="size-3" /> Hide
+                                </>
+                              ) : (
+                                <>
+                                  <Mic className="size-3" /> Record now
+                                </>
+                              )}
+                            </button>
+                          </div>
+                          {expanded && (
+                            <div className="border-t border-border px-3 py-3">
+                              <VoiceSampleRecorder personId={pid} />
+                              <div className="mt-2 flex justify-end">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={async () => {
+                                    await refreshVoiceprintStatus();
+                                    setExpandedRecorderPersonId(null);
+                                  }}
+                                >
+                                  Done
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
