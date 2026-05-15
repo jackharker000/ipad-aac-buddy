@@ -44,6 +44,7 @@ import { buildConversationContext, suggestPeopleAtPlace } from "@/lib/context";
 import { labelTranscriptForPrompt } from "@/lib/speaker-id";
 import { extractIntroducedNames } from "@/lib/auto-person";
 import { seedJamesIfNeeded, backfillSuggestionsLogPersonIds } from "@/lib/seed";
+import { runStyleDistillation } from "@/lib/style-distill";
 import {
   VoiceCapture,
   computeMfccMean,
@@ -623,6 +624,10 @@ function Home() {
           toast.success("Saved", { id: "sum" });
         }
       }
+      // === Tier 1.2: auto-distil style profile ===
+      // Cadence-guarded (≤ once per 12 h); silently no-ops if there aren't
+      // enough samples yet. Failures never block the Stop flow.
+      void runStyleDistillation().catch((err) => console.warn("style distill failed", err));
     } catch (e: any) {
       toast.error(e?.message ?? "Could not save", { id: "sum" });
     } finally {

@@ -1196,3 +1196,138 @@ Return 0-3 suggested profile additions.`;
       return { suggestions: [], error: "Parse error" };
     }
   });
+
+// === Tier 1: feedback loop ===
+/* ----------------------- AI: distill style profile -------------------------
+ *
+ * 1.2 — periodically rolls the suggestions_log up into a structured
+ * StyleProfileJson (preferred openers, formality, humor markers, taboo
+ * phrases, etc.). Called from `runStyleDistillation` in style-distill.ts.
+ * Kept here so the LLM call stays server-side with the other AI fns.
+ * ------------------------------------------------------------------------- */
+
+const distillSampleSchema = z.object({
+  shown: z.string(),
+  edited_to: z.string().optional(),
+  selected: z.boolean(),
+  ignored: z.boolean(),
+  category: z.string(),
+  person_name: z.string().optional(),
+});
+
+const distillStyleProfileSchema = z.object({
+  samples: z.array(distillSampleSchema).max(800),
+  jamesProfile: jamesProfileSchema.optional(),
+  previous: z.string().optional(),
+  model: z.string().optional(),
+  windowDays: z.number().int().positive().max(365),
+});
+
+export const distillStyleProfile = createServerFn({ method: "POST" })
+  .inputValidator((d) => distillStyleProfileSchema.parse(d))
+  .handler(async ({ data }) => {
+    const target = resolveChatTarget(data.model ?? "google/gemini-2.5-pro");
+    if (data.samples.length < 20) {
+      return {
+        profile: null as unknown,
+        error: "insufficient samples",
+      };
+    }
+
+    const jp = data.jamesProfile;
+    const profileLine = jp
+      ? `${jp.name}${jp.communication ? ` — communication style: ${jp.communication}` : ""}`
+      : "James";
+
+    // Compact sample list — cap to keep the prompt bounded.
+    const sampleLines = data.samples.slice(0, 400).map((s, i) => {
+      const tags: string[] = [];
+      if (s.selected) tags.push("picked");
+      if (s.edited_to && s.edited_to !== s.shown) tags.push("edited");
+      if (s.ignored && !s.selected) tags.push("ignored");
+      const tagStr = tags.length ? `[${tags.join(",")}]` : "[shown]";
+      const who = s.person_name ? ` (with ${s.person_name})` : "";
+      const edit = s.edited_to && s.edited_to !== s.shown ? ` → "${s.edited_to}"` : "";
+      return `${i + 1}. ${tagStr} ${s.category}${who}: "${s.shown}"${edit}`;
+    });
+
+    const system = `You distill James's communication style from real picked vs. ignored suggestions. Return a structured StyleProfileJson via the emit_profile tool. Be conservative — only assert patterns you can see in the samples.`;
+    const user = `User: ${profileLine}
+Window: last ${data.windowDays} days, ${data.samples.length} logged suggestions.
+${data.previous ? `Previous distilled profile (for reference, may be wrong/stale):\n${data.previous}\n` : ""}
+Sample log (one per line, with [picked|edited|ignored|shown] tag):
+${sampleLines.join("\n")}
+
+Now emit a StyleProfileJson. Focus on what James KEEPS (picked) and how he REWRITES (edited). Treat (ignored) lines as anti-examples. Do not over-claim if signal is thin.`;
+
+    const res = await fetch(target.url, {
+      method: "POST",
+      headers: target.headers,
+      body: JSON.stringify({
+        model: target.model,
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "emit_profile",
+              description: "Emit a distilled style profile JSON",
+              parameters: {
+                type: "object",
+                properties: {
+                  preferred_openers: { type: "array", items: { type: "string" } },
+                  preferred_signoffs: { type: "array", items: { type: "string" } },
+                  formality: {
+                    type: "string",
+                    enum: ["casual", "neutral", "formal"],
+                  },
+                  formality_score: { type: "number" },
+                  humor_markers: { type: "array", items: { type: "string" } },
+                  taboo_phrases: { type: "array", items: { type: "string" } },
+                  avg_sentence_length_words: { type: "number" },
+                  reading_grade_estimate: { type: "number" },
+                  category_preference: {
+                    type: "object",
+                    additionalProperties: { type: "number" },
+                  },
+                  notes: { type: "string" },
+                },
+                required: [
+                  "preferred_openers",
+                  "preferred_signoffs",
+                  "formality",
+                  "formality_score",
+                  "humor_markers",
+                  "taboo_phrases",
+                  "avg_sentence_length_words",
+                  "reading_grade_estimate",
+                  "category_preference",
+                  "notes",
+                ],
+              },
+            },
+          },
+        ],
+        tool_choice: { type: "function", function: { name: "emit_profile" } },
+        temperature: 0.2,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      console.error("Distill failed:", res.status, err);
+      return { profile: null as unknown, error: `AI error ${res.status}` };
+    }
+    const json = (await res.json()) as any;
+    const call = json.choices?.[0]?.message?.tool_calls?.[0];
+    if (!call) return { profile: null as unknown, error: "No tool call" };
+    try {
+      const parsed = JSON.parse(call.function.arguments);
+      return { profile: parsed, error: null };
+    } catch {
+      return { profile: null as unknown, error: "Parse error" };
+    }
+  });
