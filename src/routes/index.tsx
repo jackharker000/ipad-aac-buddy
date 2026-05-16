@@ -64,6 +64,9 @@ import {
   bestMatch,
   Diarizer,
   cosineSim,
+  discriminativeSim,
+  addContributionWithCap,
+  CENTROID_UPDATE_THRESHOLD,
 } from "@/lib/voiceprint";
 import { VOICEPRINT_MATCH_THRESHOLD } from "@/lib/db";
 import { SpeakerPanel, type ClusterRow, type ClusterStatus, type SuggestedName } from "@/components/SpeakerPanel";
@@ -242,7 +245,7 @@ function Home() {
   // ---- On-device voice fingerprinting ----
   const captureRef = useRef<VoiceCapture | null>(null);
   // Single source of truth for diarization this session.
-  const diarizerRef = useRef<Diarizer>(new Diarizer(0.87));
+  const diarizerRef = useRef<Diarizer>(new Diarizer(0.82));
   // Cluster status (suggested / confirmed) keyed by diarizer label.
   const [clusterStatus, setClusterStatus] = useState<Record<string, ClusterStatus>>({});
   const clusterStatusRef = useRef<Record<string, ClusterStatus>>({});
@@ -260,8 +263,9 @@ function Home() {
   // Timestamps (ms) of detected speaker shifts during the current session.
   // Used to split Scribe-committed chunks that span multiple speakers.
   const speakerShiftTimestampsRef = useRef<number[]>([]);
-  // Track which unknown clusters have already had AI context-ID fired (once per cluster).
-  const aiSpeakerIdSentRef = useRef<Set<string>>(new Set());
+  // Track the diarizer utterance count when AI context-ID was last fired per cluster.
+  // Re-fires every 2 new utterances to refine speaker ID as more context accumulates.
+  const aiSpeakerIdLastRef = useRef<Map<string, number>>(new Map());
   // Hysteresis: brand-new clusters start as "pending" and don't appear in the
   // SpeakerPanel until promoted. Promotion requires at least one of: ≥2
   // utterances, user-triggered, self-intro detected, strongly isolated voice,
@@ -276,6 +280,11 @@ function Home() {
   const participantVoiceprintsRef = useRef<
     Array<{ personId: string; centroid: number[] }>
   >([]);
+  // Cached voiceprints for in-memory speaker recognition — avoids IDB reads
+  // in the hot processUtterance path. Refreshed at start and after each confirm.
+  const allVoiceprintsRef = useRef<import("@/lib/db").Voiceprint[]>([]);
+  // Confirmed speakers' centroids keyed by personId (sync, no IDB reads).
+  const confirmedVoiceprintsRef = useRef<Map<string, number[]>>(new Map());
   // Refresh participant voiceprints if the participant list changes mid-conversation
   // (e.g. user confirms a new speaker who gets added to selectedPersonIds).
   useEffect(() => {
@@ -372,10 +381,10 @@ function Home() {
         !opts.forceNewCluster &&
         participantVoiceprintsRef.current.length > 0
       ) {
-        const PARTICIPANT_OVERRIDE_THRESHOLD = 0.84;
+        const PARTICIPANT_OVERRIDE_THRESHOLD = 0.80;
         for (const pvp of participantVoiceprintsRef.current) {
           if (pvp.centroid.length !== mfcc.length) continue;
-          const sim = cosineSim(mfcc, pvp.centroid);
+          const sim = discriminativeSim(mfcc, pvp.centroid);
           if (sim >= PARTICIPANT_OVERRIDE_THRESHOLD && sim > participantOverrideSim) {
             participantOverridePersonId = pvp.personId;
             participantOverrideSim = sim;
@@ -481,9 +490,9 @@ function Home() {
           speakerMapRef.current,
         )) {
           if (confirmedLabel === speakerLabel) continue;
-          const storedVp = await db.voiceprints.get(confirmedPersonId);
-          if (storedVp && storedVp.centroid.length === mfcc.length) {
-            const sim = cosineSim(mfcc, storedVp.centroid);
+          const centroid = confirmedVoiceprintsRef.current.get(confirmedPersonId);
+          if (centroid && centroid.length === mfcc.length) {
+            const sim = discriminativeSim(mfcc, centroid);
             if (sim >= GHOST_MATCH_THRESHOLD) {
               const fromLabel = speakerLabel;
               const mergedOk = diarizerRef.current.mergeClusters(
@@ -514,7 +523,7 @@ function Home() {
                 }
                 pendingClustersRef.current.delete(fromLabel);
                 pendingVoiceprintMatchRef.current.delete(fromLabel);
-                aiSpeakerIdSentRef.current.delete(fromLabel);
+                aiSpeakerIdLastRef.current.delete(fromLabel);
                 if (clusterStatusRef.current[fromLabel]) {
                   const nextStatus = { ...clusterStatusRef.current };
                   delete nextStatus[fromLabel];
@@ -546,8 +555,8 @@ function Home() {
           let bestExistingSim = -1;
           for (const c of existingClusters) {
             if (c.label === speakerLabel) continue;
-            const sim = cosineSim(mfcc, c.centroid);
-            if (sim > bestExistingSim) {
+            const sim = discriminativeSim(mfcc, c.centroid);
+            if (Number.isFinite(sim) && sim > bestExistingSim) {
               bestExistingSim = sim;
               bestExistingLabel = c.label;
             }
@@ -584,8 +593,8 @@ function Home() {
           let maxSimToOthers = 0;
           for (const c of allClusters) {
             if (c.label === speakerLabel) continue;
-            const s = cosineSim(mfcc, c.centroid);
-            if (s > maxSimToOthers) maxSimToOthers = s;
+            const s = discriminativeSim(mfcc, c.centroid);
+            if (Number.isFinite(s) && s > maxSimToOthers) maxSimToOthers = s;
           }
           const isStronglyIsolated = maxSimToOthers < ISOLATION_PROMOTE_THRESHOLD;
           const matchedParticipant = !!participantOverridePersonId;
@@ -624,12 +633,12 @@ function Home() {
         const confirmedPersonIds = new Set(Object.values(speakerMapRef.current));
         const curStatus = clusterStatusRef.current[speakerLabel];
         if (!curStatus || curStatus.kind === "unknown") {
-          const PARTICIPANT_MATCH_THRESHOLD = 0.72;
+          const PARTICIPANT_MATCH_THRESHOLD = 0.70;
           let bestPvp: { personId: string; sim: number } | null = null;
           for (const pvp of participantVoiceprintsRef.current) {
             if (confirmedPersonIds.has(pvp.personId)) continue;
             if (pvp.centroid.length !== mfcc.length) continue;
-            const sim = cosineSim(mfcc, pvp.centroid);
+            const sim = discriminativeSim(mfcc, pvp.centroid);
             if (
               sim >= PARTICIPANT_MATCH_THRESHOLD &&
               (!bestPvp || sim > bestPvp.sim)
@@ -679,23 +688,18 @@ function Home() {
         ts: Date.now(),
         mfcc: mfcc ?? undefined,
       };
+      // Show transcript text immediately (optimistic); DB persists fire-and-forget
+      // so Scribe callbacks return without blocking on IDB writes.
       setCommitted((prev) => [...prev, seg]);
-      await db.transcript_segments.add(seg);
-      // Tier 2: persist per-segment MFCC so the offline re-diarize pass can
-      // re-cluster utterances post-hoc using stored voiceprints as seeds.
-      // Older conversations (no MFCC rows) gracefully no-op at re-diarize.
+      void db.transcript_segments.add(seg).catch(() => {});
       if (mfcc != null) {
-        try {
-          await db.segment_mfccs.add({
-            id: newId(),
-            segment_id: seg.id,
-            conversation_id: seg.conversation_id,
-            mfcc,
-            ts: seg.ts,
-          });
-        } catch {
-          // Best-effort; missing rows just disable post-hoc re-diarize.
-        }
+        void db.segment_mfccs.add({
+          id: newId(),
+          segment_id: seg.id,
+          conversation_id: seg.conversation_id,
+          mfcc,
+          ts: seg.ts,
+        }).catch(() => {});
       }
 
       // -------- Recognition pass (suggestion-only).
@@ -716,8 +720,7 @@ function Home() {
 
           if (!status || status.kind === "unknown") {
             const confirmedIds = new Set(Object.values(speakerMapRef.current));
-            const allPrints = await db.voiceprints.toArray();
-            const candidates = allPrints.filter(
+            const candidates = allVoiceprintsRef.current.filter(
               (p) => !confirmedIds.has(p.person_id),
             );
             const excludedIds = new Set(
@@ -807,19 +810,19 @@ function Home() {
           const curStatusKind = (
             nextStatus ?? clusterStatusRef.current[speakerLabel]
           )?.kind;
-          if (
-            clusterCount >= 2 &&
+          const lastAiCount = aiSpeakerIdLastRef.current.get(speakerLabel) ?? -1;
+          const shouldFireAI =
+            clusterCount >= 1 &&
             curStatusKind !== "confirmed" &&
-            curStatusKind !== "suggested" &&
-            !aiSpeakerIdSentRef.current.has(speakerLabel)
-          ) {
-            aiSpeakerIdSentRef.current.add(speakerLabel);
+            (lastAiCount === -1 || clusterCount - lastAiCount >= 2);
+          if (shouldFireAI) {
+            aiSpeakerIdLastRef.current.set(speakerLabel, clusterCount);
             const confirmedNames: Record<string, string> = {};
             for (const [lbl, pid] of Object.entries(speakerMapRef.current)) {
               const p = allPeople.find((pp) => pp.id === pid);
               if (p) confirmedNames[lbl] = p.name;
             }
-            const recentForAI = committedRef.current.slice(-15).map((s) => {
+            const recentForAI = committedRef.current.slice(-20).map((s) => {
               const pid = s.person_id ?? speakerMapRef.current[s.speaker_label];
               const p = pid ? allPeople.find((pp) => pp.id === pid) : null;
               return { speaker: p?.name ?? s.speaker_label, text: s.text };
@@ -838,7 +841,7 @@ function Home() {
                 recentTranscript: recentForAI,
                 confirmedSpeakers: confirmedNames,
                 candidateNames,
-                model: fastModelRef.current,
+                model: smartModelRef.current,
               },
             })
               .then((result) => {
@@ -1065,25 +1068,23 @@ function Home() {
       setClusterStatus({});
       clusterStatusRef.current = {};
       pendingVoiceprintMatchRef.current.clear();
-      aiSpeakerIdSentRef.current.clear();
+      aiSpeakerIdLastRef.current.clear();
       speakerShiftTimestampsRef.current = [];
       pendingClustersRef.current.clear();
       participantVoiceprintsRef.current = [];
-      // Pre-load voiceprints for declared participants BEFORE connecting Scribe
-      // so the very first utterance gets participant matching. A fire-and-forget
-      // load races with the first transcript chunk and misses it.
-      if (selectedPersonIds.length > 0) {
-        try {
-          const prints = await db.voiceprints
-            .where("person_id")
-            .anyOf(selectedPersonIds)
-            .toArray();
-          participantVoiceprintsRef.current = (prints as import("@/lib/db").Voiceprint[]).map((vp) => ({
-            personId: vp.person_id,
-            centroid: vp.centroid,
-          }));
-        } catch {}
-      }
+      allVoiceprintsRef.current = [];
+      confirmedVoiceprintsRef.current.clear();
+      // Pre-load ALL stored voiceprints into memory BEFORE connecting Scribe
+      // so the very first utterance gets participant matching without IDB reads.
+      try {
+        const allPrints = await db.voiceprints.toArray();
+        allVoiceprintsRef.current = allPrints as import("@/lib/db").Voiceprint[];
+        if (selectedPersonIds.length > 0) {
+          participantVoiceprintsRef.current = (allPrints as import("@/lib/db").Voiceprint[])
+            .filter((vp) => selectedPersonIds.includes(vp.person_id))
+            .map((vp) => ({ personId: vp.person_id, centroid: vp.centroid }));
+        }
+      } catch {}
 
       const conv: Conversation = {
         id,
@@ -1155,7 +1156,7 @@ function Home() {
               .slice(-3)
               .map((s) => s.text)
               .join(" / ");
-            await db.voiceprint_contributions.add({
+            await addContributionWithCap({
               id: newId(),
               person_id: personId,
               conversation_id: cid ?? undefined,
@@ -1525,13 +1526,28 @@ function Home() {
       const cluster = diarizerRef.current.get(label);
       if (cluster) {
         await recordVoiceprint(personId, cluster.centroid);
+        // Update in-memory caches immediately so future processUtterance calls
+        // benefit without re-querying IDB.
+        const updatedVp = await db.voiceprints.get(personId);
+        if (updatedVp) {
+          allVoiceprintsRef.current = [
+            ...allVoiceprintsRef.current.filter((vp) => vp.person_id !== personId),
+            updatedVp,
+          ];
+          confirmedVoiceprintsRef.current.set(personId, updatedVp.centroid);
+          // Keep participant ref in sync too.
+          participantVoiceprintsRef.current = [
+            ...participantVoiceprintsRef.current.filter((vp) => vp.personId !== personId),
+            { personId, centroid: updatedVp.centroid },
+          ];
+        }
         // Capture a recent example from this cluster for the user to verify later.
         const examples = committedRef.current
           .filter((s) => s.speaker_label === label)
           .slice(-3)
           .map((s) => s.text)
           .join(" / ");
-        await db.voiceprint_contributions.add({
+        await addContributionWithCap({
           id: newId(),
           person_id: personId,
           conversation_id: conversationIdRef.current ?? undefined,
@@ -1649,7 +1665,7 @@ function Home() {
     setClusterStatus(nextStatus);
     // Clear pending match state so the cluster is re-evaluated cleanly.
     pendingVoiceprintMatchRef.current.delete(label);
-    aiSpeakerIdSentRef.current.delete(label);
+    aiSpeakerIdLastRef.current.delete(label);
     if (conversationIdRef.current) {
       await db.conversations.update(conversationIdRef.current, {
         speaker_map: nextMap,
@@ -1679,7 +1695,7 @@ function Home() {
       // Drop any pending/aux tracking for the dissolved label.
       pendingClustersRef.current.delete(fromLabel);
       pendingVoiceprintMatchRef.current.delete(fromLabel);
-      aiSpeakerIdSentRef.current.delete(fromLabel);
+      aiSpeakerIdLastRef.current.delete(fromLabel);
 
       // Relabel all transcript segments in state and DB.
       setCommitted((prev) =>
@@ -1730,6 +1746,14 @@ function Home() {
         (newToStatus.kind === "confirmed" ? newToStatus.personId : null);
       if (mergedCluster && confirmedPersonId) {
         await recordVoiceprint(confirmedPersonId, mergedCluster.centroid);
+        const updatedVp = await db.voiceprints.get(confirmedPersonId);
+        if (updatedVp) {
+          allVoiceprintsRef.current = [
+            ...allVoiceprintsRef.current.filter((vp) => vp.person_id !== confirmedPersonId),
+            updatedVp,
+          ];
+          confirmedVoiceprintsRef.current.set(confirmedPersonId, updatedVp.centroid);
+        }
       }
 
       if (cid) {
@@ -1764,13 +1788,27 @@ function Home() {
       await db.transcript_segments.update(segmentId, { person_id: personId });
       toast.success(`Marked as ${person.name}`);
 
-      // Add the segment's MFCC to this person's stored voiceprint so the
-      // correction actually teaches the model. Centroid average update only —
-      // no new contribution log entry per correction (avoids the log blowing
-      // up when the user fixes many lines in one session).
+      // Update the person's voiceprint with this segment's MFCC, but only
+      // when the MFCC is genuinely close to the person's existing centroid.
+      // Without this guard a wrong assignment poisons the centroid and then
+      // the 0.72 quick-match routes all future clusters to the wrong person.
       if (segment.mfcc && segment.mfcc.length === 20) {
         try {
-          await recordVoiceprint(personId, segment.mfcc);
+          const existingVp = allVoiceprintsRef.current.find((vp) => vp.person_id === personId);
+          const sim = existingVp
+            ? discriminativeSim(segment.mfcc, existingVp.centroid)
+            : 1.0;
+          if (!existingVp || (Number.isFinite(sim) && sim >= CENTROID_UPDATE_THRESHOLD)) {
+            await recordVoiceprint(personId, segment.mfcc);
+            const updatedVp = await import("@/lib/db").then(({ db: d }) => d.voiceprints.get(personId));
+            if (updatedVp) {
+              allVoiceprintsRef.current = [
+                ...allVoiceprintsRef.current.filter((vp) => vp.person_id !== personId),
+                updatedVp,
+              ];
+              confirmedVoiceprintsRef.current.set(personId, updatedVp.centroid);
+            }
+          }
         } catch (err) {
           console.warn("voiceprint update after reassign failed", err);
         }

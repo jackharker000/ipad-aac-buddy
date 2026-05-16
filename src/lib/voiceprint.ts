@@ -282,6 +282,20 @@ export function cosineSim(a: number[], b: number[]): number {
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
+/** Speaker-discriminative cosine similarity — excludes MFCC coefficient 0.
+ *
+ *  Coefficient 0 reflects energy/loudness and is dominated by mic distance,
+ *  room gain, and AGC — all shared when two speakers use the same iPad. On a
+ *  shared device, including c0 pushes inter-speaker cosine similarity to
+ *  0.88–0.96, well above any practical merge threshold and collapsing all
+ *  speakers into one cluster. Dropping c0 reduces inter-speaker similarity to
+ *  the expected 0.55–0.80 range while keeping intra-speaker similarity at
+ *  0.85–0.97, restoring clean speaker separation. */
+export function discriminativeSim(a: number[], b: number[]): number {
+  if (a.length < 2 || b.length < 2 || a.length !== b.length) return NaN;
+  return cosineSim(a.slice(1), b.slice(1));
+}
+
 /** Merge a new MFCC observation into an existing centroid (running mean). */
 export function mergeIntoCentroid(
   prev: number[] | undefined,
@@ -323,6 +337,28 @@ export async function deleteVoiceprint(personId: string) {
   await db.voiceprints.delete(personId);
 }
 
+/** Add a voiceprint contribution, capping stored entries at `maxPerPerson`.
+ *
+ *  FIFO: when the cap is exceeded the oldest entries (by `ts`) are removed
+ *  first. This prevents centroid drift from accumulating too many samples that
+ *  average out to a generic voice profile and start matching everyone. */
+export async function addContributionWithCap(
+  contribution: import("@/lib/db").VoiceprintContribution,
+  maxPerPerson = 3,
+): Promise<void> {
+  const existing = await db.voiceprint_contributions
+    .where("person_id")
+    .equals(contribution.person_id)
+    .sortBy("ts");
+  const toDelete = existing.length >= maxPerPerson
+    ? existing.slice(0, existing.length - maxPerPerson + 1).map((c) => c.id)
+    : [];
+  if (toDelete.length > 0) {
+    await db.voiceprint_contributions.bulkDelete(toDelete);
+  }
+  await db.voiceprint_contributions.add(contribution);
+}
+
 /** Find best matching person from a candidate set, or null.
  *
  *  When a Voiceprint has `sub_centroids` (multi-modal voice — e.g. calm vs
@@ -338,12 +374,15 @@ export function bestMatch(
   for (const p of prints) {
     if (p.centroid.length !== vector.length) continue;
     if (excludedPersonIds?.has(p.person_id)) continue;
-    let sim = cosineSim(vector, p.centroid);
+    // Use discriminativeSim (drops c0) to match the same metric used for
+    // in-session clustering — prevents stored voiceprints from over-matching
+    // due to shared-mic energy characteristics.
+    let sim = discriminativeSim(vector, p.centroid);
     if (!Number.isFinite(sim)) continue;
     if (p.sub_centroids?.length) {
       for (const sub of p.sub_centroids) {
         if (sub.centroid.length !== vector.length) continue;
-        const subSim = cosineSim(vector, sub.centroid);
+        const subSim = discriminativeSim(vector, sub.centroid);
         if (Number.isFinite(subSim) && subSim > sim) sim = subSim;
       }
     }
@@ -368,7 +407,7 @@ export type RebuildOutcome = {
   aborted: boolean;
 };
 
-const MIN_CONTRIBUTIONS_TO_REBUILD = 5;
+const MIN_CONTRIBUTIONS_TO_REBUILD = 2;
 const MIN_CONTRIBUTIONS_TO_SPLIT = 8;
 const SAFETY_GUARD_THRESHOLD = 0.7;
 const SUB_CENTROID_SPLIT_GAIN = 0.05;
@@ -586,13 +625,11 @@ export class Diarizer {
   private clustersMap = new Map<string, ClusterEntry>();
   private counter = 0;
   private _forceNewOnNext = false;
-  // mergeThreshold is the baseline; actual threshold per cluster adapts to its spread.
-  // 0.87 is intentionally above the typical inter-speaker MFCC cosine similarity
-  // range (0.50–0.80) so that distinct voices reliably get their own cluster.
-  // Same-speaker variation (different mic distance, emotion, noise) typically
-  // stays in 0.78–0.95 — ghost-collapse and pending hysteresis at the caller
-  // layer handle one-off same-speaker ghosts that fall below 0.87.
-  constructor(public mergeThreshold = 0.87) {}
+  // Similarity is computed with discriminativeSim (MFCC[1..], no energy coeff).
+  // With c0 removed, same-speaker sim is ~0.85–0.97, different-speaker is ~0.55–0.80.
+  // 0.82 sits cleanly between those ranges — merges the same speaker across
+  // mic distances/emotions while reliably splitting different speakers.
+  constructor(public mergeThreshold = 0.82) {}
 
   reset() {
     this.clustersMap.clear();
@@ -608,7 +645,7 @@ export class Diarizer {
     let bestLabel: string | null = null;
     let bestSim = -1;
     for (const [label, cluster] of this.clustersMap.entries()) {
-      const sim = cosineSim(mfcc, cluster.centroid);
+      const sim = discriminativeSim(mfcc, cluster.centroid);
       if (!Number.isFinite(sim)) continue;
       if (sim > bestSim) {
         bestSim = sim;
@@ -632,18 +669,11 @@ export class Diarizer {
       isNew = true;
     }
     if (isNew) {
-      // Seed the new cluster once with count=1. Never call mergeUtterance for a
-      // freshly-created cluster — that would inflate count to 2 immediately,
-      // skipping the count<3 guard in thresholdFor and triggering spread tracking
-      // before we have a meaningful centroid estimate.
       this.clustersMap.set(label, { centroid: mfcc.slice(), count: 1, spread: 0 });
     } else {
-      // Centroid guard: only update the running centroid when the utterance is
-      // sufficiently similar to the current centroid. This prevents drift from
-      // noisy or misassigned utterances while still assigning the cluster label.
       const cluster = this.clustersMap.get(label);
       if (cluster) {
-        const preMergeSim = cosineSim(mfcc, cluster.centroid);
+        const preMergeSim = discriminativeSim(mfcc, cluster.centroid);
         if (Number.isFinite(preMergeSim) && preMergeSim >= CENTROID_UPDATE_THRESHOLD) {
           this.mergeUtterance(label, mfcc);
         }
@@ -657,7 +687,7 @@ export class Diarizer {
     let bestLabel: string | null = null;
     let bestSim = -1;
     for (const [label, cluster] of this.clustersMap.entries()) {
-      const sim = cosineSim(mfcc, cluster.centroid);
+      const sim = discriminativeSim(mfcc, cluster.centroid);
       if (!Number.isFinite(sim)) continue;
       if (sim > bestSim) {
         bestSim = sim;
@@ -688,7 +718,7 @@ export class Diarizer {
     const c = this.clustersMap.get(label);
     if (!c || c.count < 3) return this.mergeThreshold;
     const adjusted = this.mergeThreshold + (c.spread - 0.08) * 0.6;
-    return Math.min(0.93, Math.max(0.83, adjusted));
+    return Math.min(0.90, Math.max(0.78, adjusted));
   }
 
   /** Force-assign an MFCC to a specific cluster label. If the cluster doesn't
@@ -705,8 +735,8 @@ export class Diarizer {
       this.clustersMap.set(label, { centroid: mfcc.slice(), count: 1, spread: 0 });
       return { label, sim: 1, isNew: true };
     }
-    const preMergeSim = cosineSim(mfcc, existing.centroid);
-    if (preMergeSim >= CENTROID_UPDATE_THRESHOLD) {
+    const preMergeSim = discriminativeSim(mfcc, existing.centroid);
+    if (Number.isFinite(preMergeSim) && preMergeSim >= CENTROID_UPDATE_THRESHOLD) {
       this.mergeUtterance(label, mfcc);
     }
     return { label, sim: preMergeSim, isNew: false };
@@ -715,7 +745,7 @@ export class Diarizer {
   private mergeUtterance(label: string, mfcc: number[]) {
     const prev = this.clustersMap.get(label);
     const merged = mergeIntoCentroid(prev?.centroid, prev?.count ?? 0, mfcc);
-    const simToCentroid = prev ? cosineSim(mfcc, prev.centroid) : 1.0;
+    const simToCentroid = prev ? discriminativeSim(mfcc, prev.centroid) : 1.0;
     const prevCount = prev?.count ?? 0;
     const rawSpread = prevCount > 0
       ? ((prev!.spread * prevCount) + (1 - (Number.isFinite(simToCentroid) ? simToCentroid : 0))) / (prevCount + 1)

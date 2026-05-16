@@ -6,6 +6,7 @@ import {
   computeMfccMean,
   recordVoiceprint,
   deleteVoiceprint,
+  addContributionWithCap,
 } from "@/lib/voiceprint";
 import { db, type Voiceprint, type VoiceprintContribution } from "@/lib/db";
 import { Button } from "@/components/ui/button";
@@ -102,7 +103,7 @@ export function VoiceSampleRecorder({ personId }: { personId: string }) {
       } else {
         await recordVoiceprint(personId, mfcc);
       }
-      await db.voiceprint_contributions.add({
+      await addContributionWithCap({
         id: crypto.randomUUID(),
         person_id: personId,
         source: "manual",
