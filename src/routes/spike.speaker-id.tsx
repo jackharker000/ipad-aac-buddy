@@ -7,8 +7,6 @@ import { Mic, MicOff, Plus, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Switch } from "@/components/ui/switch";
-
 import { db, type EventRecord, type Person, type Place, type Voiceprint } from "@/lib/db";
 import { useSettings } from "@/lib/settings";
 import { makeEmbedder, type EmbedderKind, type SpeakerEmbedder } from "@/lib/audio/embedder";
@@ -92,7 +90,7 @@ function ClientOnly({
 
 function SpikeApp() {
   const settings = useSettings();
-  const [embedderKind, setEmbedderKind] = useState<EmbedderKind>("mock");
+  const [embedderKind, setEmbedderKind] = useState<EmbedderKind>("transformers");
   const embedderRef = useRef<SpeakerEmbedder | null>(null);
   const [embedderReady, setEmbedderReady] = useState(false);
   const [embedderError, setEmbedderError] = useState<string | null>(null);
@@ -175,18 +173,24 @@ function EmbedderCard({
       <CardHeader>
         <CardTitle>Embedder</CardTitle>
         <CardDescription>
-          ECAPA via onnxruntime-web is the target. The mock embedder keeps the loop working until
-          you drop the ONNX file at <code>public/models/ecapa-tdnn.onnx</code>.
+          The neural embedder runs on-device via onnxruntime-web. Default is a WavLM
+          speaker-verification head from HuggingFace, auto-downloaded (~95 MB) on first use and
+          cached in the browser. Mock is a band-energy fallback for testing the pipeline without the
+          download.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-medium">ONNX ECAPA-TDNN</span>
-          <Switch
-            checked={kind === "onnx-ecapa"}
-            onCheckedChange={(v) => onKindChange(v ? "onnx-ecapa" : "mock")}
-          />
-        </div>
+        <Field label="Backend">
+          <select
+            value={kind}
+            onChange={(e) => onKindChange(e.target.value as EmbedderKind)}
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+          >
+            <option value="transformers">WavLM-SV via transformers.js (recommended)</option>
+            <option value="onnx-ecapa">Self-hosted ONNX at /models/ecapa-tdnn.onnx</option>
+            <option value="mock">Mock (band-energy, debug only)</option>
+          </select>
+        </Field>
         <div className="rounded-md bg-muted px-3 py-2 text-sm">
           {error ? (
             <span className="text-destructive">Embedder failed: {error}</span>
@@ -195,13 +199,20 @@ function EmbedderCard({
               Ready · using <code>{kind}</code>
             </span>
           ) : (
-            <span className="text-muted-foreground">Warming up…</span>
+            <span className="text-muted-foreground">
+              Warming up… first run downloads the model.
+            </span>
           )}
         </div>
         {kind === "mock" && (
           <p className="text-xs text-muted-foreground">
-            Mock embedder is band-energy only — fine for proving the wiring but not for accuracy.
-            Flip the switch once the ECAPA ONNX file is in place.
+            Mock is band-energy only — fine for proving the wiring but won't reliably separate two
+            adult voices.
+          </p>
+        )}
+        {kind === "transformers" && !ready && !error && (
+          <p className="text-xs text-muted-foreground">
+            First load takes ~30–60 s on cell signal (one-time download). Stays cached after that.
           </p>
         )}
       </CardContent>

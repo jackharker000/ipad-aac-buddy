@@ -15,6 +15,8 @@ export interface SpeakerEmbedder {
 export type EmbedderConfig = {
   /** Public path to the ONNX model file. */
   modelPath?: string;
+  /** HuggingFace model id, e.g. "Xenova/wavlm-base-plus-sv". */
+  modelId?: string;
   /** Try WebGPU first, fall back to WASM. */
   preferWebGPU?: boolean;
   /** Expected output embedding dimension. */
@@ -22,13 +24,111 @@ export type EmbedderConfig = {
 };
 
 /**
- * ECAPA-TDNN embedder backed by onnxruntime-web. The model is expected to
- * accept raw audio at 16kHz as a [1, N] Float32 tensor named "wav" and
- * return a [1, dim] Float32 tensor named "embedding".
+ * Neural speaker embedder using @huggingface/transformers (which runs on
+ * onnxruntime-web underneath). The model is downloaded from HuggingFace on
+ * first use and cached in the browser — no manual ONNX file management.
  *
- * If the model uses different input/output names or expects log-Mel
- * features instead of raw audio, swap them in `embed()` below. See
- * `public/models/README.md` for the expected export.
+ * Default model is a WavLM-based speaker-verification head that takes raw
+ * 16kHz audio and returns an x-vector embedding. The model id is
+ * overrideable via `EmbedderConfig.modelId`.
+ */
+export class TransformersSpeakerEmbedder implements SpeakerEmbedder {
+  readonly id = "transformers";
+  readonly dim: number;
+  private modelId: string;
+  private preferWebGPU: boolean;
+  private extractorPromise: Promise<EmbedFn> | null = null;
+
+  constructor(config: EmbedderConfig = {}) {
+    this.modelId = config.modelId ?? "Xenova/wavlm-base-plus-sv";
+    this.preferWebGPU = config.preferWebGPU ?? true;
+    // WavLM-base+SV emits 512-dim x-vectors. Used as a hint; the actual dim
+    // is whatever the model returns.
+    this.dim = config.dim ?? 512;
+  }
+
+  private async getExtractor(): Promise<EmbedFn> {
+    if (this.extractorPromise) return this.extractorPromise;
+    this.extractorPromise = (async () => {
+      const { AutoModel, AutoProcessor, RawAudio } = await import("@huggingface/transformers");
+      const device = this.preferWebGPU && hasWebGPU() ? "webgpu" : "wasm";
+
+      const [processor, model] = await Promise.all([
+        AutoProcessor.from_pretrained(this.modelId),
+        AutoModel.from_pretrained(this.modelId, {
+          device,
+          dtype: "fp32",
+        }),
+      ]);
+
+      return async (waveform: Float32Array) => {
+        const audio = new RawAudio(waveform, 16000);
+        const inputs = await processor(audio);
+        const outputs = await model(inputs);
+        return extractEmbedding(outputs);
+      };
+    })();
+    return this.extractorPromise;
+  }
+
+  async warmup(): Promise<void> {
+    const extract = await this.getExtractor();
+    // 1 s of silence — enough to validate the graph compiles and to download
+    // the model. Don't care about the output.
+    await extract(new Float32Array(16000));
+  }
+
+  async embed(waveform16k: Float32Array): Promise<Float32Array> {
+    const extract = await this.getExtractor();
+    const raw = await extract(waveform16k);
+    return l2Normalize(raw);
+  }
+
+  async dispose(): Promise<void> {
+    this.extractorPromise = null;
+  }
+}
+
+type EmbedFn = (waveform: Float32Array) => Promise<Float32Array>;
+
+function extractEmbedding(outputs: unknown): Float32Array {
+  // transformers.js models return a struct keyed by output name. Speaker
+  // verification heads usually expose `embeddings`; sentence/feature
+  // extractors expose `last_hidden_state` (pool over time). Cover both.
+  const o = outputs as Record<string, { data?: Float32Array; dims?: number[] }>;
+  if (o.embeddings?.data) {
+    return new Float32Array(o.embeddings.data);
+  }
+  if (o.last_hidden_state?.data && o.last_hidden_state.dims) {
+    return meanPool(o.last_hidden_state.data, o.last_hidden_state.dims);
+  }
+  // Fall back: take the first tensor in the output.
+  for (const v of Object.values(o)) {
+    if (v?.data && v.dims) {
+      return v.dims.length >= 3 ? meanPool(v.data, v.dims) : new Float32Array(v.data);
+    }
+  }
+  throw new Error("TransformersSpeakerEmbedder: model returned no recognizable embedding tensor");
+}
+
+function meanPool(data: Float32Array, dims: number[]): Float32Array {
+  // Expecting [1, time, dim]. Mean over the time dim.
+  if (dims.length !== 3) return new Float32Array(data);
+  const [, time, dim] = dims;
+  const out = new Float32Array(dim);
+  for (let t = 0; t < time; t++) {
+    const off = t * dim;
+    for (let i = 0; i < dim; i++) out[i] += data[off + i];
+  }
+  for (let i = 0; i < dim; i++) out[i] /= Math.max(1, time);
+  return out;
+}
+
+/**
+ * ECAPA-TDNN embedder backed by onnxruntime-web directly. Kept as an
+ * escape hatch for users who want to drop in their own ONNX file at
+ * `public/models/ecapa-tdnn.onnx` (raw 16kHz audio input, fixed-dim
+ * embedding output). The Transformers embedder above is the default.
  */
 export class OnnxEcapaEmbedder implements SpeakerEmbedder {
   readonly id = "ecapa-tdnn-onnx";
@@ -58,7 +158,7 @@ export class OnnxEcapaEmbedder implements SpeakerEmbedder {
 
   async warmup(): Promise<void> {
     const session = await this.getSession();
-    const silence = new Float32Array(16000); // 1s of silence
+    const silence = new Float32Array(16000);
     await this.runSession(session, silence);
   }
 
@@ -94,21 +194,15 @@ export class OnnxEcapaEmbedder implements SpeakerEmbedder {
 }
 
 /**
- * Deterministic mock embedder. Useful for testing the matcher and the UI
- * without the ONNX model — it derives a stable pseudo-embedding from the
- * waveform's spectral shape. Same audio in, same embedding out.
- *
- * Do NOT ship this in production speaker-ID — accuracy is a fraction of
- * the real model. It exists so the spike loop works end-to-end on day one.
+ * Deterministic mock embedder. Stable per audio input so the matcher and
+ * UI can be exercised without any model download. Do NOT ship; speaker
+ * separation quality is a fraction of the real model.
  */
 export class MockSpectralEmbedder implements SpeakerEmbedder {
   readonly id = "mock-spectral";
   readonly dim = 64;
 
   async embed(waveform16k: Float32Array): Promise<Float32Array> {
-    // Simple log-magnitude spectrum bucketed into `dim` bins.
-    // Stable per speaker because spectral envelope tracks voice timbre,
-    // but trivially fooled by background noise / shared environments.
     const out = new Float32Array(this.dim);
     const bins = this.dim;
     const fftSize = 1024;
@@ -128,9 +222,6 @@ export class MockSpectralEmbedder implements SpeakerEmbedder {
 }
 
 function naiveSpectrum(frame: Float32Array, bins: number): Float32Array {
-  // Crude band-energy estimator: split the frame into `bins` time bands and
-  // take RMS of each. Not a real FFT, but it tracks the energy envelope and
-  // is plenty for distinguishing two speakers in the mock path.
   const out = new Float32Array(bins);
   const bandSize = Math.max(1, Math.floor(frame.length / bins));
   for (let b = 0; b < bins; b++) {
@@ -151,8 +242,15 @@ function hasWebGPU(): boolean {
   );
 }
 
-export type EmbedderKind = "onnx-ecapa" | "mock";
+export type EmbedderKind = "transformers" | "onnx-ecapa" | "mock";
 
 export function makeEmbedder(kind: EmbedderKind, config?: EmbedderConfig): SpeakerEmbedder {
-  return kind === "onnx-ecapa" ? new OnnxEcapaEmbedder(config) : new MockSpectralEmbedder();
+  switch (kind) {
+    case "transformers":
+      return new TransformersSpeakerEmbedder(config);
+    case "onnx-ecapa":
+      return new OnnxEcapaEmbedder(config);
+    case "mock":
+      return new MockSpectralEmbedder();
+  }
 }
