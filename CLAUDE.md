@@ -1,12 +1,12 @@
 # Parley — AAC Reply Copilot for James
 
-This file orients Claude Code on the project. Read it first, then `Parley_Approach_and_Options.md` for the full reasoning. The screen tour (`Parley_Screens_Annotated.pdf`) and design brief (`Parley_Design_Brief.pdf`) describe the *prototype* and pin the locked UX — rebuild the engine, not the UX.
+This file orients Claude Code on the project. Read it first, then `Parley_Approach_and_Options.md` for the full reasoning. The screen tour (`Parley_Screens_Annotated.pdf`) and design brief (`Parley_Design_Brief.pdf`) describe the _prototype_ and pin the locked UX — rebuild the engine, not the UX.
 
 ## What this is
 
 Parley is an iPad-first AAC (Augmentative and Alternative Communication) copilot for James, a non-verbal man with cerebral palsy and impaired motor control. It listens to a conversation, transcribes in real time, identifies who is speaking, and offers tappable, contextually-aware reply suggestions that James speaks aloud via TTS in a cloned version of his own voice.
 
-A prototype was built in Lovable but is too slow and unreliable. This is a clean rebuild. The functional design (cockpit layout, mood selector, quick phrases, speaker panel states, helper tabs, settings tabs) is sound and stays as designed. The *engine* is what changes.
+A prototype was built in Lovable but is too slow and unreliable. This is a clean rebuild. The functional design (cockpit layout, mood selector, quick phrases, speaker panel states, helper tabs, settings tabs) is sound and stays as designed. The _engine_ is what changes.
 
 ## Hard context (decided, do not relitigate without asking)
 
@@ -30,7 +30,7 @@ A prototype was built in Lovable but is too slow and unreliable. This is a clean
 
 - **Silero VAD** (ONNX) for clean segmentation. Replaces energy-based silence detection.
 - **ECAPA-TDNN (or ECAPA2)** exported to ONNX, run via **ONNX Runtime Web + WebGPU**. ~192-dim speaker embeddings, on-device. Replaces the prototype's mean-MFCC + cosine.
-- **Enrollment** per known person — multiple short, clean samples captured *in the room James uses* (not long studio takes). Centroid = mean of enrolled embeddings.
+- **Enrollment** per known person — multiple short, clean samples captured _in the room James uses_ (not long studio takes). Centroid = mean of enrolled embeddings.
 - **Bayesian context-prior matcher**:
   ```
   posterior(person) ∝ likelihood(voice | person) × prior(person | place, event, recent speakers)
@@ -97,19 +97,21 @@ Tier 1 (style-evidence feedback loop), Tier 2 (post-conversation re-diarize + vo
 ## Reference files in this folder
 
 - `Parley_Approach_and_Options.md` — full rationale for every decision above. **Master plan.**
-- `Parley_Design_Brief.pdf` — original functional spec from the prototype. Use for *what* to build (functions/layout) — ignore the prototype's mean-MFCC / Meyda / Lovable-Gateway / Supabase tech choices.
+- `Parley_Design_Brief.pdf` — original functional spec from the prototype. Use for _what_ to build (functions/layout) — ignore the prototype's mean-MFCC / Meyda / Lovable-Gateway / Supabase tech choices.
 - `Parley_Screens_Annotated.pdf` — annotated screen-by-screen UI tour. UX source of truth.
 
-## Decisions still open (flag before building)
+## Decisions
 
-- **Capacitor wrap timing.** Build PWA-first, wrap early enough to test mic + AudioWorklet + WebGPU on real hardware. When is "early enough"?
-- **STT.** Stay on Scribe long-term, or spike Apple on-device once we've wrapped?
-- **Backup strategy.** Single-user means we can go light — encrypted file export to Files / iCloud Drive, or keep a minimal cloud backup endpoint?
-- **Default models.** Which Claude (Haiku vs Sonnet) and which OpenAI (mini vs flagship) sit in the fast / smart slots out of the box?
+These were open in the approach doc; resolved on 21 May 2026:
+
+- **Capacitor wrap timing — PWA first.** Ship the working web app first; wrap with Capacitor for iPad once the core (speaker-ID + live cockpit) is solid. Test mic + AudioWorklet + WebGPU on the real device as soon as the wrap exists.
+- **STT — stay on ElevenLabs Scribe.** Revisit Apple on-device only after the Capacitor wrap is in place.
+- **Backup — encrypted local file export, no cloud backend.** Single-user means we can export Dexie to an encrypted file the user saves via the Files app / iCloud Drive on their own. No server-side backup.
+- **Default models.** Provider default is **Claude**. Fast slot = Claude Haiku (live suggestions, expand). Smart slot = Claude Sonnet (summaries, drafts, event prep, profile enrichment). **OpenAI** is the switchable alternative — a mini model in the fast slot, a flagship model in the smart slot. All API keys stay server-side; the client only knows which provider name to send to which `/api/*` route.
 
 ## Working agreement
 
 - Don't change the agreed UX without flagging it.
 - Keep API keys out of client code.
 - When in doubt about scope, remember: single user, speaker-ID first, latency always.
-- Anything *removed* from the prototype design (MFCC, Lovable, Supabase, 9-version schema, 1.5s polling, ScriptProcessorNode, `synthesizeSpeech` returning a full base64 MP3) is a deliberate downgrade-then-replace, not a regression. Don't re-add without asking.
+- Anything _removed_ from the prototype design (MFCC, Lovable, Supabase, 9-version schema, 1.5s polling, ScriptProcessorNode, `synthesizeSpeech` returning a full base64 MP3) is a deliberate downgrade-then-replace, not a regression. Don't re-add without asking.

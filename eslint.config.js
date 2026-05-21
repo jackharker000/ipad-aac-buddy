@@ -12,6 +12,7 @@ export default tseslint.config(
       ".output",
       ".vinxi",
       ".tanstack",
+      "public",
       "legacy-src",
       "legacy-supabase",
       "legacy-lovable",

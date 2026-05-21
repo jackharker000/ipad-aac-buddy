@@ -1,5 +1,5 @@
 import { cosine, decodeEmbedding, softmax } from "./utils";
-import type { Person, VoiceSample } from "@/lib/db";
+import type { Person, Voiceprint } from "@/lib/db";
 
 /**
  * Bayesian-ish speaker matcher.
@@ -22,23 +22,24 @@ import type { Person, VoiceSample } from "@/lib/db";
  */
 
 export type Candidate = {
-  personId: string | null; // null = "unknown" candidate
+  /** personId, or null for the synthetic "unknown" candidate. */
+  personId: string | null;
   name: string;
   /** Cosine similarity in [-1, 1]; undefined for the unknown candidate. */
   similarity?: number;
-  /** Multiplicative prior (unnormalized). */
+  /** Multiplicative prior (unnormalized) — for debugging the prior shift. */
   prior: number;
   /** Posterior probability after combining likelihood × prior. */
   posterior: number;
 };
 
 export type MatchContext = {
-  /** People with at least one enrolled voice sample. */
+  /** Enrolled people (Voiceprint row present). */
   people: Person[];
-  /** Centroid per enrolled person (computed by `centroidsFromSamples`). */
+  /** Centroid per enrolled person, keyed by personId. */
   centroidByPersonId: Map<string, Float32Array>;
-  /** People associated with the current location. */
-  locationPersonIds?: string[];
+  /** People associated with the current place. */
+  placePersonIds?: string[];
   /** People expected at the current event. */
   eventPersonIds?: string[];
   /** Recently-heard person IDs, newest first. */
@@ -46,7 +47,7 @@ export type MatchContext = {
   /**
    * Probability mass to reserve for "speaker is not enrolled" before
    * normalization. Higher = matcher errs toward asking James who it is.
-   * 0.0 disables; 0.2 is a sensible default early on.
+   * 0.2 is a sensible default early on.
    */
   unknownReserve?: number;
   /** Softmax temperature for converting similarity → likelihood. */
@@ -65,20 +66,19 @@ export function match(embedding: Float32Array, context: MatchContext): Candidate
   );
 
   // Likelihood = softmax over similarities with a sharp temperature so that
-  // a clearly-better match dominates. Use temp 0.07 by default.
+  // a clearly-better match dominates. 0.07 is a reasonable starting point;
+  // tune once we have real ECAPA numbers from the spike.
   const likelihoods = softmax(similarities, context.temperature ?? 0.07);
 
   const priors = enrolled.map((p) => computePrior(p.id, context));
   const priorSum = priors.reduce((a, b) => a + b, 0) || 1;
   const normalizedPriors = priors.map((p) => p / priorSum);
 
-  // Unnormalized posteriors over enrolled people.
   const unnormalized = enrolled.map((_, i) => likelihoods[i] * normalizedPriors[i]);
 
-  // Carve out a slot for the unknown candidate. Its prior is `unknownReserve`
-  // and its likelihood is the average similarity-induced "leftover" mass —
-  // i.e. how flat the distribution is. A flat distribution (no clear match)
-  // should boost the unknown candidate.
+  // Carve out a slot for the unknown candidate. Its likelihood is the
+  // "leftover" mass — i.e. how flat the top similarity is. A weak top
+  // match boosts the unknown candidate.
   const unknownReserve = context.unknownReserve ?? 0.2;
   const topSim = Math.max(...similarities);
   const unknownLikelihood = 1 - clamp(topSim, 0, 1);
@@ -108,7 +108,7 @@ export function match(embedding: Float32Array, context: MatchContext): Candidate
 
 function computePrior(personId: string, context: MatchContext): number {
   let prior = 1;
-  if (context.locationPersonIds?.includes(personId)) prior *= 2.0;
+  if (context.placePersonIds?.includes(personId)) prior *= 2.0;
   if (context.eventPersonIds?.includes(personId)) prior *= 2.5;
 
   // Recency bias: decay with rank. Most-recent gets 1.6×, second 1.3×, third 1.15×.
@@ -127,27 +127,13 @@ function clamp(v: number, lo: number, hi: number): number {
 }
 
 /**
- * Compute one centroid per person from the persisted voice samples. Each
- * stored sample is already L2-normalized; the centroid is the mean of the
- * samples (NOT renormalized — we let the magnitude carry confidence info).
+ * Build the matcher's centroid map straight from the Voiceprint rows.
+ * Constant-time lookup at match time; the running mean lives in `enrollment.ts`.
  */
-export function centroidsFromSamples(samples: VoiceSample[]): Map<string, Float32Array> {
-  const grouped = new Map<string, Float32Array[]>();
-  for (const s of samples) {
-    const arr = grouped.get(s.personId) ?? [];
-    arr.push(decodeEmbedding(s.embedding));
-    grouped.set(s.personId, arr);
-  }
+export function centroidsFromVoiceprints(voiceprints: Voiceprint[]): Map<string, Float32Array> {
   const out = new Map<string, Float32Array>();
-  for (const [personId, vecs] of grouped) {
-    const dim = vecs[0].length;
-    const centroid = new Float32Array(dim);
-    for (const v of vecs) {
-      if (v.length !== dim) continue;
-      for (let i = 0; i < dim; i++) centroid[i] += v[i];
-    }
-    for (let i = 0; i < dim; i++) centroid[i] /= vecs.length;
-    out.set(personId, centroid);
+  for (const vp of voiceprints) {
+    out.set(vp.personId, decodeEmbedding(vp.centroid));
   }
   return out;
 }
