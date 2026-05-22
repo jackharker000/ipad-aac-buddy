@@ -2,7 +2,17 @@ node_modules
 dist
 .output
 .vinxi
+.tanstack
+public
 pnpm-lock.yaml
 package-lock.json
 bun.lock
 routeTree.gen.ts
+legacy-src
+legacy-supabase
+legacy-lovable
+
+# Planning docs — owned by the user, don't normalise emphasis style.
+Parley_Approach_and_Options.md
+Parley_Design_Brief.pdf
+Parley_Screens_Annotated.pdf
