@@ -12,13 +12,18 @@ import { useSettings } from "@/lib/settings";
 import { makeEmbedder, type EmbedderKind, type SpeakerEmbedder } from "@/lib/audio/embedder";
 import { startCapture, type Capture } from "@/lib/audio/capture";
 import { SileroVAD, type VADSegment } from "@/lib/audio/vad";
-import { deleteAllContributionsForPerson, enrollSample } from "@/lib/audio/enrollment";
+import {
+  deleteAllContributionsForPerson,
+  enrollSample,
+  resetAllEnrolments,
+} from "@/lib/audio/enrollment";
 import {
   centroidsFromVoiceprints,
   match,
   type Candidate,
   type MatchContext,
 } from "@/lib/audio/matcher";
+import { OnlineDiarizer, type DiarAssignment, type DiarCluster } from "@/lib/audio/diarizer";
 import { rms } from "@/lib/audio/utils";
 import { cn } from "@/lib/cn";
 
@@ -31,13 +36,32 @@ const EMPTY_VOICEPRINTS: Voiceprint[] = [];
 const EMPTY_PLACES: Place[] = [];
 const EMPTY_EVENTS: EventRecord[] = [];
 
-type Detection = {
+type EngineMode = "matcher" | "diarization";
+
+type MatcherDetection = {
+  kind: "matcher";
   id: string;
   capturedAt: number;
   durationMs: number;
   rms: number;
   candidates: Candidate[];
 };
+
+type DiarDetection = {
+  kind: "diarization";
+  id: string;
+  capturedAt: number;
+  durationMs: number;
+  rms: number;
+  assignment: DiarAssignment;
+};
+
+type Detection = MatcherDetection | DiarDetection;
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms.toFixed(0)} ms`;
+  return `${(ms / 1000).toFixed(1)} s`;
+}
 
 function SpeakerIdSpike() {
   return (
@@ -123,10 +147,13 @@ function SpikeApp() {
 
   const [contextPlaceId, setContextPlaceId] = useState<string>("");
   const [contextEventId, setContextEventId] = useState<string>("");
+  const [mode, setMode] = useState<EngineMode>("matcher");
 
   return (
     <div className="space-y-6">
       <LiveListenCard
+        mode={mode}
+        onModeChange={setMode}
         embedderRef={embedderRef}
         embedderReady={embedderReady}
         contextPlaceId={contextPlaceId}
@@ -148,8 +175,12 @@ function SpikeApp() {
           onPlaceChange={setContextPlaceId}
           onEventChange={setContextEventId}
         />
-        <EnrollmentCard embedderRef={embedderRef} embedderReady={embedderReady} />
-        <PeopleCard />
+        {mode === "matcher" && (
+          <>
+            <EnrollmentCard embedderRef={embedderRef} embedderReady={embedderReady} />
+            <PeopleCard />
+          </>
+        )}
       </div>
     </div>
   );
@@ -462,13 +493,30 @@ function PeopleCard() {
     toast.success(`Deleted ${p.name}`);
   };
 
+  const onResetAll = async () => {
+    if (people.length === 0) return;
+    if (!confirm(`Delete all ${people.length} people and every voiceprint?`)) return;
+    await resetAllEnrolments();
+    toast.success("Enrolments cleared");
+  };
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Enrolled people</CardTitle>
-        <CardDescription>
-          Centroid = mean of all contributions, L2-normalized at capture.
-        </CardDescription>
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <CardTitle>Enrolled people</CardTitle>
+            <CardDescription>
+              Centroid = mean of all contributions, L2-normalized at capture.
+            </CardDescription>
+          </div>
+          {people.length > 0 && (
+            <Button variant="outline" size="sm" onClick={onResetAll}>
+              <Trash2 />
+              Reset all
+            </Button>
+          )}
+        </div>
       </CardHeader>
       <CardContent>
         {people.length === 0 ? (
@@ -507,6 +555,8 @@ function PeopleCard() {
 type VADState = "idle" | "listening" | "speaking";
 
 function LiveListenCard({
+  mode,
+  onModeChange,
   embedderRef,
   embedderReady,
   contextPlaceId,
@@ -514,6 +564,8 @@ function LiveListenCard({
   acceptThreshold,
   askThreshold,
 }: {
+  mode: EngineMode;
+  onModeChange: (mode: EngineMode) => void;
   embedderRef: React.RefObject<SpeakerEmbedder | null>;
   embedderReady: boolean;
   contextPlaceId: string;
@@ -524,7 +576,13 @@ function LiveListenCard({
   const [vadState, setVadState] = useState<VADState>("idle");
   const [detections, setDetections] = useState<Detection[]>([]);
   const [recentSpeakers, setRecentSpeakers] = useState<string[]>([]);
+  const [clusterSnapshot, setClusterSnapshot] = useState<DiarCluster[]>([]);
   const vadRef = useRef<SileroVAD | null>(null);
+  const diarizerRef = useRef<OnlineDiarizer | null>(null);
+  const modeRef = useRef(mode);
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
 
   const people = useLiveQuery(() => db().people.toArray(), [], EMPTY_PEOPLE);
   const voiceprints = useLiveQuery(() => db().voiceprints.toArray(), [], EMPTY_VOICEPRINTS);
@@ -532,6 +590,11 @@ function LiveListenCard({
   const events = useLiveQuery(() => db().events.toArray(), [], EMPTY_EVENTS);
 
   const centroidByPersonId = useMemo(() => centroidsFromVoiceprints(voiceprints), [voiceprints]);
+  const sampleCountByPersonId = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const vp of voiceprints) m.set(vp.personId, vp.sampleCount);
+    return m;
+  }, [voiceprints]);
 
   const matchContext = useMemo<MatchContext>(() => {
     const place = places.find((p) => p.id === contextPlaceId);
@@ -548,8 +611,8 @@ function LiveListenCard({
     };
   }, [people, centroidByPersonId, places, events, contextPlaceId, contextEventId, recentSpeakers]);
 
-  // Hold the latest matchContext + embedder in refs so the VAD callback
-  // (registered once on start) always reads the freshest values.
+  // Hold the latest matchContext in a ref so the VAD callback (registered
+  // once on start) always reads the freshest value.
   const contextRef = useRef(matchContext);
   useEffect(() => {
     contextRef.current = matchContext;
@@ -561,23 +624,40 @@ function LiveListenCard({
     if (!emb) return;
     try {
       const embedding = await emb.embed(segment.audio);
-      const candidates = match(embedding, contextRef.current);
+      const sampleRms = rms(segment.audio);
 
-      const detection: Detection = {
-        id: nanoid(),
-        capturedAt: Date.now(),
-        durationMs: segment.durationMs,
-        rms: rms(segment.audio),
-        candidates,
-      };
-      setDetections((d) => [detection, ...d].slice(0, 30));
+      if (modeRef.current === "matcher") {
+        const candidates = match(embedding, contextRef.current);
+        const detection: MatcherDetection = {
+          kind: "matcher",
+          id: nanoid(),
+          capturedAt: Date.now(),
+          durationMs: segment.durationMs,
+          rms: sampleRms,
+          candidates,
+        };
+        setDetections((d) => [detection, ...d].slice(0, 30));
 
-      const winner = candidates[0];
-      if (winner.personId && winner.posterior >= acceptThreshold) {
-        setRecentSpeakers((curr) => {
-          const filtered = curr.filter((id) => id !== winner.personId);
-          return [winner.personId!, ...filtered].slice(0, 5);
-        });
+        const winner = candidates[0];
+        if (winner.personId && winner.posterior >= acceptThreshold) {
+          setRecentSpeakers((curr) => {
+            const filtered = curr.filter((id) => id !== winner.personId);
+            return [winner.personId!, ...filtered].slice(0, 5);
+          });
+        }
+      } else {
+        if (!diarizerRef.current) diarizerRef.current = new OnlineDiarizer();
+        const assignment = diarizerRef.current.assign(embedding);
+        const detection: DiarDetection = {
+          kind: "diarization",
+          id: nanoid(),
+          capturedAt: Date.now(),
+          durationMs: segment.durationMs,
+          rms: sampleRms,
+          assignment,
+        };
+        setDetections((d) => [detection, ...d].slice(0, 30));
+        setClusterSnapshot(diarizerRef.current.getClusters());
       }
     } catch (err) {
       toast.error(`Embed failed: ${formatError(err)}`);
@@ -610,6 +690,23 @@ function LiveListenCard({
     setVadState("idle");
   };
 
+  const resetClusters = () => {
+    diarizerRef.current?.reset();
+    setClusterSnapshot([]);
+    setDetections((d) => d.filter((x) => x.kind !== "diarization"));
+    toast.success("Clusters reset");
+  };
+
+  const handleModeChange = (next: EngineMode) => {
+    onModeChange(next);
+    // Different output shapes — clear the feed when switching modes so the
+    // verdict card doesn't render the wrong kind for an instant.
+    setDetections([]);
+    setRecentSpeakers([]);
+    diarizerRef.current?.reset();
+    setClusterSnapshot([]);
+  };
+
   useEffect(() => {
     return () => {
       vadRef.current?.destroy();
@@ -623,8 +720,18 @@ function LiveListenCard({
       <CardHeader>
         <CardTitle>Listen + match</CardTitle>
         <CardDescription>
-          Each VAD segment is embedded and ranked against your enrolled voiceprints. Posteriors fold
-          the cosine likelihood in with the location / event / recency prior.
+          {mode === "matcher" ? (
+            <>
+              Each VAD segment is embedded and ranked against your enrolled voiceprints. Posteriors
+              fold the cosine likelihood in with the location / event / recency prior.
+            </>
+          ) : (
+            <>
+              Each VAD segment is embedded and clustered on the fly — no prior enrolment. Speakers
+              are labelled A, B, C as they're first heard. Proves the embedder discriminates without
+              any setup.
+            </>
+          )}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -641,15 +748,24 @@ function LiveListenCard({
             </Button>
           )}
           <VadStateBadge state={vadState} />
-          <div className="rounded-md bg-muted px-3 py-1.5 text-xs text-muted-foreground">
-            confirm @ {(acceptThreshold * 100).toFixed(0)}% · ask @{" "}
-            {(askThreshold * 100).toFixed(0)}%
-          </div>
-          {recentSpeakers.length > 0 && (
+          <ModeToggle mode={mode} onChange={handleModeChange} disabled={vadState !== "idle"} />
+          {mode === "matcher" && (
+            <div className="rounded-md bg-muted px-3 py-1.5 text-xs text-muted-foreground">
+              confirm @ {(acceptThreshold * 100).toFixed(0)}% · ask @{" "}
+              {(askThreshold * 100).toFixed(0)}%
+            </div>
+          )}
+          {mode === "matcher" && recentSpeakers.length > 0 && (
             <div className="rounded-md bg-muted px-3 py-1.5 text-xs text-muted-foreground">
               recent:{" "}
               {recentSpeakers.map((id) => people.find((p) => p.id === id)?.name ?? id).join(" → ")}
             </div>
+          )}
+          {mode === "diarization" && clusterSnapshot.length > 0 && (
+            <Button variant="outline" size="sm" onClick={resetClusters}>
+              <Trash2 />
+              Reset clusters
+            </Button>
           )}
         </div>
 
@@ -657,7 +773,12 @@ function LiveListenCard({
           detection={topDetection}
           acceptThreshold={acceptThreshold}
           askThreshold={askThreshold}
+          sampleCountByPersonId={sampleCountByPersonId}
         />
+
+        {mode === "diarization" && clusterSnapshot.length > 0 && (
+          <ClustersList clusters={clusterSnapshot} />
+        )}
 
         <div className="space-y-2">
           <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -674,12 +795,60 @@ function LiveListenCard({
                 detection={d}
                 acceptThreshold={acceptThreshold}
                 askThreshold={askThreshold}
+                sampleCountByPersonId={sampleCountByPersonId}
               />
             ))
           )}
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+function ModeToggle({
+  mode,
+  onChange,
+  disabled,
+}: {
+  mode: EngineMode;
+  onChange: (mode: EngineMode) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="inline-flex items-center gap-2">
+      <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        Mode
+      </span>
+      <select
+        value={mode}
+        onChange={(e) => onChange(e.target.value as EngineMode)}
+        disabled={disabled}
+        className="rounded-md border border-input bg-background px-2 py-1 text-xs disabled:opacity-50"
+      >
+        <option value="matcher">Identify enrolled</option>
+        <option value="diarization">Live diarize (no enrol)</option>
+      </select>
+    </div>
+  );
+}
+
+function ClustersList({ clusters }: { clusters: DiarCluster[] }) {
+  return (
+    <div className="rounded-lg border border-border bg-muted/40 p-3">
+      <p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        Clusters ({clusters.length})
+      </p>
+      <ul className="space-y-1 text-sm">
+        {clusters.map((c) => (
+          <li key={c.id} className="flex items-center justify-between">
+            <span className="font-medium">{c.label}</span>
+            <span className="text-xs text-muted-foreground">
+              {c.sampleCount} {c.sampleCount === 1 ? "utterance" : "utterances"}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -729,10 +898,12 @@ function CurrentVerdict({
   detection,
   acceptThreshold,
   askThreshold,
+  sampleCountByPersonId,
 }: {
   detection: Detection | undefined;
   acceptThreshold: number;
   askThreshold: number;
+  sampleCountByPersonId: Map<string, number>;
 }) {
   if (!detection) {
     return (
@@ -741,43 +912,93 @@ function CurrentVerdict({
       </div>
     );
   }
-  const top = detection.candidates[0];
-  const v = verdictFor(top, acceptThreshold, askThreshold);
+
+  if (detection.kind === "matcher") {
+    const top = detection.candidates[0];
+    const v = verdictFor(top, acceptThreshold, askThreshold);
+    return (
+      <div className="rounded-xl border border-border bg-card p-5">
+        <div className="flex items-baseline justify-between gap-4">
+          <div>
+            <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium", verdictColor(v))}>
+              {v}
+            </span>
+            <div className="mt-2 text-2xl font-semibold tracking-tight">{top.name}</div>
+            <div className="text-sm text-muted-foreground">
+              posterior {(top.posterior * 100).toFixed(0)}%
+              {top.similarity !== undefined && <> · sim {(top.similarity * 100).toFixed(0)}%</>} ·
+              prior ×{top.prior.toFixed(2)}
+              {top.personId && sampleCountByPersonId.has(top.personId) && (
+                <> · {sampleCountByPersonId.get(top.personId)} samples</>
+              )}
+            </div>
+          </div>
+          <div className="text-right text-xs text-muted-foreground">
+            segment {formatDuration(detection.durationMs)}
+            <br />
+            rms {detection.rms.toFixed(3)}
+          </div>
+        </div>
+
+        <div className="mt-4 space-y-1">
+          {detection.candidates.map((c) => (
+            <PosteriorBar
+              key={c.personId ?? "unknown"}
+              candidate={c}
+              samples={c.personId ? sampleCountByPersonId.get(c.personId) : undefined}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // diarization
+  const a = detection.assignment;
   return (
     <div className="rounded-xl border border-border bg-card p-5">
       <div className="flex items-baseline justify-between gap-4">
         <div>
-          <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium", verdictColor(v))}>
-            {v}
+          <span
+            className={cn(
+              "rounded-full px-2 py-0.5 text-xs font-medium",
+              a.isNew ? "bg-accent text-accent-foreground" : "bg-muted text-foreground",
+            )}
+          >
+            {a.isNew ? "new cluster" : "matched"}
           </span>
-          <div className="mt-2 text-2xl font-semibold tracking-tight">{top.name}</div>
+          <div className="mt-2 text-2xl font-semibold tracking-tight">{a.cluster.label}</div>
           <div className="text-sm text-muted-foreground">
-            posterior {(top.posterior * 100).toFixed(0)}%
-            {top.similarity !== undefined && <> · sim {(top.similarity * 100).toFixed(0)}%</>} ·
-            prior ×{top.prior.toFixed(2)}
+            similarity {(a.similarity * 100).toFixed(0)}% · {a.cluster.sampleCount}{" "}
+            {a.cluster.sampleCount === 1 ? "utterance" : "utterances"} in cluster
           </div>
         </div>
         <div className="text-right text-xs text-muted-foreground">
-          {detection.durationMs.toFixed(0)} ms
+          segment {formatDuration(detection.durationMs)}
           <br />
           rms {detection.rms.toFixed(3)}
         </div>
       </div>
 
-      <div className="mt-4 space-y-1">
-        {detection.candidates.map((c) => (
-          <PosteriorBar key={c.personId ?? "unknown"} candidate={c} />
-        ))}
-      </div>
+      {a.ranked.length > 1 && (
+        <div className="mt-4 space-y-1">
+          {a.ranked.map(({ cluster, similarity }) => (
+            <SimilarityBar key={cluster.id} label={cluster.label} similarity={similarity} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-function PosteriorBar({ candidate }: { candidate: Candidate }) {
+function PosteriorBar({ candidate, samples }: { candidate: Candidate; samples?: number }) {
   const pct = Math.max(0, Math.min(100, Math.round(candidate.posterior * 100)));
   return (
     <div className="flex items-center gap-3 text-xs">
-      <span className="w-32 truncate text-foreground">{candidate.name}</span>
+      <span className="w-32 shrink-0 truncate text-foreground">
+        {candidate.name}
+        {samples !== undefined && <span className="ml-1 text-muted-foreground">·{samples}</span>}
+      </span>
       <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-muted">
         <div
           className={cn(
@@ -792,43 +1013,91 @@ function PosteriorBar({ candidate }: { candidate: Candidate }) {
   );
 }
 
+function SimilarityBar({ label, similarity }: { label: string; similarity: number }) {
+  const pct = Math.max(0, Math.min(100, Math.round(similarity * 100)));
+  return (
+    <div className="flex items-center gap-3 text-xs">
+      <span className="w-32 shrink-0 truncate text-foreground">{label}</span>
+      <div className="relative h-2 flex-1 overflow-hidden rounded-full bg-muted">
+        <div
+          className="absolute inset-y-0 left-0 rounded-full bg-accent"
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className="w-10 text-right text-muted-foreground">{pct}%</span>
+    </div>
+  );
+}
+
 function DetectionRow({
   detection,
   acceptThreshold,
   askThreshold,
+  sampleCountByPersonId,
 }: {
   detection: Detection;
   acceptThreshold: number;
   askThreshold: number;
+  sampleCountByPersonId: Map<string, number>;
 }) {
-  const top = detection.candidates[0];
-  const v = verdictFor(top, acceptThreshold, askThreshold);
+  if (detection.kind === "matcher") {
+    const top = detection.candidates[0];
+    const v = verdictFor(top, acceptThreshold, askThreshold);
+    const topSamples = top.personId ? sampleCountByPersonId.get(top.personId) : undefined;
+    return (
+      <div className="rounded-lg border border-border bg-card p-3">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium", verdictColor(v))}>
+              {v}
+            </span>
+            <span className="font-medium">{top.name}</span>
+            <span className="text-xs text-muted-foreground">
+              {(top.posterior * 100).toFixed(0)}%
+              {top.similarity !== undefined && <> · sim {(top.similarity * 100).toFixed(0)}%</>}
+              {topSamples !== undefined && <> · {topSamples} samples</>}
+            </span>
+          </div>
+          <div className="text-xs text-muted-foreground">
+            segment {formatDuration(detection.durationMs)} · rms {detection.rms.toFixed(3)}
+          </div>
+        </div>
+        {detection.candidates.length > 1 && (
+          <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
+            {detection.candidates.slice(1, 4).map((c, i) => (
+              <span key={`${c.personId ?? "unk"}-${i}`} className="rounded bg-muted px-2 py-0.5">
+                {c.name} {(c.posterior * 100).toFixed(0)}%
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // diarization
+  const a = detection.assignment;
   return (
     <div className="rounded-lg border border-border bg-card p-3">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3">
-          <span className={cn("rounded-full px-2 py-0.5 text-xs font-medium", verdictColor(v))}>
-            {v}
+          <span
+            className={cn(
+              "rounded-full px-2 py-0.5 text-xs font-medium",
+              a.isNew ? "bg-accent text-accent-foreground" : "bg-muted text-foreground",
+            )}
+          >
+            {a.isNew ? "new" : "→"}
           </span>
-          <span className="font-medium">{top.name}</span>
+          <span className="font-medium">{a.cluster.label}</span>
           <span className="text-xs text-muted-foreground">
-            {(top.posterior * 100).toFixed(0)}%
-            {top.similarity !== undefined && <> · sim {(top.similarity * 100).toFixed(0)}%</>}
+            sim {(a.similarity * 100).toFixed(0)}% · cluster has {a.cluster.sampleCount}
           </span>
         </div>
         <div className="text-xs text-muted-foreground">
-          {detection.durationMs.toFixed(0)} ms · rms {detection.rms.toFixed(3)}
+          segment {formatDuration(detection.durationMs)} · rms {detection.rms.toFixed(3)}
         </div>
       </div>
-      {detection.candidates.length > 1 && (
-        <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
-          {detection.candidates.slice(1, 4).map((c, i) => (
-            <span key={`${c.personId ?? "unk"}-${i}`} className="rounded bg-muted px-2 py-0.5">
-              {c.name} {(c.posterior * 100).toFixed(0)}%
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

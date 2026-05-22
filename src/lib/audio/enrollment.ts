@@ -117,3 +117,22 @@ export async function deleteAllContributionsForPerson(personId: string): Promise
   await db().voiceprintContributions.bulkDelete(samples.map((s) => s.id));
   await db().voiceprints.delete(personId);
 }
+
+/**
+ * Hard reset for the spike: drop every person, every voiceprint, every
+ * contribution. Lets the user wipe a session's enrolments in one tap so
+ * they can re-enrol cleanly without picking through the per-person delete.
+ */
+export async function resetAllEnrolments(): Promise<void> {
+  await db().transaction(
+    "rw",
+    db().people,
+    db().voiceprints,
+    db().voiceprintContributions,
+    async () => {
+      await db().voiceprintContributions.clear();
+      await db().voiceprints.clear();
+      await db().people.clear();
+    },
+  );
+}
