@@ -66,10 +66,7 @@ export class TransformersSpeakerEmbedder implements SpeakerEmbedder {
       const device = chooseDevice(this.preferWebGPU);
 
       const processor = await AutoProcessor.from_pretrained(this.modelId);
-      const model = await AutoModel.from_pretrained(this.modelId, {
-        device,
-        dtype: "fp32",
-      });
+      const model = await loadModelWithDtypeFallback(AutoModel, this.modelId, device);
 
       return async (waveform: Float32Array) => {
         // Pass the raw Float32 array; the processor's Wav2Vec2FeatureExtractor
@@ -102,6 +99,31 @@ export class TransformersSpeakerEmbedder implements SpeakerEmbedder {
 }
 
 type EmbedFn = (waveform: Float32Array) => Promise<Float32Array>;
+
+/**
+ * Try int8-quantized weights first (~2–3× faster than fp32 on WASM, smaller
+ * download). If the model's HF repo doesn't ship a quantized variant, fall
+ * back to fp32. Quantization is the cheapest latency win on iPad Safari
+ * where WebGPU is unavailable.
+ */
+async function loadModelWithDtypeFallback(
+  AutoModel: { from_pretrained: (id: string, opts: Record<string, unknown>) => Promise<unknown> },
+  modelId: string,
+  device: "webgpu" | "wasm",
+): Promise<(inputs: unknown) => Promise<unknown>> {
+  try {
+    return (await AutoModel.from_pretrained(modelId, {
+      device,
+      dtype: "q8",
+    })) as (inputs: unknown) => Promise<unknown>;
+  } catch (err) {
+    console.warn("[embedder] q8 weights unavailable, falling back to fp32:", err);
+    return (await AutoModel.from_pretrained(modelId, {
+      device,
+      dtype: "fp32",
+    })) as (inputs: unknown) => Promise<unknown>;
+  }
+}
 
 /**
  * Pick a transformers.js device. WebGPU is only used when both the user has
