@@ -51,15 +51,9 @@ export class TransformersSpeakerEmbedder implements SpeakerEmbedder {
     if (this.extractorPromise) return this.extractorPromise;
     this.extractorPromise = (async () => {
       const { AutoModel, AutoProcessor } = await import("@huggingface/transformers");
-      const device = this.preferWebGPU && hasWebGPU() ? "webgpu" : "wasm";
 
-      const [processor, model] = await Promise.all([
-        AutoProcessor.from_pretrained(this.modelId),
-        AutoModel.from_pretrained(this.modelId, {
-          device,
-          dtype: "fp32",
-        }),
-      ]);
+      const processor = await AutoProcessor.from_pretrained(this.modelId);
+      const model = await loadModelWithFallback(AutoModel, this.modelId, this.preferWebGPU);
 
       return async (waveform: Float32Array) => {
         // Pass the raw Float32 array; the processor's Wav2Vec2FeatureExtractor
@@ -92,6 +86,34 @@ export class TransformersSpeakerEmbedder implements SpeakerEmbedder {
 }
 
 type EmbedFn = (waveform: Float32Array) => Promise<Float32Array>;
+
+/**
+ * Try WebGPU first when requested; fall back to WASM on any failure.
+ * iPad Safari exposes `navigator.gpu` but transformers.js' WebGPU binding
+ * isn't reliably wired up there (errors like "webgpuInit is not a function"),
+ * so silently retrying on WASM is the only sane path.
+ */
+async function loadModelWithFallback(
+  AutoModel: { from_pretrained: (id: string, opts: Record<string, unknown>) => Promise<unknown> },
+  modelId: string,
+  preferWebGPU: boolean,
+): Promise<(inputs: unknown) => Promise<unknown>> {
+  const wantsWebGPU = preferWebGPU && hasWebGPU();
+  if (wantsWebGPU) {
+    try {
+      return (await AutoModel.from_pretrained(modelId, {
+        device: "webgpu",
+        dtype: "fp32",
+      })) as (inputs: unknown) => Promise<unknown>;
+    } catch (err) {
+      console.warn("[embedder] WebGPU load failed, falling back to WASM:", err);
+    }
+  }
+  return (await AutoModel.from_pretrained(modelId, {
+    device: "wasm",
+    dtype: "fp32",
+  })) as (inputs: unknown) => Promise<unknown>;
+}
 
 function extractEmbedding(outputs: unknown): Float32Array {
   // transformers.js models return a struct keyed by output name. Speaker
