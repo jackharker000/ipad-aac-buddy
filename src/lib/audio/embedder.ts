@@ -50,10 +50,26 @@ export class TransformersSpeakerEmbedder implements SpeakerEmbedder {
   private async getExtractor(): Promise<EmbedFn> {
     if (this.extractorPromise) return this.extractorPromise;
     this.extractorPromise = (async () => {
-      const { AutoModel, AutoProcessor } = await import("@huggingface/transformers");
+      const tf = await import("@huggingface/transformers");
+      const { AutoModel, AutoProcessor, env } = tf;
+
+      // iPad Safari exposes navigator.gpu but the JSEP WebGPU binding inside
+      // transformers.js' bundled onnxruntime-web throws "webgpuInit is not a
+      // function" — and once a WebGPU session creation has failed, the global
+      // ORT state stays broken for the rest of the page. Safest path is to
+      // never try WebGPU on Safari and stick to single-threaded WASM
+      // everywhere. Multi-threaded WASM needs COOP/COEP headers we don't
+      // set yet.
+      if (env.backends.onnx.wasm) {
+        env.backends.onnx.wasm.numThreads = 1;
+      }
+      const device = chooseDevice(this.preferWebGPU);
 
       const processor = await AutoProcessor.from_pretrained(this.modelId);
-      const model = await loadModelWithFallback(AutoModel, this.modelId, this.preferWebGPU);
+      const model = await AutoModel.from_pretrained(this.modelId, {
+        device,
+        dtype: "fp32",
+      });
 
       return async (waveform: Float32Array) => {
         // Pass the raw Float32 array; the processor's Wav2Vec2FeatureExtractor
@@ -88,31 +104,23 @@ export class TransformersSpeakerEmbedder implements SpeakerEmbedder {
 type EmbedFn = (waveform: Float32Array) => Promise<Float32Array>;
 
 /**
- * Try WebGPU first when requested; fall back to WASM on any failure.
- * iPad Safari exposes `navigator.gpu` but transformers.js' WebGPU binding
- * isn't reliably wired up there (errors like "webgpuInit is not a function"),
- * so silently retrying on WASM is the only sane path.
+ * Pick a transformers.js device. WebGPU is only used when both the user has
+ * opted in AND the page is NOT running in Safari (iPad or desktop) — Safari's
+ * WebGPU support is too flaky for transformers.js right now and the JSEP init
+ * failure corrupts the ORT state for the rest of the page.
  */
-async function loadModelWithFallback(
-  AutoModel: { from_pretrained: (id: string, opts: Record<string, unknown>) => Promise<unknown> },
-  modelId: string,
-  preferWebGPU: boolean,
-): Promise<(inputs: unknown) => Promise<unknown>> {
-  const wantsWebGPU = preferWebGPU && hasWebGPU();
-  if (wantsWebGPU) {
-    try {
-      return (await AutoModel.from_pretrained(modelId, {
-        device: "webgpu",
-        dtype: "fp32",
-      })) as (inputs: unknown) => Promise<unknown>;
-    } catch (err) {
-      console.warn("[embedder] WebGPU load failed, falling back to WASM:", err);
-    }
-  }
-  return (await AutoModel.from_pretrained(modelId, {
-    device: "wasm",
-    dtype: "fp32",
-  })) as (inputs: unknown) => Promise<unknown>;
+function chooseDevice(preferWebGPU: boolean): "webgpu" | "wasm" {
+  if (!preferWebGPU) return "wasm";
+  if (!hasWebGPU()) return "wasm";
+  if (isSafari()) return "wasm";
+  return "webgpu";
+}
+
+function isSafari(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  // Safari includes "Safari" but not "Chrome"/"Chromium"/"CriOS"/"FxiOS"
+  return /Safari\//i.test(ua) && !/Chrome|Chromium|CriOS|FxiOS|Edg\//i.test(ua);
 }
 
 function extractEmbedding(outputs: unknown): Float32Array {
