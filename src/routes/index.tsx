@@ -622,28 +622,27 @@ function Home() {
         }
       }
 
-      // -------- Participant voiceprint quick-match --------
-      // For brand-new clusters, compare against pre-loaded voiceprints of
-      // declared participants at a lower threshold (0.72). A match immediately
-      // promotes the cluster (bypassing the 2-utterance pending gate) and sets
-      // its status to "suggested" so the user sees a one-tap confirmation chip
-      // on the speaker's very first utterance. User confirmation is still
-      // required — this never silently confirms.
-      if (mfcc && assignNew && participantVoiceprintsRef.current.length > 0) {
+      // -------- Voiceprint quick-match (all stored voiceprints) --------
+      // For brand-new clusters, compare against ALL stored voiceprints (not just
+      // declared participants). A match immediately promotes the cluster and sets
+      // its status to "suggested" so the user sees a one-tap confirmation chip on
+      // first utterance — even for people not added to the participant list.
+      // User confirmation is still required — this never silently confirms.
+      if (mfcc && assignNew && allVoiceprintsRef.current.length > 0) {
         const confirmedPersonIds = new Set(Object.values(speakerMapRef.current));
         const curStatus = clusterStatusRef.current[speakerLabel];
         if (!curStatus || curStatus.kind === "unknown") {
           const PARTICIPANT_MATCH_THRESHOLD = 0.70;
           let bestPvp: { personId: string; sim: number } | null = null;
-          for (const pvp of participantVoiceprintsRef.current) {
-            if (confirmedPersonIds.has(pvp.personId)) continue;
+          for (const pvp of allVoiceprintsRef.current) {
+            if (confirmedPersonIds.has(pvp.person_id)) continue;
             if (pvp.centroid.length !== mfcc.length) continue;
             const sim = discriminativeSim(mfcc, pvp.centroid);
             if (
               sim >= PARTICIPANT_MATCH_THRESHOLD &&
               (!bestPvp || sim > bestPvp.sim)
             ) {
-              bestPvp = { personId: pvp.personId, sim };
+              bestPvp = { personId: pvp.person_id, sim };
             }
           }
           if (bestPvp) {
@@ -1584,6 +1583,22 @@ function Home() {
       }
       const p = await db.people.get(personId);
       if (p) toast.success(`Confirmed ${p.name}`);
+      // Retroactively write person_id onto all prior segments for this cluster so
+      // post-stop processing and history queries don't rely on speaker_map JSON.
+      const cid = conversationIdRef.current;
+      if (cid) {
+        setCommitted((prev) =>
+          prev.map((s) =>
+            s.speaker_label === label && !s.person_id ? { ...s, person_id: personId } : s,
+          ),
+        );
+        void db.transcript_segments
+          .where("conversation_id")
+          .equals(cid)
+          .and((s) => s.speaker_label === label && !s.person_id)
+          .modify({ person_id: personId })
+          .catch(() => {});
+      }
     },
     [],
   );
@@ -1782,39 +1797,54 @@ function Home() {
         return;
       }
 
+      // Always write the per-segment override so the tapped line shows correctly.
       setCommitted((prev) =>
         prev.map((s) => (s.id === segmentId ? { ...s, person_id: personId } : s)),
       );
-      await db.transcript_segments.update(segmentId, { person_id: personId });
-      toast.success(`Marked as ${person.name}`);
+      void db.transcript_segments.update(segmentId, { person_id: personId }).catch(() => {});
 
-      // Update the person's voiceprint with this segment's MFCC, but only
-      // when the MFCC is genuinely close to the person's existing centroid.
-      // Without this guard a wrong assignment poisons the centroid and then
-      // the 0.72 quick-match routes all future clusters to the wrong person.
-      if (segment.mfcc && segment.mfcc.length === 20) {
-        try {
-          const existingVp = allVoiceprintsRef.current.find((vp) => vp.person_id === personId);
-          const sim = existingVp
-            ? discriminativeSim(segment.mfcc, existingVp.centroid)
-            : 1.0;
-          if (!existingVp || (Number.isFinite(sim) && sim >= CENTROID_UPDATE_THRESHOLD)) {
-            await recordVoiceprint(personId, segment.mfcc);
-            const updatedVp = await import("@/lib/db").then(({ db: d }) => d.voiceprints.get(personId));
-            if (updatedVp) {
-              allVoiceprintsRef.current = [
-                ...allVoiceprintsRef.current.filter((vp) => vp.person_id !== personId),
-                updatedVp,
-              ];
-              confirmedVoiceprintsRef.current.set(personId, updatedVp.centroid);
+      const existingStatus = clusterStatusRef.current[segment.speaker_label];
+      const clusterConfirmedFor =
+        existingStatus?.kind === "confirmed" ? existingStatus.personId : null;
+
+      if (clusterConfirmedFor === personId) {
+        // Cluster already confirmed as this person — per-segment override is enough.
+        toast.success(`Marked as ${person.name}`);
+      } else if (clusterConfirmedFor === null || clusterConfirmedFor === undefined) {
+        // Cluster is unconfirmed (unknown or suggested as someone else).
+        // Confirm the whole cluster so all prior/future lines from this voice
+        // are attributed to this person without further manual corrections.
+        await confirmKnownSpeaker(segment.speaker_label, personId);
+        // confirmKnownSpeaker shows its own toast ("Confirmed X") — suppress ours.
+      } else {
+        // Cluster is confirmed as a DIFFERENT person. This is a one-off exception
+        // (a single line from the cluster was actually a different speaker).
+        // Update per-segment only; also teach the voiceprint if MFCC is close enough.
+        if (segment.mfcc && segment.mfcc.length === 20) {
+          try {
+            const existingVp = allVoiceprintsRef.current.find((vp) => vp.person_id === personId);
+            const sim = existingVp
+              ? discriminativeSim(segment.mfcc, existingVp.centroid)
+              : 1.0;
+            if (!existingVp || (Number.isFinite(sim) && sim >= CENTROID_UPDATE_THRESHOLD)) {
+              await recordVoiceprint(personId, segment.mfcc);
+              const updatedVp = await db.voiceprints.get(personId);
+              if (updatedVp) {
+                allVoiceprintsRef.current = [
+                  ...allVoiceprintsRef.current.filter((vp) => vp.person_id !== personId),
+                  updatedVp,
+                ];
+                confirmedVoiceprintsRef.current.set(personId, updatedVp.centroid);
+              }
             }
+          } catch (err) {
+            console.warn("voiceprint update after reassign failed", err);
           }
-        } catch (err) {
-          console.warn("voiceprint update after reassign failed", err);
         }
+        toast.success(`Marked as ${person.name} (override)`);
       }
     },
-    [allPeople],
+    [allPeople, confirmKnownSpeaker],
   );
 
   const forceNewSpeaker = useCallback(() => {
