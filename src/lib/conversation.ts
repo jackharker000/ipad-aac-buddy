@@ -16,6 +16,7 @@ import { cosine, decodeEmbedding, encodeEmbedding, l2Normalize, rms } from "@/li
 import { transcribeSegment } from "@/lib/audio/stt";
 import type { SpeakerEmbedder } from "@/lib/audio/embedder";
 import { setLastSegment } from "@/lib/audio/last-segment-store";
+import { transcribeSegmentStreaming } from "@/lib/audio/stt-streaming";
 import { TTSPlayer } from "@/lib/audio/tts-player";
 import type { DomainAI, Mood, SuggestionDraft } from "@/lib/ai";
 import { makeTTS } from "@/lib/providers";
@@ -60,6 +61,13 @@ export type LiveTranscriptSegment = {
   confidence?: number;
   startedAt: number;
   endedAt: number;
+  /**
+   * "partial" while streaming STT is still committing the text, "final"
+   * once it's locked. The cockpit renders partial lines in italics. The
+   * final transcript callback replaces the partial line in place via
+   * onTranscriptSegmentUpdated, keyed by id.
+   */
+  status?: "partial" | "final";
 };
 
 export type ConversationDeps = {
@@ -565,13 +573,47 @@ export class LiveConversation {
     })();
 
     // 2. STT (remote network call, dominates latency).
-    const transcribe = transcribeSegment({
-      providerId: this.deps.settings.sttProvider,
-      waveform16k: segment.audio,
-    }).catch((err) => {
-      this.emitError(err);
-      return "";
-    });
+    // Streaming path first: partial transcripts land ~300 ms after speech
+    // start, so the cockpit can paint the transcript line in italics while
+    // we wait for final. On any failure (auth, network, no streaming
+    // entitlement on the account) fall back to the batch REST proxy so
+    // James still gets a transcript — just a slower one.
+    const transcribe = (async (): Promise<string> => {
+      if (this.deps.settings.sttProvider !== "elevenlabs-scribe") {
+        return transcribeSegment({
+          providerId: this.deps.settings.sttProvider,
+          waveform16k: segment.audio,
+        }).catch((err) => {
+          this.emitError(err);
+          return "";
+        });
+      }
+      try {
+        return await transcribeSegmentStreaming({
+          waveform16k: segment.audio,
+          callbacks: {
+            onPartial: (partial) => {
+              this.emitPartialTranscript({
+                segmentId,
+                conversationId: conversation.id,
+                text: partial,
+                startedAt,
+                endedAt,
+              });
+            },
+          },
+        });
+      } catch (err) {
+        console.warn("[conversation] streaming STT failed, falling back to batch", err);
+        return transcribeSegment({
+          providerId: this.deps.settings.sttProvider,
+          waveform16k: segment.audio,
+        }).catch((batchErr) => {
+          this.emitError(batchErr);
+          return "";
+        });
+      }
+    })();
 
     const [candidates, text] = await Promise.all([embedAndMatch, transcribe]);
 
@@ -615,6 +657,7 @@ export class LiveConversation {
       confidence: top?.posterior,
       startedAt,
       endedAt,
+      status: "final",
     };
 
     const persisted: TranscriptSegment = {
@@ -658,17 +701,22 @@ export class LiveConversation {
   }
 
   /**
-   * Dispose the embedder's ONNX session and warm it back up. This is the
-   * only reliable way to release ORT's WASM heap on iPad Safari before it
-   * gets large enough for Safari to OOM-kill the tab. The user feels a
-   * one-time ~30 s pause but the conversation keeps going.
+   * Dispose the embedder's ONNX session and warm it back up. With the
+   * worker-backed embedder, dispose() calls worker.terminate() which is
+   * the only reliable way to release ORT's WASM heap on iPad Safari. The
+   * next embed() call lazily spins a new worker; warmup is fire-and-
+   * forget so the main thread never blocks. The previous main-thread
+   * implementation paused the cockpit for 5–10 s every 12 segments.
    */
   private async resetEmbedder(): Promise<void> {
     const embedder = this.deps.embedderRef.current;
     if (!embedder) return;
     try {
       await embedder.dispose?.();
-      await embedder.warmup?.();
+      // Don't await warmup — let the worker re-instantiate lazily on the
+      // next embed call. If warmup throws, surface it via emitError so the
+      // operator sees it, but never block the conversation loop.
+      void embedder.warmup?.().catch((err) => this.emitError(err));
     } catch (err) {
       this.emitError(err);
     } finally {
@@ -685,14 +733,25 @@ export class LiveConversation {
     this.callbacks.onSuggestions?.([], true);
 
     try {
-      const drafts = await this.deps.ai.generateSuggestions({
-        jamesName: this.deps.jamesName,
-        mood: this.mood,
-        transcript: this.transcriptCache.map((t) => ({
-          speaker: t.speakerKind === "self" ? this.deps.jamesName : (t.personName ?? "Other"),
-          text: t.text,
-        })),
-      });
+      // Stream incrementally so the first card lands at TTFT instead of
+      // after the full completion. onSuggestions(drafts, true) is called
+      // each time the streaming JSON parser closes another suggestion
+      // object; the final non-streaming resolve fires onSuggestions(drafts,
+      // false) below.
+      const drafts = await this.deps.ai.generateSuggestions(
+        {
+          jamesName: this.deps.jamesName,
+          mood: this.mood,
+          transcript: this.transcriptCache.map((t) => ({
+            speaker: t.speakerKind === "self" ? this.deps.jamesName : (t.personName ?? "Other"),
+            text: t.text,
+          })),
+        },
+        (partial) => {
+          if (abort.signal.aborted) return;
+          this.callbacks.onSuggestions?.(partial, true);
+        },
+      );
       if (abort.signal.aborted) return;
       this.callbacks.onSuggestions?.(drafts, false);
 
@@ -719,6 +778,38 @@ export class LiveConversation {
         this.emitError(err);
       }
     }
+  }
+
+  /**
+   * Surface a streaming partial transcript line to the cockpit. The route
+   * dedupes by segment id, so repeated partials for the same segment
+   * replace the previous in place and the final transcript replaces them
+   * all when STT commits.
+   */
+  private emitPartialTranscript(args: {
+    segmentId: string;
+    conversationId: string;
+    text: string;
+    startedAt: number;
+    endedAt: number;
+  }): void {
+    const partial: LiveTranscriptSegment = {
+      id: args.segmentId,
+      conversationId: args.conversationId,
+      text: args.text,
+      speakerKind: "other",
+      speakerLabel: "unknown",
+      startedAt: args.startedAt,
+      endedAt: args.endedAt,
+      // partial flag carried as a discriminator on the live segment so the
+      // cockpit can render the text in italics until the final lands.
+      status: "partial",
+    };
+    // Both callbacks present: append the partial if it's new, update in
+    // place if it isn't. The route's onTranscriptSegmentUpdated handler
+    // covers the second case.
+    this.callbacks.onTranscriptSegment?.(partial);
+    this.callbacks.onTranscriptSegmentUpdated?.(partial);
   }
 
   private setState(state: ConversationState): void {

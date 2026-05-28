@@ -15,7 +15,7 @@ import {
   type VoiceprintContribution,
 } from "@/lib/db";
 import { useSettings } from "@/lib/settings";
-import { makeEmbedder, type EmbedderKind, type SpeakerEmbedder } from "@/lib/audio/embedder";
+import { makeWorkerEmbedder, type SpeakerEmbedder } from "@/lib/audio/embedder";
 import { makeAI, MOODS, type Mood, type SuggestionDraft } from "@/lib/ai";
 import type { Candidate } from "@/lib/audio/matcher";
 import {
@@ -86,8 +86,12 @@ function Cockpit() {
     setEmbedderReady(false);
     setEmbedderError(null);
     embedderRef.current?.dispose?.();
-    const kind: EmbedderKind = "transformers";
-    const next = makeEmbedder(kind, { preferWebGPU: settings.speakerIdWebGPU });
+    // Worker-backed embedder: the entire transformers.js call lives in a
+    // separate JSC VM so the periodic dispose+warmup cycle (every 12 turns
+    // per the OOM mitigation) doesn't freeze the cockpit. dispose() on the
+    // client side terminates the worker, which is the only reliable way
+    // to actually release ORT's WASM heap on iPad Safari.
+    const next = makeWorkerEmbedder({ preferWebGPU: settings.speakerIdWebGPU });
     embedderRef.current = next;
     let cancelled = false;
     (async () => {
@@ -171,7 +175,18 @@ function Cockpit() {
     });
     conv.on({
       onStateChange: setState,
-      onTranscriptSegment: (segment) => setTranscript((prev) => [...prev, segment].slice(-40)),
+      onTranscriptSegment: (segment) =>
+        setTranscript((prev) => {
+          // Dedupe by id: streaming STT emits a `partial` segment that gets
+          // replaced in place when the `final` lands. The conversation lib
+          // calls both onTranscriptSegment + onTranscriptSegmentUpdated for
+          // partials, so the first arrival appends and subsequent updates
+          // go through the updater below.
+          if (prev.some((s) => s.id === segment.id)) {
+            return prev.map((s) => (s.id === segment.id ? { ...s, ...segment } : s));
+          }
+          return [...prev, segment].slice(-40);
+        }),
       onTranscriptSegmentUpdated: (updated) =>
         setTranscript((prev) =>
           prev.map((s) => (s.id === updated.id ? { ...s, ...updated } : s)),

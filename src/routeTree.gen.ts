@@ -18,6 +18,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as SpikeSpeakerIdRouteImport } from './routes/spike.speaker-id'
 import { Route as ApiTtsElevenlabsRouteImport } from './routes/api/tts/elevenlabs'
 import { Route as ApiTtsCartesiaRouteImport } from './routes/api/tts/cartesia'
+import { Route as ApiSttScribeTokenRouteImport } from './routes/api/stt/scribe-token'
 import { Route as ApiSttElevenlabsRouteImport } from './routes/api/stt/elevenlabs'
 import { Route as ApiLlmOpenaiRouteImport } from './routes/api/llm/openai'
 import { Route as ApiLlmAnthropicRouteImport } from './routes/api/llm/anthropic'
@@ -67,6 +68,11 @@ const ApiTtsCartesiaRoute = ApiTtsCartesiaRouteImport.update({
   path: '/api/tts/cartesia',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiSttScribeTokenRoute = ApiSttScribeTokenRouteImport.update({
+  id: '/api/stt/scribe-token',
+  path: '/api/stt/scribe-token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiSttElevenlabsRoute = ApiSttElevenlabsRouteImport.update({
   id: '/api/stt/elevenlabs',
   path: '/api/stt/elevenlabs',
@@ -94,6 +100,7 @@ export interface FileRoutesByFullPath {
   '/api/llm/anthropic': typeof ApiLlmAnthropicRoute
   '/api/llm/openai': typeof ApiLlmOpenaiRoute
   '/api/stt/elevenlabs': typeof ApiSttElevenlabsRoute
+  '/api/stt/scribe-token': typeof ApiSttScribeTokenRoute
   '/api/tts/cartesia': typeof ApiTtsCartesiaRoute
   '/api/tts/elevenlabs': typeof ApiTtsElevenlabsRoute
 }
@@ -108,6 +115,7 @@ export interface FileRoutesByTo {
   '/api/llm/anthropic': typeof ApiLlmAnthropicRoute
   '/api/llm/openai': typeof ApiLlmOpenaiRoute
   '/api/stt/elevenlabs': typeof ApiSttElevenlabsRoute
+  '/api/stt/scribe-token': typeof ApiSttScribeTokenRoute
   '/api/tts/cartesia': typeof ApiTtsCartesiaRoute
   '/api/tts/elevenlabs': typeof ApiTtsElevenlabsRoute
 }
@@ -123,6 +131,7 @@ export interface FileRoutesById {
   '/api/llm/anthropic': typeof ApiLlmAnthropicRoute
   '/api/llm/openai': typeof ApiLlmOpenaiRoute
   '/api/stt/elevenlabs': typeof ApiSttElevenlabsRoute
+  '/api/stt/scribe-token': typeof ApiSttScribeTokenRoute
   '/api/tts/cartesia': typeof ApiTtsCartesiaRoute
   '/api/tts/elevenlabs': typeof ApiTtsElevenlabsRoute
 }
@@ -139,6 +148,7 @@ export interface FileRouteTypes {
     | '/api/llm/anthropic'
     | '/api/llm/openai'
     | '/api/stt/elevenlabs'
+    | '/api/stt/scribe-token'
     | '/api/tts/cartesia'
     | '/api/tts/elevenlabs'
   fileRoutesByTo: FileRoutesByTo
@@ -153,6 +163,7 @@ export interface FileRouteTypes {
     | '/api/llm/anthropic'
     | '/api/llm/openai'
     | '/api/stt/elevenlabs'
+    | '/api/stt/scribe-token'
     | '/api/tts/cartesia'
     | '/api/tts/elevenlabs'
   id:
@@ -167,6 +178,7 @@ export interface FileRouteTypes {
     | '/api/llm/anthropic'
     | '/api/llm/openai'
     | '/api/stt/elevenlabs'
+    | '/api/stt/scribe-token'
     | '/api/tts/cartesia'
     | '/api/tts/elevenlabs'
   fileRoutesById: FileRoutesById
@@ -182,6 +194,7 @@ export interface RootRouteChildren {
   ApiLlmAnthropicRoute: typeof ApiLlmAnthropicRoute
   ApiLlmOpenaiRoute: typeof ApiLlmOpenaiRoute
   ApiSttElevenlabsRoute: typeof ApiSttElevenlabsRoute
+  ApiSttScribeTokenRoute: typeof ApiSttScribeTokenRoute
   ApiTtsCartesiaRoute: typeof ApiTtsCartesiaRoute
   ApiTtsElevenlabsRoute: typeof ApiTtsElevenlabsRoute
 }
@@ -251,6 +264,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiTtsCartesiaRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/stt/scribe-token': {
+      id: '/api/stt/scribe-token'
+      path: '/api/stt/scribe-token'
+      fullPath: '/api/stt/scribe-token'
+      preLoaderRoute: typeof ApiSttScribeTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/stt/elevenlabs': {
       id: '/api/stt/elevenlabs'
       path: '/api/stt/elevenlabs'
@@ -286,6 +306,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiLlmAnthropicRoute: ApiLlmAnthropicRoute,
   ApiLlmOpenaiRoute: ApiLlmOpenaiRoute,
   ApiSttElevenlabsRoute: ApiSttElevenlabsRoute,
+  ApiSttScribeTokenRoute: ApiSttScribeTokenRoute,
   ApiTtsCartesiaRoute: ApiTtsCartesiaRoute,
   ApiTtsElevenlabsRoute: ApiTtsElevenlabsRoute,
 }
