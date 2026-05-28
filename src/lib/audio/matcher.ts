@@ -38,6 +38,15 @@ export type MatchContext = {
   people: Person[];
   /** Centroid per enrolled person, keyed by personId. */
   centroidByPersonId: Map<string, Float32Array>;
+  /**
+   * If set, restrict matching to this set of person ids. Used by the
+   * pre-Record roster picker: declaring "Mum and Jack are in the room"
+   * collapses an open-set match against everyone James has ever enrolled
+   * down to a closed-set decision between 2–4 people. This is the
+   * single biggest speaker-ID accuracy win — bigger than any model
+   * upgrade.
+   */
+  closedSet?: string[];
   /** People associated with the current place. */
   placePersonIds?: string[];
   /** People expected at the current event. */
@@ -74,7 +83,15 @@ const SINGLE_ENROLL_THRESHOLD = 0.6;
 const UNKNOWN_LIKELIHOOD_FLOOR = 0.1;
 
 export function match(embedding: Float32Array, context: MatchContext): Candidate[] {
-  const enrolled = context.people.filter((p) => context.centroidByPersonId.has(p.id));
+  const closedSet = context.closedSet;
+  const closedSetFilter =
+    closedSet && closedSet.length > 0 ? new Set(closedSet) : null;
+
+  const enrolled = context.people.filter(
+    (p) =>
+      context.centroidByPersonId.has(p.id) &&
+      (closedSetFilter === null || closedSetFilter.has(p.id)),
+  );
 
   if (enrolled.length === 0) {
     return [{ personId: null, name: "Unknown speaker", prior: 1, posterior: 1 }];

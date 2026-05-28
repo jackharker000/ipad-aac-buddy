@@ -76,6 +76,14 @@ export class LiveConversation {
   private voiceprints: Voiceprint[] = [];
   private recentSpeakers: string[] = [];
   private transcriptCache: LiveTranscriptSegment[] = [];
+  /**
+   * Closed-set roster declared at start. Null = open match against every
+   * enrolled person. When populated, the matcher only scores against the
+   * declared set + "Unknown".
+   */
+  private closedSet: string[] | null = null;
+  private placePersonIds: string[] | null = null;
+  private eventPersonIds: string[] | null = null;
 
   // Memory-pressure mitigations for iPad Safari. The tab gets OOM-killed
   // after ~60 s of continuous recording because (a) ONNX Runtime's WASM
@@ -118,6 +126,30 @@ export class LiveConversation {
     this.voiceprints = args.voiceprints;
   }
 
+  /**
+   * Declare the closed-set roster for this conversation. Called pre-Record
+   * by the cockpit. Pass null to open the match back up to everyone enrolled.
+   */
+  setClosedSet(personIds: string[] | null): void {
+    this.closedSet = personIds && personIds.length > 0 ? [...personIds] : null;
+  }
+
+  /**
+   * Insert a person into the active closed set without restarting the
+   * conversation. Used by the mid-conversation "Add to roster" chip when
+   * someone walks in late — closing the conversation to re-pick would
+   * cost the embedder warmup and the running diarization state.
+   */
+  addToRoster(personId: string): void {
+    if (this.closedSet === null) return;
+    if (this.closedSet.includes(personId)) return;
+    this.closedSet = [...this.closedSet, personId];
+  }
+
+  getClosedSet(): string[] | null {
+    return this.closedSet ? [...this.closedSet] : null;
+  }
+
   getState(): ConversationState {
     return this.state;
   }
@@ -131,10 +163,31 @@ export class LiveConversation {
         startedAt: Date.now(),
         placeId: this.deps.placeId,
         eventId: this.deps.eventId,
-        personIds: [],
+        personIds: this.closedSet ? [...this.closedSet] : [],
         speakerMap: {},
       };
       await db().conversations.add(this.conversation);
+
+      // Resolve place/event personIds for the speaker-ID prior. Both are
+      // optional; missing rows leave the prior unboosted.
+      this.placePersonIds = null;
+      this.eventPersonIds = null;
+      if (this.deps.placeId) {
+        try {
+          const place = await db().places.get(this.deps.placeId);
+          this.placePersonIds = place?.personIds ?? null;
+        } catch (err) {
+          console.warn("[conversation] place lookup failed", err);
+        }
+      }
+      if (this.deps.eventId) {
+        try {
+          const event = await db().events.get(this.deps.eventId);
+          this.eventPersonIds = event?.personIds ?? null;
+        } catch (err) {
+          console.warn("[conversation] event lookup failed", err);
+        }
+      }
 
       this.segmentCount = 0;
       this.lastResetAt = Date.now();
@@ -170,6 +223,10 @@ export class LiveConversation {
     }
     this.transcriptCache = [];
     this.recentSpeakers = [];
+    this.placePersonIds = null;
+    this.eventPersonIds = null;
+    // Keep closedSet — the picker is a pre-Record control; the cockpit
+    // resets it explicitly when the user reopens the picker.
     this.setState("idle");
   }
 
@@ -283,6 +340,9 @@ export class LiveConversation {
       const candidates = match(embedding, {
         people: this.people,
         centroidByPersonId: centroidsFromVoiceprints(this.voiceprints),
+        closedSet: this.closedSet ?? undefined,
+        placePersonIds: this.placePersonIds ?? undefined,
+        eventPersonIds: this.eventPersonIds ?? undefined,
         recentSpeakers: this.recentSpeakers,
       });
       this.callbacks.onSpeakerCandidates?.(candidates);

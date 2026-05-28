@@ -6,7 +6,14 @@ import { Loader2, Mic, MicOff, Rewind, Send } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
-import { db, type Person, type SuggestionCategory, type Voiceprint } from "@/lib/db";
+import {
+  db,
+  type EventRecord,
+  type Person,
+  type SuggestionCategory,
+  type Voiceprint,
+  type VoiceprintContribution,
+} from "@/lib/db";
 import { useSettings } from "@/lib/settings";
 import { makeEmbedder, type EmbedderKind, type SpeakerEmbedder } from "@/lib/audio/embedder";
 import { makeAI, MOODS, type Mood, type SuggestionDraft } from "@/lib/ai";
@@ -26,6 +33,8 @@ export const Route = createFileRoute("/")({
 
 const EMPTY_PEOPLE: Person[] = [];
 const EMPTY_VOICEPRINTS: Voiceprint[] = [];
+const EMPTY_EVENTS: EventRecord[] = [];
+const EMPTY_CONTRIBUTIONS: VoiceprintContribution[] = [];
 
 const QUICK_PHRASES: { text: string; label?: string }[] = [
   { text: "Yes" },
@@ -97,7 +106,44 @@ function Cockpit() {
 
   const people = useLiveQuery(() => db().people.toArray(), [], EMPTY_PEOPLE);
   const voiceprints = useLiveQuery(() => db().voiceprints.toArray(), [], EMPTY_VOICEPRINTS);
+  const events = useLiveQuery(
+    () => db().events.orderBy("start").reverse().toArray(),
+    [],
+    EMPTY_EVENTS,
+  );
+  const voiceprintContributions = useLiveQuery(
+    () => db().voiceprintContributions.toArray(),
+    [],
+    EMPTY_CONTRIBUTIONS,
+  );
   const jamesProfile = useLiveQuery(() => db().jamesProfile.get("singleton"), []);
+
+  // Closed-set roster state. Pre-Record; survives until the user re-opens
+  // the picker. Mid-conversation additions go straight through the
+  // LiveConversation.addToRoster path so we don't have to re-sync here.
+  const [selectedPersonIds, setSelectedPersonIds] = useState<string[]>([]);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+
+  // Auto-fill the roster from a selected event's expected attendees.
+  useEffect(() => {
+    if (!selectedEventId) return;
+    const evt = events.find((e) => e.id === selectedEventId);
+    if (!evt) return;
+    setSelectedPersonIds((prev) => {
+      const merged = new Set(prev);
+      for (const id of evt.personIds) merged.add(id);
+      return Array.from(merged);
+    });
+  }, [selectedEventId, events]);
+
+  // Per-person sample count so the picker can flag "needs enrolling".
+  const sampleCountByPerson = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of voiceprintContributions) {
+      m.set(c.personId, (m.get(c.personId) ?? 0) + 1);
+    }
+    return m;
+  }, [voiceprintContributions]);
 
   const ai = useMemo(() => makeAI(settings.llmProvider), [settings.llmProvider]);
 
@@ -121,6 +167,7 @@ function Cockpit() {
       ai,
       settings,
       jamesName: jamesProfile?.displayName ?? "James",
+      eventId: selectedEventId ?? undefined,
     });
     conv.on({
       onStateChange: setState,
@@ -184,8 +231,16 @@ function Cockpit() {
     const conv = ensureConversation();
     conv.setRoster({ people, voiceprints });
     conv.setMood(mood);
+    conv.setClosedSet(selectedPersonIds.length > 0 ? selectedPersonIds : null);
     await conv.start();
   };
+
+  const addToActiveRoster = useCallback((personId: string) => {
+    const conv = conversationRef.current;
+    if (!conv) return;
+    conv.addToRoster(personId);
+    setSelectedPersonIds((prev) => (prev.includes(personId) ? prev : [...prev, personId]));
+  }, []);
 
   const stop = async () => {
     await conversationRef.current?.stop();
@@ -279,10 +334,30 @@ function Cockpit() {
 
       {missingKeys.size > 0 && <MissingKeysBanner keys={missingKeys} />}
 
+      {state === "idle" && (
+        <RosterPicker
+          people={people}
+          selectedPersonIds={selectedPersonIds}
+          onTogglePerson={(id) =>
+            setSelectedPersonIds((prev) =>
+              prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+            )
+          }
+          events={events}
+          selectedEventId={selectedEventId}
+          onSelectEvent={setSelectedEventId}
+          sampleCountByPerson={sampleCountByPerson}
+        />
+      )}
+
       <div className="grid gap-5 lg:grid-cols-[1fr_2fr_1fr]">
         <SpeakerColumn
           candidates={candidates}
           acceptThreshold={settings.speakerIdAcceptThreshold}
+          people={people}
+          selectedPersonIds={selectedPersonIds}
+          isLive={state === "listening" || state === "speech"}
+          onAddToRoster={addToActiveRoster}
         />
         <div className="flex flex-col gap-4">
           <TypeAndSpeakInput speakingText={speakingText} onSpeak={(text) => speak({ text })} />
@@ -524,15 +599,44 @@ function TranscriptColumn({
 function SpeakerColumn({
   candidates,
   acceptThreshold,
+  people,
+  selectedPersonIds,
+  isLive,
+  onAddToRoster,
 }: {
   candidates: Candidate[];
   acceptThreshold: number;
+  people: Person[];
+  selectedPersonIds: string[];
+  isLive: boolean;
+  onAddToRoster: (personId: string) => void;
 }) {
   const top = candidates[0];
+  const [showAddPicker, setShowAddPicker] = useState(false);
+
+  // People enrolled but not currently in the active roster — the candidates
+  // for the "Add to roster" mid-conversation chip.
+  const offRoster = useMemo(
+    () => people.filter((p) => !selectedPersonIds.includes(p.id)),
+    [people, selectedPersonIds],
+  );
+
   return (
     <div className="rounded-2xl border border-border bg-card">
-      <div className="px-4 pt-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-        Speaker
+      <div className="flex items-center justify-between px-4 pt-3">
+        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Speaker
+        </span>
+        {isLive && offRoster.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowAddPicker((v) => !v)}
+            className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground hover:bg-muted/70"
+            title="Add a person who walked in late"
+          >
+            + Add
+          </button>
+        )}
       </div>
       <div className="p-4">
         {!top ? (
@@ -568,7 +672,131 @@ function SpeakerColumn({
             )}
           </>
         )}
+        {showAddPicker && offRoster.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-1 border-t border-border pt-3">
+            {offRoster.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => {
+                  onAddToRoster(p.id);
+                  setShowAddPicker(false);
+                }}
+                className="rounded-full border border-input bg-background px-2.5 py-0.5 text-xs hover:bg-muted"
+              >
+                {p.name}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Pre-Record control: declare who's in the room. Picking 2–4 names here
+ * collapses the matcher from an open-set to a closed-set decision, which
+ * is the single highest-leverage speaker-ID accuracy change in the build.
+ * Picking an event auto-populates the roster from its expected attendees.
+ */
+function RosterPicker({
+  people,
+  selectedPersonIds,
+  onTogglePerson,
+  events,
+  selectedEventId,
+  onSelectEvent,
+  sampleCountByPerson,
+}: {
+  people: Person[];
+  selectedPersonIds: string[];
+  onTogglePerson: (id: string) => void;
+  events: EventRecord[];
+  selectedEventId: string | null;
+  onSelectEvent: (id: string | null) => void;
+  sampleCountByPerson: Map<string, number>;
+}) {
+  if (people.length === 0 && events.length === 0) {
+    return (
+      <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-4 text-sm text-muted-foreground">
+        No enrolled people yet. Add some on the{" "}
+        <Link to="/people" className="underline">
+          People
+        </Link>{" "}
+        page so the speaker-ID matcher has someone to compare against.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3 rounded-2xl border border-border bg-card p-4">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+          Who's in the room?
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {selectedPersonIds.length === 0
+            ? "open match — slower & less accurate"
+            : `${selectedPersonIds.length} selected`}
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {people.map((p) => {
+          const selected = selectedPersonIds.includes(p.id);
+          const samples = sampleCountByPerson.get(p.id) ?? 0;
+          return (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => onTogglePerson(p.id)}
+              className={cn(
+                "flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm transition-colors",
+                selected
+                  ? "border-accent bg-accent text-accent-foreground"
+                  : "border-input bg-background hover:bg-muted",
+              )}
+            >
+              <span>{p.name}</span>
+              <span
+                className={cn(
+                  "rounded-full px-1.5 text-[10px]",
+                  samples === 0
+                    ? "bg-destructive/15 text-destructive"
+                    : "bg-background/40 text-current/70",
+                )}
+                title={samples === 0 ? "No voice samples — won't match" : `${samples} samples`}
+              >
+                {samples === 0 ? "no voice" : samples}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {events.length > 0 && (
+        <div className="flex items-center gap-2 border-t border-border pt-3">
+          <label className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            Event
+          </label>
+          <select
+            value={selectedEventId ?? ""}
+            onChange={(e) => onSelectEvent(e.target.value || null)}
+            className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+          >
+            <option value="">— none —</option>
+            {events.map((ev) => (
+              <option key={ev.id} value={ev.id}>
+                {ev.name}
+              </option>
+            ))}
+          </select>
+          {selectedEventId && (
+            <span className="text-xs text-muted-foreground">
+              Auto-fills attendees · boosts prior 2.5×
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
