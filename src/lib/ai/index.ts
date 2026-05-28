@@ -16,6 +16,11 @@ export type {
   DraftReplyVariation,
   InterestSuggestion,
   ExtractInterestsContext,
+  ExtractLexiconContext,
+  ExtractLexiconEntry,
+  ExtractLexiconResult,
+  EventPrepContext,
+  EventPrepResult,
 } from "./domain";
 
 /**

@@ -82,6 +82,13 @@ export type DraftReplyContext = {
   context?: string;
   /** Optional James profile so the model can write in his voice. */
   jamesProfile?: JamesProfile;
+  /**
+   * Tone-redo nudge. When set, appends a single instruction line to the user
+   * prompt asking the model to re-cast the SAME intent in a different tone
+   * ("shorter", "warmer", "drier", "more formal", "more casual"). Used by the
+   * Helpers-tab chip row after the first draft lands.
+   */
+  toneOverride?: string;
 };
 
 export type DraftReplyVariation = { text: string; tone: string };
@@ -107,6 +114,46 @@ export type ExtractInterestsContext = {
   currentLifeContext?: string;
   currentSignaturePhrases?: string;
   jamesName?: string;
+};
+
+export type ExtractLexiconContext = {
+  /** Focused transcript: this person's turns + light context. */
+  transcript: string;
+  /** Name of the person whose vocabulary we're extracting. */
+  personName: string;
+  /** Existing lexicon terms for this person. The model skips repeats. */
+  existingTerms?: string[];
+};
+
+export type ExtractLexiconEntry = {
+  term: string;
+  /** Suggested keyterm boost, 1.0-2.0. Higher for distinctive proper nouns,
+   * lower for general jargon. The persister clamps to 0.5–2.0. */
+  weight: number;
+  reasoning?: string;
+};
+
+export type ExtractLexiconResult = {
+  terms: ExtractLexiconEntry[];
+};
+
+export type EventPrepContext = {
+  eventName: string;
+  /** Freeform date/time string. */
+  eventWhen: string;
+  placeName?: string;
+  attendeeNames: string[];
+  keyInfo?: string;
+  /** James's optional steering ("focus on cricket plans", "ask about her trip"). */
+  userPrompt?: string;
+  jamesProfile?: JamesProfile;
+};
+
+export type EventPrepResult = {
+  /** 4–6 talking points James could raise. */
+  keyPoints: string[];
+  /** 3–5 questions he could ask. */
+  keyQuestions: string[];
 };
 
 export class DomainAI {
@@ -222,6 +269,47 @@ export class DomainAI {
       ],
     });
     return parseSummary(response.text);
+  }
+
+  /**
+   * Post-conversation lexicon extraction. Picks 5–15 proper nouns, distinctive
+   * jargon, pet/place/project names, or unusual words this person is likely
+   * to use again. The list feeds `personLexicon` → `buildKeyterms` → Scribe's
+   * `keyterms` biasing on the next session. Smart tier (quality matters more
+   * than latency — this runs in the background after Stop).
+   */
+  async extractLexicon(ctx: ExtractLexiconContext): Promise<ExtractLexiconResult> {
+    const response = await this.llm.complete({
+      tier: "smart",
+      maxTokens: 300,
+      temperature: 0.3,
+      cacheSystem: false,
+      messages: [
+        { role: "system", content: extractLexiconSystemPrompt() },
+        { role: "user", content: extractLexiconUserPrompt(ctx) },
+      ],
+    });
+    return parseExtractLexicon(response.text);
+  }
+
+  /**
+   * Generate talking points + questions for an upcoming event. Smart tier,
+   * fired from the Events page's "Prep with AI" button. Uses the James
+   * persona block so the suggestions are bent toward what he actually cares
+   * about (cricket, family, etc.) rather than generic small talk.
+   */
+  async generateEventPrep(ctx: EventPrepContext): Promise<EventPrepResult> {
+    const response = await this.llm.complete({
+      tier: "smart",
+      maxTokens: 800,
+      temperature: 0.5,
+      cacheSystem: false,
+      messages: [
+        { role: "system", content: eventPrepSystemPrompt(ctx) },
+        { role: "user", content: eventPrepUserPrompt(ctx) },
+      ],
+    });
+    return parseEventPrep(response.text);
   }
 
   /**
@@ -581,6 +669,127 @@ function parseSummary(raw: string): SummarizeConversationResult {
   return { summary, highlights };
 }
 
+function extractLexiconSystemPrompt(): string {
+  return `You build a per-person vocabulary list that feeds a speech-recognition keyterm-biasing system. The model uses it to recognise proper nouns and unusual words a person actually says.
+
+Output strictly as JSON, no commentary:
+
+{
+  "terms": [
+    { "term": "string", "weight": number, "reasoning": "string (optional)" }
+  ]
+}
+
+Rules:
+- Pick 5–15 entries. Fewer is fine when the transcript is sparse.
+- Favour proper nouns (names of people, pets, places, products, projects), distinctive jargon, technical terms, sports/hobby vocabulary, and unusual words.
+- Skip common English words, conversational filler, generic verbs/adjectives.
+- Skip anything already in the existing-terms list (case-insensitive match).
+- "weight" 1.0–2.0. Use the high end (1.6–2.0) for distinctive proper nouns the speech model would otherwise hallucinate. Use the low end (1.0–1.3) for general jargon.
+- Keep each term ≤ 20 characters. Single token or very short phrase.
+- Original casing of the term as it would appear in writing ("Anna", "MRI", "iPad").`;
+}
+
+function extractLexiconUserPrompt(ctx: ExtractLexiconContext): string {
+  const existingBlock =
+    ctx.existingTerms && ctx.existingTerms.length > 0
+      ? `Existing terms (do NOT repeat any of these, case-insensitive):\n${ctx.existingTerms.join(", ")}\n\n`
+      : "Existing terms: (none)\n\n";
+  return `Person speaking: ${ctx.personName}
+
+${existingBlock}Their turns (with light context):
+"""
+${ctx.transcript}
+"""
+
+Return JSON only.`;
+}
+
+function parseExtractLexicon(raw: string): ExtractLexiconResult {
+  const json = extractJsonObject(raw);
+  if (!json) return { terms: [] };
+  let parsed: { terms?: unknown };
+  try {
+    parsed = JSON.parse(json) as { terms?: unknown };
+  } catch {
+    return { terms: [] };
+  }
+  if (!Array.isArray(parsed.terms)) return { terms: [] };
+  const out: ExtractLexiconEntry[] = [];
+  for (const item of parsed.terms) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as { term?: unknown; weight?: unknown; reasoning?: unknown };
+    if (typeof o.term !== "string" || o.term.trim().length === 0) continue;
+    const weightNum = typeof o.weight === "number" && Number.isFinite(o.weight) ? o.weight : 1.0;
+    out.push({
+      term: o.term.trim(),
+      weight: weightNum,
+      reasoning:
+        typeof o.reasoning === "string" && o.reasoning.trim().length > 0
+          ? o.reasoning.trim()
+          : undefined,
+    });
+  }
+  return { terms: out };
+}
+
+function eventPrepSystemPrompt(ctx: EventPrepContext): string {
+  const name = ctx.jamesProfile?.displayName || "James";
+  const personaBlock = ctx.jamesProfile ? `\n${jamesProfileBlock(ctx.jamesProfile)}\n` : "";
+  return `You help ${name}, a non-verbal man with cerebral palsy who communicates by tapping suggested replies on an iPad, prepare for an upcoming conversation. Your output appears on the Events page before the conversation happens.
+${personaBlock}
+Goal: give ${name} 4–6 concrete talking points he could raise, and 3–5 questions he could ask. Bias toward the things he actually cares about (use his profile). Skip generic small talk unless his profile signals he enjoys it. Never invent facts about the attendees.
+
+Output strictly as JSON, no commentary:
+
+{
+  "keyPoints": ["string", "string", "..."],
+  "keyQuestions": ["string", "string", "..."]
+}
+
+Rules:
+- 4–6 keyPoints, 3–5 keyQuestions.
+- Each entry under 18 words.
+- First-person where natural ("I want to ask about...", "Tell them about..."), conversational.
+- Concrete, not generic.`;
+}
+
+function eventPrepUserPrompt(ctx: EventPrepContext): string {
+  const lines: string[] = [];
+  lines.push(`Event: ${ctx.eventName}`);
+  lines.push(`When: ${ctx.eventWhen}`);
+  if (ctx.placeName) lines.push(`Where: ${ctx.placeName}`);
+  if (ctx.attendeeNames.length > 0) lines.push(`Attendees: ${ctx.attendeeNames.join(", ")}`);
+  if (ctx.keyInfo?.trim()) lines.push(`Notes about the event:\n${ctx.keyInfo.trim()}`);
+  if (ctx.userPrompt?.trim()) lines.push(`What he wants from prep: ${ctx.userPrompt.trim()}`);
+  lines.push("");
+  lines.push("Return JSON only.");
+  return lines.join("\n");
+}
+
+function parseEventPrep(raw: string): EventPrepResult {
+  const json = extractJsonObject(raw);
+  if (!json) return { keyPoints: [], keyQuestions: [] };
+  let parsed: { keyPoints?: unknown; keyQuestions?: unknown };
+  try {
+    parsed = JSON.parse(json) as { keyPoints?: unknown; keyQuestions?: unknown };
+  } catch {
+    return { keyPoints: [], keyQuestions: [] };
+  }
+  const stringArray = (raw: unknown): string[] => {
+    if (!Array.isArray(raw)) return [];
+    const out: string[] = [];
+    for (const item of raw) {
+      if (typeof item === "string" && item.trim().length > 0) out.push(item.trim());
+    }
+    return out;
+  };
+  return {
+    keyPoints: stringArray(parsed.keyPoints),
+    keyQuestions: stringArray(parsed.keyQuestions),
+  };
+}
+
 // --------------------------------------------------------------------------
 // Helpers-tab prompts: draft reply + interest extraction
 // --------------------------------------------------------------------------
@@ -642,11 +851,15 @@ function draftReplyUserPrompt(ctx: DraftReplyContext): string {
     ? `# What he received / is replying to\n"""\n${ctx.incoming.trim()}\n"""\n`
     : "";
   const name = ctx.jamesProfile?.displayName || "James";
+  const override = ctx.toneOverride?.trim();
+  const overrideLine = override
+    ? `\nOverride the tone — make this version ${override}. Keep the same intent and content.`
+    : "";
   return `${profileBlock}${contextBlock}${incomingBlock}
 # What ${name} typed (rough, may have typos / be truncated)
 "${ctx.rawText}"
 
-Produce one polished recommended draft plus 2–4 alternative variations with different tones. JSON only.`;
+Produce one polished recommended draft plus 2–4 alternative variations with different tones. JSON only.${overrideLine}`;
 }
 
 function parseDraftReply(raw: string, fallbackText: string): DraftReplyResult {
