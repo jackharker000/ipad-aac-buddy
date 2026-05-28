@@ -3,6 +3,7 @@ import { nanoid } from "nanoid";
 import {
   db,
   type Conversation,
+  type JamesProfile,
   type Person,
   type SettingsRecord,
   type SuggestionCategory,
@@ -76,6 +77,9 @@ export type ConversationDeps = {
   ai: DomainAI;
   settings: SettingsRecord;
   jamesName: string;
+  /** Full James persona for the suggestion prompt persona block.
+   * Cached at construction so the cockpit doesn't re-query per turn. */
+  jamesProfile?: JamesProfile;
   placeId?: string;
   eventId?: string;
 };
@@ -101,6 +105,9 @@ export class LiveConversation {
   private closedSet: string[] | null = null;
   private placePersonIds: string[] | null = null;
   private eventPersonIds: string[] | null = null;
+  private placeName: string | null = null;
+  private eventName: string | null = null;
+  private eventKeyInfo: string | null = null;
 
   /**
    * If true, the next incoming VAD segment should be labelled "Unknown"
@@ -160,6 +167,24 @@ export class LiveConversation {
   setRoster(args: { people: Person[]; voiceprints: Voiceprint[] }): void {
     this.people = args.people;
     this.voiceprints = args.voiceprints;
+  }
+
+  /**
+   * Update the active place/event before start(). The cockpit's
+   * pre-Record pickers re-render but don't rebuild this LiveConversation,
+   * so without this we'd read stale deps that were captured at construction.
+   * Safe to call mid-recording, but only the next start() actually reads
+   * the values — mid-conversation place changes are out of scope.
+   */
+  setSession(args: { placeId?: string; eventId?: string }): void {
+    this.deps = { ...this.deps, placeId: args.placeId, eventId: args.eventId };
+  }
+
+  /** Live-update the James persona block. Picked up by the next
+   * regenerateSuggestions; cache-key churn is acceptable since profile
+   * edits are rare and the user changing them wants the update visible. */
+  setJamesProfile(profile: JamesProfile | undefined): void {
+    this.deps = { ...this.deps, jamesProfile: profile };
   }
 
   /**
@@ -387,14 +412,19 @@ export class LiveConversation {
       };
       await db().conversations.add(this.conversation);
 
-      // Resolve place/event personIds for the speaker-ID prior. Both are
-      // optional; missing rows leave the prior unboosted.
+      // Resolve place/event personIds for the speaker-ID prior AND cache
+      // their display names for the suggestion prompt. Both are optional;
+      // missing rows leave the prior unboosted and the prompt context-free.
       this.placePersonIds = null;
       this.eventPersonIds = null;
+      this.placeName = null;
+      this.eventName = null;
+      this.eventKeyInfo = null;
       if (this.deps.placeId) {
         try {
           const place = await db().places.get(this.deps.placeId);
           this.placePersonIds = place?.personIds ?? null;
+          this.placeName = place?.name ?? null;
         } catch (err) {
           console.warn("[conversation] place lookup failed", err);
         }
@@ -403,6 +433,8 @@ export class LiveConversation {
         try {
           const event = await db().events.get(this.deps.eventId);
           this.eventPersonIds = event?.personIds ?? null;
+          this.eventName = event?.name ?? null;
+          this.eventKeyInfo = event?.keyInfo ?? null;
         } catch (err) {
           console.warn("[conversation] event lookup failed", err);
         }
@@ -454,6 +486,9 @@ export class LiveConversation {
     this.recentSpeakers = [];
     this.placePersonIds = null;
     this.eventPersonIds = null;
+    this.placeName = null;
+    this.eventName = null;
+    this.eventKeyInfo = null;
     // Keep closedSet — the picker is a pre-Record control; the cockpit
     // resets it explicitly when the user reopens the picker.
     this.setState("idle");
@@ -752,6 +787,12 @@ export class LiveConversation {
       // each time the streaming JSON parser closes another suggestion
       // object; the final non-streaming resolve fires onSuggestions(drafts,
       // false) below.
+      // Build the people-in-room list. Closed-set wins (it's the user's
+      // declared intent); fall back to whoever's actually been confirmed
+      // in the transcript so the prompt still has names to anchor against
+      // when the user opted not to pre-pick a roster.
+      const peopleNames = this.buildPeopleNamesForPrompt();
+
       const drafts = await this.deps.ai.generateSuggestions(
         {
           jamesName: this.deps.jamesName,
@@ -760,6 +801,12 @@ export class LiveConversation {
             speaker: t.speakerKind === "self" ? this.deps.jamesName : (t.personName ?? "Other"),
             text: t.text,
           })),
+          peopleNames: peopleNames.length > 0 ? peopleNames : undefined,
+          placeName: this.placeName ?? undefined,
+          event: this.eventName
+            ? { name: this.eventName, keyInfo: this.eventKeyInfo ?? undefined }
+            : undefined,
+          jamesProfile: this.deps.jamesProfile,
         },
         (partial) => {
           if (abort.signal.aborted) return;
@@ -835,5 +882,28 @@ export class LiveConversation {
   private emitError(err: unknown): void {
     const e = err instanceof Error ? err : new Error(String(err));
     this.callbacks.onError?.(e);
+  }
+
+  /**
+   * Build the "people in the room" list for the suggestion prompt. Closed
+   * set is authoritative when present (it's the user's declared intent).
+   * Otherwise gather the personIds the matcher has confirmed in this
+   * conversation so far — better than no names at all on an open match.
+   * Dedupes against `this.people` so we never emit an id we don't have a
+   * name for.
+   */
+  private buildPeopleNamesForPrompt(): string[] {
+    const idToName = new Map(this.people.map((p) => [p.id, p.name]));
+    if (this.closedSet && this.closedSet.length > 0) {
+      return this.closedSet.map((id) => idToName.get(id) ?? "").filter((n) => n.length > 0);
+    }
+    const seen = new Set<string>();
+    for (const seg of this.transcriptCache) {
+      if (seg.speakerKind !== "other") continue;
+      if (!seg.personId) continue;
+      const name = idToName.get(seg.personId);
+      if (name && !seen.has(name)) seen.add(name);
+    }
+    return Array.from(seen);
   }
 }

@@ -47,6 +47,9 @@ export type SuggestionContext = {
   placeName?: string;
   /** Optional active event name + agenda. */
   event?: { name: string; keyInfo?: string };
+  /** Full James persona for the system block. Cache-friendly — stable
+   * across a session, so it sits inside the cached system prompt. */
+  jamesProfile?: JamesProfile;
 };
 
 export type ExpandContext = {
@@ -267,10 +270,11 @@ export class DomainAI {
 
 function suggestionsSystemPrompt(ctx: SuggestionContext): string {
   const name = ctx.jamesName || "James";
+  const personaBlock = ctx.jamesProfile ? `\n${jamesProfileBlock(ctx.jamesProfile)}` : "";
   return `You are Parley, an AAC reply assistant for ${name}.
 
 ${name} is a non-verbal man with cerebral palsy. He communicates by tapping suggested replies on an iPad, which are then spoken aloud in his cloned voice. Your job is to give him 6 ready-to-tap replies whenever someone speaks to him.
-
+${personaBlock}
 Voice and style:
 - Sound like ${name}, not like an assistant. First-person ("I", "we", never "James says...").
 - Conversational English. Contractions are fine. Avoid emojis.

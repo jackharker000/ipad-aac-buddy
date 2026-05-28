@@ -10,6 +10,7 @@ import {
   db,
   type EventRecord,
   type Person,
+  type Place,
   type SuggestionCategory,
   type Voiceprint,
   type VoiceprintContribution,
@@ -37,6 +38,7 @@ export const Route = createFileRoute("/")({
 const EMPTY_PEOPLE: Person[] = [];
 const EMPTY_VOICEPRINTS: Voiceprint[] = [];
 const EMPTY_EVENTS: EventRecord[] = [];
+const EMPTY_PLACES: Place[] = [];
 const EMPTY_CONTRIBUTIONS: VoiceprintContribution[] = [];
 
 const QUICK_PHRASES: { text: string; label?: string }[] = [
@@ -115,6 +117,7 @@ function Cockpit() {
     [],
     EMPTY_EVENTS,
   );
+  const places = useLiveQuery(() => db().places.orderBy("name").toArray(), [], EMPTY_PLACES);
   const voiceprintContributions = useLiveQuery(
     () => db().voiceprintContributions.toArray(),
     [],
@@ -127,6 +130,7 @@ function Cockpit() {
   // LiveConversation.addToRoster path so we don't have to re-sync here.
   const [selectedPersonIds, setSelectedPersonIds] = useState<string[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [selectedPlaceId, setSelectedPlaceId] = useState<string | null>(null);
 
   // Auto-fill the roster from a selected event's expected attendees.
   useEffect(() => {
@@ -171,7 +175,9 @@ function Cockpit() {
       ai,
       settings,
       jamesName: jamesProfile?.displayName ?? "James",
+      jamesProfile: jamesProfile ?? undefined,
       eventId: selectedEventId ?? undefined,
+      placeId: selectedPlaceId ?? undefined,
     });
     conv.on({
       onStateChange: setState,
@@ -212,13 +218,16 @@ function Cockpit() {
     return conv;
   }, [ai, settings, jamesProfile?.displayName]);
 
-  // Keep roster + mood + ai in sync with the live conversation instance.
+  // Keep roster + mood + persona in sync with the live conversation instance.
   useEffect(() => {
     conversationRef.current?.setRoster({ people, voiceprints });
   }, [people, voiceprints]);
   useEffect(() => {
     conversationRef.current?.setMood(mood);
   }, [mood]);
+  useEffect(() => {
+    conversationRef.current?.setJamesProfile(jamesProfile ?? undefined);
+  }, [jamesProfile]);
 
   useEffect(() => {
     // Tear down on unmount (route change). Conversation also tears down on Stop.
@@ -249,6 +258,10 @@ function Cockpit() {
     conv.setRoster({ people, voiceprints });
     conv.setMood(mood);
     conv.setClosedSet(selectedPersonIds.length > 0 ? selectedPersonIds : null);
+    conv.setSession({
+      placeId: selectedPlaceId ?? undefined,
+      eventId: selectedEventId ?? undefined,
+    });
     await conv.start();
   };
 
@@ -404,6 +417,9 @@ function Cockpit() {
           events={events}
           selectedEventId={selectedEventId}
           onSelectEvent={setSelectedEventId}
+          places={places}
+          selectedPlaceId={selectedPlaceId}
+          onSelectPlace={setSelectedPlaceId}
           sampleCountByPerson={sampleCountByPerson}
         />
       )}
@@ -904,6 +920,9 @@ function RosterPicker({
   events,
   selectedEventId,
   onSelectEvent,
+  places,
+  selectedPlaceId,
+  onSelectPlace,
   sampleCountByPerson,
 }: {
   people: Person[];
@@ -912,9 +931,12 @@ function RosterPicker({
   events: EventRecord[];
   selectedEventId: string | null;
   onSelectEvent: (id: string | null) => void;
+  places: Place[];
+  selectedPlaceId: string | null;
+  onSelectPlace: (id: string | null) => void;
   sampleCountByPerson: Map<string, number>;
 }) {
-  if (people.length === 0 && events.length === 0) {
+  if (people.length === 0 && events.length === 0 && places.length === 0) {
     return (
       <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-4 text-sm text-muted-foreground">
         No enrolled people yet. Add some on the{" "}
@@ -970,27 +992,53 @@ function RosterPicker({
           );
         })}
       </div>
-      {events.length > 0 && (
-        <div className="flex items-center gap-2 border-t border-border pt-3">
-          <label className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-            Event
-          </label>
-          <select
-            value={selectedEventId ?? ""}
-            onChange={(e) => onSelectEvent(e.target.value || null)}
-            className="rounded-md border border-input bg-background px-2 py-1 text-sm"
-          >
-            <option value="">— none —</option>
-            {events.map((ev) => (
-              <option key={ev.id} value={ev.id}>
-                {ev.name}
-              </option>
-            ))}
-          </select>
-          {selectedEventId && (
-            <span className="text-xs text-muted-foreground">
-              Auto-fills attendees · boosts prior 2.5×
-            </span>
+      {(events.length > 0 || places.length > 0) && (
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border pt-3">
+          {places.length > 0 && (
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Place
+              </label>
+              <select
+                value={selectedPlaceId ?? ""}
+                onChange={(e) => onSelectPlace(e.target.value || null)}
+                className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+              >
+                <option value="">— none —</option>
+                {places.map((pl) => (
+                  <option key={pl.id} value={pl.id}>
+                    {pl.name}
+                  </option>
+                ))}
+              </select>
+              {selectedPlaceId && (
+                <span className="text-xs text-muted-foreground">boosts prior 2×</span>
+              )}
+            </div>
+          )}
+          {events.length > 0 && (
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Event
+              </label>
+              <select
+                value={selectedEventId ?? ""}
+                onChange={(e) => onSelectEvent(e.target.value || null)}
+                className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+              >
+                <option value="">— none —</option>
+                {events.map((ev) => (
+                  <option key={ev.id} value={ev.id}>
+                    {ev.name}
+                  </option>
+                ))}
+              </select>
+              {selectedEventId && (
+                <span className="text-xs text-muted-foreground">
+                  Auto-fills attendees · boosts prior 2.5×
+                </span>
+              )}
+            </div>
           )}
         </div>
       )}
