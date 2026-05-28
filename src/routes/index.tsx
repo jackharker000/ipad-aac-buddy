@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Mic, MicOff } from "lucide-react";
+import { Loader2, Mic, MicOff, Rewind, Send } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
@@ -16,6 +16,9 @@ import {
   type ConversationState,
   type LiveTranscriptSegment,
 } from "@/lib/conversation";
+import { warmQuickPhraseCache, QUICK_PHRASES as CACHED_PHRASES } from "@/lib/audio/quick-phrase-cache";
+import { speakText, stopAllPlayback } from "@/lib/audio/speak-text";
+import { getLastSegment, playLastSegment } from "@/lib/audio/last-segment-store";
 
 export const Route = createFileRoute("/")({
   component: HomePage,
@@ -31,6 +34,18 @@ const QUICK_PHRASES: { text: string; label?: string }[] = [
   { text: "Could you repeat that?" },
   { text: "Sorry, who am I speaking with?", label: "Who is this?" },
 ];
+
+// Sanity guard: keep the cockpit's display labels in lock-step with the cache's
+// canonical phrase strings. Cache hits use exact-string lookup, so any drift
+// (e.g. "Yes." vs "Yes") silently downgrades quick phrases to live TTS.
+if (
+  typeof window !== "undefined" &&
+  QUICK_PHRASES.some((p, i) => p.text !== CACHED_PHRASES[i])
+) {
+  console.warn(
+    "[cockpit] QUICK_PHRASES text drifted from cached set — quick phrases will miss cache",
+  );
+}
 
 function HomePage() {
   return <ClientCockpit />;
@@ -148,6 +163,19 @@ function Cockpit() {
     };
   }, []);
 
+  // Warm the quick-phrase audio cache as soon as the voice id is known.
+  // Single-iPad app: this runs once per voice on first cockpit mount and
+  // never again unless the voice id changes. Failure is silent — the speak
+  // path falls back to live TTS.
+  useEffect(() => {
+    if (!settings.jamesVoiceId) return;
+    void warmQuickPhraseCache({
+      voiceId: settings.jamesVoiceId,
+      ttsProvider: settings.ttsProvider,
+      pruneOldVoices: true,
+    });
+  }, [settings.jamesVoiceId, settings.ttsProvider]);
+
   const start = async () => {
     if (!embedderReady) {
       toast.error("Embedder still warming up");
@@ -165,15 +193,48 @@ function Cockpit() {
     setCandidates([]);
   };
 
-  const speak = async (s: { text: string; category?: SuggestionCategory; why?: string }) => {
-    const conv = ensureConversation();
-    setSpeakingText(s.text);
-    try {
-      await conv.speak(s);
-    } finally {
-      setSpeakingText(null);
+  /**
+   * Single entry point for "make a sound." Routes cache-aware playback
+   * through speakText regardless of whether a LiveConversation is started,
+   * so quick phrases and type-and-speak work during cold start, between
+   * conversations, and when the embedder is mid-reset. Only when a live
+   * conversation exists do we also fold the spoken text into Dexie logs
+   * via conv.speak().
+   */
+  const speak = useCallback(
+    async (s: { text: string; category?: SuggestionCategory; why?: string }) => {
+      setSpeakingText(s.text);
+      try {
+        const conv = conversationRef.current;
+        const live = conv?.getState() === "listening" || conv?.getState() === "speech";
+        if (live && conv) {
+          await conv.speak(s);
+        } else {
+          await speakText({
+            text: s.text,
+            voiceId: settings.jamesVoiceId,
+            ttsProvider: settings.ttsProvider,
+          });
+        }
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : String(err));
+      } finally {
+        setSpeakingText(null);
+      }
+    },
+    [settings.jamesVoiceId, settings.ttsProvider],
+  );
+
+  const replay = useCallback(async () => {
+    const seg = getLastSegment();
+    if (!seg) {
+      toast.message("No recent speech to replay");
+      return;
     }
-  };
+    stopAllPlayback();
+    const ok = await playLastSegment();
+    if (!ok) toast.error("Couldn't replay — Web Audio unavailable");
+  }, []);
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-5 px-4 py-6">
@@ -223,16 +284,19 @@ function Cockpit() {
           candidates={candidates}
           acceptThreshold={settings.speakerIdAcceptThreshold}
         />
-        <SuggestionGrid
-          suggestions={suggestions}
-          loading={suggestionsLoading}
-          speakingText={speakingText}
-          onSpeak={speak}
-        />
+        <div className="flex flex-col gap-4">
+          <TypeAndSpeakInput speakingText={speakingText} onSpeak={(text) => speak({ text })} />
+          <SuggestionGrid
+            suggestions={suggestions}
+            loading={suggestionsLoading}
+            speakingText={speakingText}
+            onSpeak={speak}
+          />
+        </div>
         <TranscriptColumn transcript={transcript} jamesName={jamesProfile?.displayName ?? "Me"} />
       </div>
 
-      <QuickPhrasesRow speakingText={speakingText} onSpeak={speak} />
+      <QuickPhrasesRow speakingText={speakingText} onSpeak={speak} onReplay={replay} />
       <MoodSelector mood={mood} onChange={setMood} />
     </div>
   );
@@ -514,9 +578,11 @@ function SpeakerColumn({
 function QuickPhrasesRow({
   speakingText,
   onSpeak,
+  onReplay,
 }: {
   speakingText: string | null;
   onSpeak: (s: { text: string }) => void;
+  onReplay: () => void;
 }) {
   return (
     <div className="flex flex-wrap gap-2">
@@ -534,6 +600,73 @@ function QuickPhrasesRow({
           {p.label ?? p.text}
         </Button>
       ))}
+      <Button
+        variant="outline"
+        size="lg"
+        onClick={onReplay}
+        className="min-h-[48px] flex-1 sm:flex-none"
+        title="Replay the last thing said in the room"
+      >
+        <Rewind className="h-4 w-4" />
+        Replay
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * Always-visible "speak as me" input. Lives above the suggestion grid so
+ * James doesn't have to scan past suggestions to reach it during a turn
+ * he wants to compose freely. Plain <input> (not <textarea>) because the
+ * iPad soft keyboard already eats half the screen and James's motor
+ * control makes precise cursor placement painful — a single line plus a
+ * large Speak button is the cheapest accessible primitive.
+ */
+function TypeAndSpeakInput({
+  speakingText,
+  onSpeak,
+}: {
+  speakingText: string | null;
+  onSpeak: (text: string) => void;
+}) {
+  const [text, setText] = useState("");
+  const submit = () => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    onSpeak(trimmed);
+    setText("");
+  };
+  const isSpeakingThis = !!text.trim() && speakingText === text.trim();
+  return (
+    <div className="flex items-stretch gap-2 rounded-2xl border border-border bg-card p-3 shadow-sm">
+      <input
+        type="text"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            submit();
+          }
+        }}
+        placeholder="Type and tap Speak…"
+        className="min-h-[52px] flex-1 rounded-xl border border-input bg-background px-4 text-lg outline-none focus:ring-2 focus:ring-accent"
+        autoCapitalize="sentences"
+        autoCorrect="on"
+        spellCheck
+        // Visible at all times; not gated on embedder warmup or LiveConversation
+        // state — that's the whole point of this control.
+      />
+      <Button
+        variant="accent"
+        size="lg"
+        onClick={submit}
+        disabled={!text.trim()}
+        className={cn("min-h-[52px] px-6", isSpeakingThis && "ring-2 ring-accent")}
+      >
+        <Send className="h-5 w-5" />
+        Speak
+      </Button>
     </div>
   );
 }

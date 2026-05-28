@@ -15,6 +15,7 @@ import { centroidsFromVoiceprints, match, type Candidate } from "@/lib/audio/mat
 import { encodeEmbedding, rms } from "@/lib/audio/utils";
 import { transcribeSegment } from "@/lib/audio/stt";
 import type { SpeakerEmbedder } from "@/lib/audio/embedder";
+import { setLastSegment } from "@/lib/audio/last-segment-store";
 import { TTSPlayer } from "@/lib/audio/tts-player";
 import type { DomainAI, Mood, SuggestionDraft } from "@/lib/ai";
 import { makeTTS } from "@/lib/providers";
@@ -231,6 +232,17 @@ export class LiveConversation {
   // -----------------------------------------------------------------------
 
   private async handleSegment(segment: VADSegment): Promise<void> {
+    // Always remember the most recent segment audio so James can hit the
+    // "What did they say?" Replay button. This is the only place the store
+    // gets updated; the in-flight throttle below would skip the dropped
+    // segments otherwise.
+    setLastSegment({
+      audio: segment.audio,
+      sampleRate: 16000,
+      durationMs: segment.durationMs,
+      capturedAt: Date.now(),
+    });
+
     // Throttle: skip if a previous segment is still being processed. The
     // user-perceived loss is small (Silero VAD's segments are full
     // utterances, and the embedder + STT round-trip is ~2 s) and it stops

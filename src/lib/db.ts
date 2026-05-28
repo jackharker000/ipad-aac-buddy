@@ -111,6 +111,9 @@ export type Place = {
   /** GPS snap radius in metres. */
   radiusM?: number;
   notes?: string;
+  /** People commonly present here. Multiplies the speaker-ID prior 2× for
+   * each enrolled person on this list when the place is active. */
+  personIds?: string[];
   createdAt: number;
   updatedAt: number;
 };
@@ -320,6 +323,40 @@ export type ManualReply = {
   spokenAt: number;
 };
 
+/**
+ * On-device cache of synthesised TTS audio for the canned quick phrases.
+ * Single source of truth for "James never goes silent" — these clips must
+ * play with zero network and zero LiveConversation dependency.
+ *
+ * Cache key is `phraseText::voiceId` because changing James's voice id
+ * invalidates every prior synth.
+ */
+export type CachedPhraseAudio = {
+  id: string;
+  phraseText: string;
+  voiceId: string;
+  mimeType: string;
+  audioBuffer: ArrayBuffer;
+  cachedAt: number;
+};
+
+/**
+ * Tier-2 / post-conversation jobs that should run in the background after
+ * the user taps Stop. Queued here so they survive tab close / reload — the
+ * drainer reads pending rows on next app mount and replays them, instead
+ * of fire-and-forget which the browser kills on navigation.
+ */
+export type PendingJob = {
+  id: string;
+  type: "summariseConversation" | "rediarize" | "rebuildVoiceprints" | "enrichProfiles";
+  conversationId: string;
+  status: "pending" | "running" | "done" | "failed";
+  attempts: number;
+  lastError?: string;
+  createdAt: number;
+  updatedAt: number;
+};
+
 export type SettingsRecord = {
   id: "singleton";
   llmProvider: LLMProviderId;
@@ -388,6 +425,9 @@ export class ParleyDB extends Dexie {
 
   settings!: EntityTable<SettingsRecord, "id">;
 
+  cachedPhraseAudio!: EntityTable<CachedPhraseAudio, "id">;
+  pendingJobs!: EntityTable<PendingJob, "id">;
+
   constructor() {
     super("parley");
     this.version(1).stores({
@@ -420,6 +460,16 @@ export class ParleyDB extends Dexie {
       manualReplies: "id, conversationId, spokenAt",
 
       settings: "id",
+    });
+
+    // v2: durable-degradation tables. cachedPhraseAudio so the five quick
+    // phrases play offline and with no LiveConversation; pendingJobs so
+    // tier-2 work survives tab close after Stop. Place.personIds is a
+    // type-only addition (Dexie doesn't enforce TS types) so no index
+    // change is needed for it here.
+    this.version(2).stores({
+      cachedPhraseAudio: "id, phraseText, voiceId, cachedAt",
+      pendingJobs: "id, type, conversationId, status, createdAt",
     });
   }
 }
