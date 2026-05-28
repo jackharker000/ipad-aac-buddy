@@ -54,11 +54,71 @@ export type MatchContext = {
   temperature?: number;
 };
 
+/**
+ * Cosine-similarity threshold for the single-enrollee fallback. WavLM
+ * x-vectors on in-room iPad audio typically settle in the 0.55–0.70 range
+ * for genuine matches; 0.60 is conservative. TODO: validate empirically
+ * once James has 3+ samples enrolled — record both match and non-match
+ * segments and pick the value that minimises false accepts.
+ */
+const SINGLE_ENROLL_THRESHOLD = 0.6;
+
+/**
+ * Floor on the unknown candidate's likelihood. Without this, a weak top
+ * similarity (say 0.95 → unknown-likelihood = 0.05) combined with a strong
+ * prior on an enrolled person produces a near-certain confirmed match even
+ * when the voice is clearly not theirs. 0.10 leaves enough mass for "this
+ * is somebody new" to surface in the candidates list. A principled
+ * calibration is a Tier-2 task.
+ */
+const UNKNOWN_LIKELIHOOD_FLOOR = 0.1;
+
 export function match(embedding: Float32Array, context: MatchContext): Candidate[] {
   const enrolled = context.people.filter((p) => context.centroidByPersonId.has(p.id));
 
   if (enrolled.length === 0) {
     return [{ personId: null, name: "Unknown speaker", prior: 1, posterior: 1 }];
+  }
+
+  // Single-enrollee fallback: softmax over a single value always returns 1.0,
+  // so the matcher would post a confirmed match on every utterance regardless
+  // of how dissimilar the voice actually is. Bypass softmax and use a
+  // calibrated cosine threshold instead.
+  if (enrolled.length === 1) {
+    const person = enrolled[0];
+    const sim = cosine(embedding, context.centroidByPersonId.get(person.id)!);
+    if (sim >= SINGLE_ENROLL_THRESHOLD) {
+      return [
+        {
+          personId: person.id,
+          name: person.name,
+          similarity: sim,
+          prior: 1,
+          posterior: sim,
+        },
+        {
+          personId: null,
+          name: "Unknown speaker",
+          prior: 1,
+          posterior: 1 - sim,
+        },
+      ];
+    }
+    return [
+      {
+        personId: null,
+        name: "Unknown speaker",
+        prior: 1,
+        posterior: 1 - sim,
+      },
+      {
+        personId: person.id,
+        name: person.name,
+        similarity: sim,
+        prior: 1,
+        posterior: sim,
+      },
+    ];
   }
 
   const similarities = enrolled.map((p) =>
@@ -67,7 +127,7 @@ export function match(embedding: Float32Array, context: MatchContext): Candidate
 
   // Likelihood = softmax over similarities with a sharp temperature so that
   // a clearly-better match dominates. 0.07 is a reasonable starting point;
-  // tune once we have real ECAPA numbers from the spike.
+  // tune once we have real WavLM numbers from the spike.
   const likelihoods = softmax(similarities, context.temperature ?? 0.07);
 
   const priors = enrolled.map((p) => computePrior(p.id, context));
@@ -76,12 +136,12 @@ export function match(embedding: Float32Array, context: MatchContext): Candidate
 
   const unnormalized = enrolled.map((_, i) => likelihoods[i] * normalizedPriors[i]);
 
-  // Carve out a slot for the unknown candidate. Its likelihood is the
-  // "leftover" mass — i.e. how flat the top similarity is. A weak top
-  // match boosts the unknown candidate.
+  // Carve out a slot for the unknown candidate. Floor the likelihood so a
+  // strong prior on an enrolled person can't fully suppress "this is
+  // somebody new" when the actual similarity is weak.
   const unknownReserve = context.unknownReserve ?? 0.2;
   const topSim = Math.max(...similarities);
-  const unknownLikelihood = 1 - clamp(topSim, 0, 1);
+  const unknownLikelihood = Math.max(UNKNOWN_LIKELIHOOD_FLOOR, 1 - clamp(topSim, 0, 1));
   const unknownUnnorm = unknownLikelihood * unknownReserve;
 
   const total = unnormalized.reduce((a, b) => a + b, 0) + unknownUnnorm;
