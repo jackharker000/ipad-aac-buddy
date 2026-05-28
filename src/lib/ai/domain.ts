@@ -1,5 +1,5 @@
 import type { LLMProvider } from "@/lib/providers";
-import type { JamesProfile, SuggestionCategory } from "@/lib/db";
+import type { JamesProfile, StyleProfile, SuggestionCategory } from "@/lib/db";
 
 /**
  * Domain-level AI client. Sits above the raw LLMProvider chat layer and
@@ -154,6 +154,103 @@ export type EventPrepResult = {
   keyPoints: string[];
   /** 3–5 questions he could ask. */
   keyQuestions: string[];
+};
+
+// --------------------------------------------------------------------------
+// Post-conversation learning loop types
+// --------------------------------------------------------------------------
+
+/**
+ * Style-distillation sample bundle. Each list is a different evidence
+ * channel — tapped suggestions, ignored suggestions, edited suggestions
+ * (text the model proposed vs the text James actually said), and Helpers-tab
+ * draft edits. The smart-tier model rolls these up into a `StyleProfile`.
+ */
+export type DistillStyleSamples = {
+  tappedExamples: Array<{ personName?: string; text: string; category: string }>;
+  ignoredExamples: Array<{ text: string; category: string }>;
+  editedExamples: Array<{ from: string; to: string }>;
+  helperEdits: Array<{ platform: string; recommended: string; jamesEdit: string }>;
+};
+
+export type DistillStyleContext = {
+  samples: DistillStyleSamples;
+  jamesProfile?: JamesProfile;
+  previous?: StyleProfile;
+};
+
+export type DistilledStyleProfile = Pick<
+  StyleProfile,
+  | "preferredOpeners"
+  | "preferredSignOffs"
+  | "formality"
+  | "humorMarkers"
+  | "tabooPhrases"
+  | "averageSentenceLength"
+  | "readingGradeEstimate"
+  | "categoryPreferenceScores"
+> & {
+  /** Optional one-sentence summary of what changed; surfaced in the System tab. */
+  summary?: string;
+};
+
+export type ExtractMemoriesContext = {
+  transcript: string;
+  conversationId: string;
+  peopleNames: string[];
+  jamesProfile?: JamesProfile;
+};
+
+export type ExtractedMemoryKind = "fact" | "preference" | "joke" | "event";
+
+export type ExtractedMemory = {
+  /** Resolved id from the peopleNames roster. Undefined when the memory is
+   * general / not person-specific or the model picked a name we can't resolve. */
+  personId?: string;
+  kind: ExtractedMemoryKind;
+  text: string;
+};
+
+export type ExtractMemoriesResult = {
+  memories: ExtractedMemory[];
+};
+
+export type EnrichPersonProfileContext = {
+  personName: string;
+  transcript: string;
+  currentProfile?: {
+    relationship?: string;
+    topicsLoved?: string[];
+    notes?: string;
+  };
+  jamesProfile?: JamesProfile;
+};
+
+export type ProfileProposalDraft = {
+  field: string;
+  op: "set" | "append" | "remove";
+  value: string;
+  reasoning?: string;
+};
+
+export type EnrichPersonProfileResult = {
+  proposals: ProfileProposalDraft[];
+};
+
+export type DetectIntroductionsContext = {
+  /** Transcript text the model can scan for confirmations. */
+  transcript: string;
+  /** Names the regex pre-filter picked up. */
+  candidates: string[];
+};
+
+export type ConfirmedIntroduction = {
+  name: string;
+  confidence: number;
+};
+
+export type DetectIntroductionsResult = {
+  confirmed: ConfirmedIntroduction[];
 };
 
 export class DomainAI {
@@ -351,6 +448,84 @@ export class DomainAI {
       ],
     });
     return parseInterestSuggestions(response.text);
+  }
+
+  /**
+   * Tier-1 style distillation. Smart tier; runs at most once per 12h from
+   * the post-conversation drainer. Folds recent suggestion + helper-draft
+   * evidence into a typed `StyleProfile` that lives in the cached system
+   * block of every future suggestion call.
+   */
+  async distillStyleProfile(ctx: DistillStyleContext): Promise<DistilledStyleProfile> {
+    const response = await this.llm.complete({
+      tier: "smart",
+      maxTokens: 1500,
+      temperature: 0.3,
+      cacheSystem: false,
+      messages: [
+        { role: "system", content: distillStyleSystemPrompt() },
+        { role: "user", content: distillStyleUserPrompt(ctx) },
+      ],
+    });
+    return parseStyleProfile(response.text);
+  }
+
+  /**
+   * Tier-3 memory extraction. Smart tier; runs post-conversation. Returns
+   * a short list of person-specific or place-specific memories worth
+   * embedding for top-K retrieval at suggestion time.
+   */
+  async extractMemories(ctx: ExtractMemoriesContext): Promise<ExtractMemoriesResult> {
+    const response = await this.llm.complete({
+      tier: "smart",
+      maxTokens: 800,
+      temperature: 0.3,
+      cacheSystem: false,
+      messages: [
+        { role: "system", content: extractMemoriesSystemPrompt() },
+        { role: "user", content: extractMemoriesUserPrompt(ctx) },
+      ],
+    });
+    return parseExtractedMemories(response.text, ctx.peopleNames);
+  }
+
+  /**
+   * Tier-2 per-person profile enrichment. Smart tier; one call per
+   * confirmed participant after the drainer's rediarize pass. Returns
+   * conservative proposals against `relationship` / `topicsLoved` / `notes`.
+   */
+  async enrichPersonProfile(ctx: EnrichPersonProfileContext): Promise<EnrichPersonProfileResult> {
+    const response = await this.llm.complete({
+      tier: "smart",
+      maxTokens: 600,
+      temperature: 0.3,
+      cacheSystem: false,
+      messages: [
+        { role: "system", content: enrichPersonProfileSystemPrompt() },
+        { role: "user", content: enrichPersonProfileUserPrompt(ctx) },
+      ],
+    });
+    return parseEnrichPersonProfile(response.text);
+  }
+
+  /**
+   * Tier-2 introduction confirmation. Fast tier; takes a regex-shortlisted
+   * candidate list and a transcript and returns only those candidates that
+   * are *actual* self-introductions (vs accidental name matches like "meet
+   * me at the cafe"). The pre-filter caps the prompt size.
+   */
+  async detectIntroductions(ctx: DetectIntroductionsContext): Promise<DetectIntroductionsResult> {
+    const response = await this.llm.complete({
+      tier: "fast",
+      maxTokens: 400,
+      temperature: 0.2,
+      cacheSystem: false,
+      messages: [
+        { role: "system", content: detectIntroductionsSystemPrompt() },
+        { role: "user", content: detectIntroductionsUserPrompt(ctx) },
+      ],
+    });
+    return parseDetectIntroductions(response.text);
   }
 }
 
@@ -931,6 +1106,320 @@ ${ctx.draft}
 """
 
 Return 0-3 suggested profile additions. JSON only.`;
+}
+
+// --------------------------------------------------------------------------
+// Style distillation prompts + parser
+// --------------------------------------------------------------------------
+
+function distillStyleSystemPrompt(): string {
+  return `You distill James's reply-style evidence into a structured profile that downstream prompts will inject. James is a non-verbal man with cerebral palsy who taps AI-suggested replies on an iPad.
+
+You are given four evidence channels:
+- tappedExamples: suggestions James actually tapped (proxy for "yes, this is me").
+- ignoredExamples: suggestions James left unread (proxy for "not me").
+- editedExamples: where the model proposed X and James edited it to Y before speaking (the strongest signal — Y is his voice).
+- helperEdits: Helpers-tab drafts where the model proposed "recommended" and James edited to "jamesEdit" before sending. Same strong signal as editedExamples.
+
+Roll these into a stable style profile. Be conservative: prefer the smaller / safer claim when evidence is thin. Don't echo phrases verbatim unless they recur.
+
+Output strictly as JSON, no commentary:
+
+{
+  "preferredOpeners": ["string", "..."],
+  "preferredSignOffs": ["string", "..."],
+  "formality": "casual|neutral|formal",
+  "humorMarkers": ["string", "..."],
+  "tabooPhrases": ["string", "..."],
+  "averageSentenceLength": number,
+  "readingGradeEstimate": number,
+  "categoryPreferenceScores": { "answer": 0.0, "question": 0.0, "followup": 0.0, "planned": 0.0, "humor": 0.0, "clarify": 0.0, "give-me-a-moment": 0.0 },
+  "summary": "string (one short sentence describing what changed since the previous profile, optional)"
+}
+
+Rules:
+- preferredOpeners / preferredSignOffs: 0-6 entries each. Phrases James actually uses, not generic ones.
+- humorMarkers: 0-8 short phrases or recurring jokes. Skip if no humor signal.
+- tabooPhrases: 0-8 phrases James consistently ignored or edited away. These become "do NOT propose" hints.
+- formality: pick one. "neutral" is the safe default.
+- averageSentenceLength: in words. Estimate from tapped+edited rows.
+- readingGradeEstimate: US grade level (e.g. 6 = sixth grade). Rough estimate.
+- categoryPreferenceScores: 0.0–1.0 per category. Higher = James picks it more often. Omit categories with no signal rather than guessing 0.
+- summary: optional one sentence ("now leans short and dry", "more questions for family"). Skip when nothing meaningful changed.`;
+}
+
+function distillStyleUserPrompt(ctx: DistillStyleContext): string {
+  const profile = ctx.jamesProfile ? jamesProfileBlock(ctx.jamesProfile) : "";
+  const previousBlock = ctx.previous
+    ? `# Previous style profile (refine this, don't reset it)\n${JSON.stringify(ctx.previous, null, 2)}\n\n`
+    : "";
+  const samplesBlock = `# Evidence\n${JSON.stringify(ctx.samples, null, 2)}\n\n`;
+  return `${profile}${previousBlock}${samplesBlock}Return JSON only.`;
+}
+
+function parseStyleProfile(raw: string): DistilledStyleProfile {
+  const json = extractJsonObject(raw);
+  const fallback: DistilledStyleProfile = {
+    preferredOpeners: [],
+    preferredSignOffs: [],
+    formality: "neutral",
+    humorMarkers: [],
+    tabooPhrases: [],
+    averageSentenceLength: 0,
+    readingGradeEstimate: 0,
+    categoryPreferenceScores: {},
+  };
+  if (!json) return fallback;
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(json) as Record<string, unknown>;
+  } catch {
+    return fallback;
+  }
+  const stringArray = (v: unknown): string[] => {
+    if (!Array.isArray(v)) return [];
+    const out: string[] = [];
+    for (const item of v) {
+      if (typeof item === "string" && item.trim().length > 0) out.push(item.trim());
+    }
+    return out;
+  };
+  const formality: DistilledStyleProfile["formality"] =
+    parsed.formality === "casual" || parsed.formality === "formal" ? parsed.formality : "neutral";
+  const numeric = (v: unknown, fallback: number): number =>
+    typeof v === "number" && Number.isFinite(v) ? v : fallback;
+  const categoryScores: Partial<Record<SuggestionCategory, number>> = {};
+  if (parsed.categoryPreferenceScores && typeof parsed.categoryPreferenceScores === "object") {
+    const raw = parsed.categoryPreferenceScores as Record<string, unknown>;
+    for (const cat of SUGGESTION_CATEGORIES) {
+      const v = raw[cat];
+      if (typeof v === "number" && Number.isFinite(v)) {
+        categoryScores[cat] = Math.max(0, Math.min(1, v));
+      }
+    }
+  }
+  return {
+    preferredOpeners: stringArray(parsed.preferredOpeners),
+    preferredSignOffs: stringArray(parsed.preferredSignOffs),
+    formality,
+    humorMarkers: stringArray(parsed.humorMarkers),
+    tabooPhrases: stringArray(parsed.tabooPhrases),
+    averageSentenceLength: numeric(parsed.averageSentenceLength, 0),
+    readingGradeEstimate: numeric(parsed.readingGradeEstimate, 0),
+    categoryPreferenceScores: categoryScores,
+    summary: typeof parsed.summary === "string" ? parsed.summary.trim() : undefined,
+  };
+}
+
+// --------------------------------------------------------------------------
+// Memory extraction prompts + parser
+// --------------------------------------------------------------------------
+
+function extractMemoriesSystemPrompt(): string {
+  return `You extract short, durable memories from a conversation involving James, a non-speaking man with cerebral palsy who replies via an AAC iPad. These memories feed semantic top-K retrieval for future suggestion calls — only the memorable, person-specific or place-specific items are worth keeping.
+
+Output strictly as JSON, no commentary:
+
+{
+  "memories": [
+    { "personIdRef": "string (one of the provided names, or null)", "kind": "fact|preference|joke|event", "text": "string" }
+  ]
+}
+
+Rules:
+- Up to 8 memories. Fewer is fine; skip generic items.
+- text: ≤ 15 words. Factual statement attributing the info to a specific person where applicable ("Jack's son just started cricket", not "Their kid plays sport").
+- kind: "fact" = durable info; "preference" = likes/dislikes/opinions; "joke" = shared humor or running references; "event" = one-off plans, dates.
+- personIdRef: pick exactly one name from the provided list when the memory is about that person; null otherwise. Do NOT invent names.
+- NEVER fabricate. If the transcript is sparse, return fewer memories.`;
+}
+
+function extractMemoriesUserPrompt(ctx: ExtractMemoriesContext): string {
+  const profile = ctx.jamesProfile ? jamesProfileBlock(ctx.jamesProfile) : "";
+  return `${profile}# People in the room (use these exact names for personIdRef)
+${ctx.peopleNames.length > 0 ? ctx.peopleNames.join(", ") : "(none)"}
+
+# Transcript
+"""
+${ctx.transcript}
+"""
+
+Return JSON only.`;
+}
+
+const MEMORY_KINDS = new Set<ExtractedMemoryKind>(["fact", "preference", "joke", "event"]);
+
+function parseExtractedMemories(raw: string, peopleNames: string[]): ExtractMemoriesResult {
+  const json = extractJsonObject(raw);
+  if (!json) return { memories: [] };
+  let parsed: { memories?: unknown };
+  try {
+    parsed = JSON.parse(json) as { memories?: unknown };
+  } catch {
+    return { memories: [] };
+  }
+  if (!Array.isArray(parsed.memories)) return { memories: [] };
+  // Resolve personIdRef (a name string) back to nothing — the job layer
+  // resolves names to db ids since we don't have the id mapping here.
+  // We surface the matched name via the `personId` slot as the raw name; the
+  // job-layer caller does the final lookup. Empty string when unresolved.
+  const namesLower = new Map<string, string>(peopleNames.map((n) => [n.toLowerCase(), n]));
+  const out: ExtractedMemory[] = [];
+  for (const item of parsed.memories) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as { personIdRef?: unknown; kind?: unknown; text?: unknown };
+    if (typeof o.text !== "string" || o.text.trim().length === 0) continue;
+    if (!MEMORY_KINDS.has(o.kind as ExtractedMemoryKind)) continue;
+    let personMatch: string | undefined;
+    if (typeof o.personIdRef === "string" && o.personIdRef.trim().length > 0) {
+      const matched = namesLower.get(o.personIdRef.trim().toLowerCase());
+      if (matched) personMatch = matched;
+    }
+    out.push({
+      personId: personMatch,
+      kind: o.kind as ExtractedMemoryKind,
+      text: o.text.trim(),
+    });
+  }
+  return { memories: out };
+}
+
+// --------------------------------------------------------------------------
+// Profile enrichment prompts + parser
+// --------------------------------------------------------------------------
+
+function enrichPersonProfileSystemPrompt(): string {
+  return `You are a conservative profile-keeper. Looking at a focused transcript of one person's turns (with James's responses for context), propose 0-5 SHORT additions to their Person row. Only emit a proposal when the evidence is clear and durable — single passing remarks don't count.
+
+You may propose against three fields:
+- relationship: how this person relates to James (e.g. "mum", "carer", "schoolfriend"). Use "set" op.
+- topicsLoved: subjects they clearly enjoy talking about. Use "append" op, one topic per proposal.
+- notes: short factual notes about them. Use "append" op, one note per proposal.
+
+Output strictly as JSON, no commentary:
+
+{
+  "proposals": [
+    { "field": "relationship|topicsLoved|notes", "op": "set|append|remove", "value": "string", "reasoning": "string (one short clause)" }
+  ]
+}
+
+Rules:
+- 0-5 proposals. Empty list is fine and often correct.
+- value: ≤ 12 words.
+- NEVER invent facts. Skip if the evidence is ambiguous.
+- Do NOT repeat anything already in the currentProfile (case-insensitive).`;
+}
+
+function enrichPersonProfileUserPrompt(ctx: EnrichPersonProfileContext): string {
+  const cp = ctx.currentProfile;
+  const profileBlock = ctx.jamesProfile ? jamesProfileBlock(ctx.jamesProfile) : "";
+  const currentBlock = `# Current profile (do NOT repeat)
+Relationship: ${cp?.relationship?.trim() || "(unset)"}
+Topics loved: ${cp?.topicsLoved && cp.topicsLoved.length > 0 ? cp.topicsLoved.join(", ") : "(none)"}
+Notes: ${cp?.notes?.trim() || "(none)"}
+
+`;
+  return `${profileBlock}${currentBlock}# Person speaking: ${ctx.personName}
+
+# Focused transcript (their turns + light context)
+"""
+${ctx.transcript}
+"""
+
+Return JSON only. Empty list if nothing meaningful is new.`;
+}
+
+const PROFILE_OPS = new Set<ProfileProposalDraft["op"]>(["set", "append", "remove"]);
+const PROFILE_FIELDS = new Set(["relationship", "topicsLoved", "notes"]);
+
+function parseEnrichPersonProfile(raw: string): EnrichPersonProfileResult {
+  const json = extractJsonObject(raw);
+  if (!json) return { proposals: [] };
+  let parsed: { proposals?: unknown };
+  try {
+    parsed = JSON.parse(json) as { proposals?: unknown };
+  } catch {
+    return { proposals: [] };
+  }
+  if (!Array.isArray(parsed.proposals)) return { proposals: [] };
+  const out: ProfileProposalDraft[] = [];
+  for (const item of parsed.proposals) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as { field?: unknown; op?: unknown; value?: unknown; reasoning?: unknown };
+    if (typeof o.value !== "string" || o.value.trim().length === 0) continue;
+    if (typeof o.field !== "string" || !PROFILE_FIELDS.has(o.field)) continue;
+    const op = PROFILE_OPS.has(o.op as ProfileProposalDraft["op"])
+      ? (o.op as ProfileProposalDraft["op"])
+      : "append";
+    out.push({
+      field: o.field,
+      op,
+      value: o.value.trim(),
+      reasoning:
+        typeof o.reasoning === "string" && o.reasoning.trim().length > 0
+          ? o.reasoning.trim()
+          : undefined,
+    });
+  }
+  return { proposals: out };
+}
+
+// --------------------------------------------------------------------------
+// Introduction detection prompts + parser
+// --------------------------------------------------------------------------
+
+function detectIntroductionsSystemPrompt(): string {
+  return `You confirm which regex-shortlisted names are actual self-introductions in a transcript. A self-introduction is when someone names themselves to James ("Hi, I'm Sarah", "This is Dr Patel speaking", "My name's Anna"). Skip false positives like "meet me at the cafe" or generic mentions of a third party.
+
+Output strictly as JSON, no commentary:
+
+{
+  "confirmed": [
+    { "name": "string", "confidence": 0.0 }
+  ]
+}
+
+Rules:
+- Only emit names that are clearly self-introductions in the transcript.
+- confidence: 0.0–1.0. Use ≥0.7 only when you're sure.
+- Skip a candidate if you're unsure rather than guessing.`;
+}
+
+function detectIntroductionsUserPrompt(ctx: DetectIntroductionsContext): string {
+  return `# Candidate names (from regex pre-filter)
+${ctx.candidates.length > 0 ? ctx.candidates.join(", ") : "(none)"}
+
+# Transcript
+"""
+${ctx.transcript}
+"""
+
+Return JSON only.`;
+}
+
+function parseDetectIntroductions(raw: string): DetectIntroductionsResult {
+  const json = extractJsonObject(raw);
+  if (!json) return { confirmed: [] };
+  let parsed: { confirmed?: unknown };
+  try {
+    parsed = JSON.parse(json) as { confirmed?: unknown };
+  } catch {
+    return { confirmed: [] };
+  }
+  if (!Array.isArray(parsed.confirmed)) return { confirmed: [] };
+  const out: ConfirmedIntroduction[] = [];
+  for (const item of parsed.confirmed) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as { name?: unknown; confidence?: unknown };
+    if (typeof o.name !== "string" || o.name.trim().length === 0) continue;
+    const confidence =
+      typeof o.confidence === "number" && Number.isFinite(o.confidence)
+        ? Math.max(0, Math.min(1, o.confidence))
+        : 0;
+    out.push({ name: o.name.trim(), confidence });
+  }
+  return { confirmed: out };
 }
 
 const INTEREST_KINDS = new Set<InterestSuggestion["kind"]>([
