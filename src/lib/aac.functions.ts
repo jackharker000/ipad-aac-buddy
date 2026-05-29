@@ -42,14 +42,29 @@ function resolveChatTarget(model: string | undefined): {
       model: m.slice("openai-direct/".length),
     };
   }
-  const apiKey = requireLovableApiKey();
+  // Default model ids are Lovable-gateway ids. Prefer the gateway when its
+  // key is set (original behaviour preserved); otherwise fall back to OpenAI
+  // directly with OPENAI_API_KEY so the app works on Vercel without a Lovable
+  // account. The gateway is OpenAI-compatible, so only the model id needs
+  // mapping (gateway ids like "google/gemini-..." → an OpenAI model).
+  if (process.env.LOVABLE_API_KEY) {
+    return {
+      url: "https://ai.gateway.lovable.dev/v1/chat/completions",
+      headers: {
+        Authorization: `Bearer ${process.env.LOVABLE_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      model: m,
+    };
+  }
+  const openaiKey = requireOpenAIApiKey();
   return {
-    url: "https://ai.gateway.lovable.dev/v1/chat/completions",
+    url: "https://api.openai.com/v1/chat/completions",
     headers: {
-      Authorization: `Bearer ${apiKey}`,
+      Authorization: `Bearer ${openaiKey}`,
       "Content-Type": "application/json",
     },
-    model: m,
+    model: m.startsWith("gpt") ? m : "gpt-4o-mini",
   };
 }
 
