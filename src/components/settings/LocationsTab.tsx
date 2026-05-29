@@ -9,6 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { db, type Person, type Place } from "@/lib/db";
 import { useSettings } from "@/lib/settings";
 import { cn } from "@/lib/cn";
+import { MapPicker, type MapPickResult } from "@/components/MapPicker";
 
 /**
  * Locations tab. Ported from `legacy-src/routes/settings.tsx` PlacesTab,
@@ -110,6 +111,20 @@ function PlaceRow({
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<PlaceDraft>(() => draftFromPlace(place));
   const [saving, setSaving] = useState(false);
+  const [mapOpen, setMapOpen] = useState(false);
+
+  // Map-picker confirm: drop the picked lat/lng into the draft, and if
+  // the user hasn't typed their own name yet, take the reverse-geocoded
+  // place name from the map too. Numbers go through toFixed(6) to match
+  // the form's stringified shape so the controlled inputs stay stable.
+  const onMapConfirm = (r: MapPickResult) => {
+    setDraft((d) => ({
+      ...d,
+      lat: r.lat.toFixed(6),
+      lng: r.lng.toFixed(6),
+      name: d.name.trim() ? d.name : (r.name ?? d.name),
+    }));
+  };
 
   // Keep draft in sync if the place was edited elsewhere (e.g. created
   // moments ago with the "Add place" button) but only while collapsed —
@@ -211,12 +226,23 @@ function PlaceRow({
           {gpsEnabled && (
             <div className="grid grid-cols-3 gap-3">
               <Field label="Latitude">
-                <TextInput
-                  type="number"
-                  value={draft.lat}
-                  onChange={(v) => set("lat", v)}
-                  placeholder="optional"
-                />
+                <div className="flex items-center gap-2">
+                  <TextInput
+                    type="number"
+                    value={draft.lat}
+                    onChange={(v) => set("lat", v)}
+                    placeholder="optional"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setMapOpen(true)}
+                    className="shrink-0"
+                  >
+                    Pick on map
+                  </Button>
+                </div>
               </Field>
               <Field label="Longitude">
                 <TextInput
@@ -285,6 +311,13 @@ function PlaceRow({
           </div>
         </div>
       )}
+      <MapPicker
+        open={mapOpen}
+        onOpenChange={setMapOpen}
+        initialLat={draft.lat.trim() === "" ? undefined : Number(draft.lat)}
+        initialLng={draft.lng.trim() === "" ? undefined : Number(draft.lng)}
+        onConfirm={onMapConfirm}
+      />
     </div>
   );
 }
