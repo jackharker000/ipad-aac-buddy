@@ -17,7 +17,7 @@ import { cosine, decodeEmbedding, encodeEmbedding, l2Normalize, rms } from "@/li
 import { transcribeSegment } from "@/lib/audio/stt";
 import type { SpeakerEmbedder } from "@/lib/audio/embedder";
 import { setLastSegment } from "@/lib/audio/last-segment-store";
-import { transcribeSegmentStreaming } from "@/lib/audio/stt-streaming";
+import { ScribeStream, transcribeSegmentStreaming } from "@/lib/audio/stt-streaming";
 import { TTSPlayer } from "@/lib/audio/tts-player";
 import { speakText } from "@/lib/audio/speak-text";
 import type { DomainAI, Mood, SuggestionDraft } from "@/lib/ai";
@@ -150,6 +150,17 @@ export class LiveConversation {
    */
   private retrievedMemories: Memory[] = [];
   private memoryRefreshInFlight = false;
+
+  /**
+   * Persistent Scribe WS for the whole conversation. Opened in start(),
+   * reused for every segment, closed in stop(). Saves ~100–200 ms per
+   * turn (DNS + TLS + WS upgrade + server session_started). If start
+   * fails or any pushSegment rejects, we null this out and fall back to
+   * the per-segment one-shot transcribeSegmentStreaming for the rest of
+   * the conversation so James still gets transcripts — just paying the
+   * handshake cost every turn.
+   */
+  private scribeStream: ScribeStream | null = null;
 
   /**
    * If true, the next incoming VAD segment should be labelled "Unknown"
@@ -548,6 +559,26 @@ export class LiveConversation {
       this.lastSegmentEndedAt = Date.now();
       this.dropped = 0;
 
+      // Open the persistent Scribe stream for the whole conversation.
+      // Failures are non-fatal — handleSegment falls back to one-shot
+      // streaming or batch per segment so STT keeps working, just at
+      // higher per-turn latency.
+      if (this.deps.settings.sttProvider === "elevenlabs-scribe") {
+        try {
+          const stream = new ScribeStream({
+            keyTerms: this.keyTerms.length > 0 ? this.keyTerms : undefined,
+          });
+          await stream.start();
+          this.scribeStream = stream;
+        } catch (err) {
+          console.warn(
+            "[conversation] persistent Scribe stream failed; falling back to per-segment WS",
+            err,
+          );
+          this.scribeStream = null;
+        }
+      }
+
       const vad = new SileroVAD();
       await vad.start();
       vad.onSpeechStart(() => this.setState("speech"));
@@ -568,6 +599,14 @@ export class LiveConversation {
     if (this.state === "idle") return;
     this.setState("stopping");
     this.pendingSuggestionAbort?.abort();
+    // Close the persistent Scribe stream now (before the post-Stop chain
+    // runs) so the server-side session terminates promptly. Errors here
+    // are non-fatal — the stream may already be closed by the server.
+    if (this.scribeStream) {
+      const s = this.scribeStream;
+      this.scribeStream = null;
+      void s.stop().catch(() => {});
+    }
     this.pendingSuggestionAbort = null;
     this.tts.stop();
     await this.vad?.destroy();
@@ -806,20 +845,36 @@ export class LiveConversation {
           return "";
         });
       }
+      const emitPartial = (partial: string) =>
+        this.emitPartialTranscript({
+          segmentId,
+          conversationId: conversation.id,
+          text: partial,
+          startedAt,
+          endedAt,
+        });
+      // Persistent Scribe WS path (saves the per-segment handshake).
+      // pushSegment serialises segments so partials never leak across
+      // turns. A push failure tears the persistent stream down and we
+      // fall through to per-segment one-shot for the rest of the call.
+      if (this.scribeStream && this.scribeStream.isActive()) {
+        try {
+          return await this.scribeStream.pushSegment(segment.audio, {
+            onPartial: emitPartial,
+          });
+        } catch (err) {
+          console.warn(
+            "[conversation] persistent Scribe push failed; dropping to per-segment WS",
+            err,
+          );
+          void this.scribeStream.stop().catch(() => {});
+          this.scribeStream = null;
+        }
+      }
       try {
         return await transcribeSegmentStreaming({
           waveform16k: segment.audio,
-          callbacks: {
-            onPartial: (partial) => {
-              this.emitPartialTranscript({
-                segmentId,
-                conversationId: conversation.id,
-                text: partial,
-                startedAt,
-                endedAt,
-              });
-            },
-          },
+          callbacks: { onPartial: emitPartial },
           options: { keyTerms },
         });
       } catch (err) {

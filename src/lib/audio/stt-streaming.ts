@@ -346,6 +346,295 @@ export async function transcribeSegmentStreaming(args: {
   });
 }
 
+/**
+ * Persistent Scribe streaming session. Saves the per-segment WS handshake
+ * (~100–200 ms: DNS + TLS + WS upgrade + server `session_started`) by
+ * keeping one socket open across every utterance in a conversation.
+ *
+ * Protocol model: the server processes manual-commit chunks in order and
+ * emits one `committed_transcript` per `commit: true` flush. We push one
+ * segment at a time and wait for its committed_transcript before the next
+ * push, so the client-side promise queue is trivially in-order with the
+ * server. Partials arrive interleaved between the audio writes and the
+ * commit reply; we forward them to the currently-active segment's
+ * onPartial callback.
+ *
+ * Lifecycle:
+ *   const stream = new ScribeStream(options);
+ *   await stream.start();           // opens WS, awaits session_started
+ *   const text = await stream.pushSegment(audio, { onPartial });
+ *   const text2 = await stream.pushSegment(...);
+ *   await stream.stop();
+ *
+ * Failure model: any error after `start()` closes the socket and rejects
+ * every in-flight + queued segment so the caller can fall back to one-WS-
+ * per-segment via `transcribeSegmentStreaming` for the rest of the
+ * conversation. A new `ScribeStream` can be `start()`-ed for the next
+ * conversation.
+ */
+
+export type ScribeStreamConfig = ScribeStreamOptions;
+export type ScribeSegmentCallbacks = Pick<ScribeStreamCallbacks, "onPartial">;
+
+export class ScribeStream {
+  private ws: WebSocket | null = null;
+  private startPromise: Promise<void> | null = null;
+  private stopped = false;
+  /**
+   * Queue of segments waiting for their committed_transcript. Resolved
+   * in FIFO order because Scribe processes manual commits in order.
+   */
+  private queue: Array<{
+    resolve: (text: string) => void;
+    reject: (err: Error) => void;
+    onPartial?: (text: string) => void;
+    finalText: string;
+  }> = [];
+
+  constructor(private config: ScribeStreamConfig = {}) {}
+
+  isActive(): boolean {
+    return this.ws !== null && this.ws.readyState === WebSocket.OPEN && !this.stopped;
+  }
+
+  async start(signal?: AbortSignal): Promise<void> {
+    if (this.startPromise) return this.startPromise;
+    this.startPromise = this.doStart(signal);
+    return this.startPromise;
+  }
+
+  private async doStart(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) throw new Error("aborted");
+
+    const token = await fetchScribeToken(signal);
+    const sampleRate = this.config.sampleRate ?? 16000;
+    const includeTimestamps = this.config.includeTimestamps ?? false;
+    const noVerbatim = this.config.noVerbatim ?? true;
+    const languageCode = this.config.languageCode ?? "en";
+
+    const url = new URL(SCRIBE_WS_BASE);
+    url.searchParams.set("token", token);
+    url.searchParams.set("model_id", MODEL_ID);
+    url.searchParams.set("audio_format", `pcm_${sampleRate}`);
+    url.searchParams.set("commit_strategy", "manual");
+    if (includeTimestamps) url.searchParams.set("include_timestamps", "true");
+    if (noVerbatim) url.searchParams.set("no_verbatim", "true");
+    if (languageCode) url.searchParams.set("language_code", languageCode);
+    if (this.config.keyTerms && this.config.keyTerms.length > 0) {
+      const trimmed = this.config.keyTerms
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0)
+        .map((t) => (t.length > 20 ? t.slice(0, 20) : t))
+        .slice(0, 50);
+      for (const term of trimmed) {
+        url.searchParams.append("keyterms", term);
+      }
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      const ws = new WebSocket(url.toString());
+      this.ws = ws;
+      const CONNECT_TIMEOUT_MS = 3_000;
+      let opened = false;
+      const connectTimer = setTimeout(() => {
+        if (opened) return;
+        try {
+          ws.close(1000, "connect timeout");
+        } catch {
+          /* socket may already be closing */
+        }
+        reject(new Error(`Scribe stream connect timed out after ${CONNECT_TIMEOUT_MS}ms`));
+      }, CONNECT_TIMEOUT_MS);
+
+      ws.onopen = () => {
+        opened = true;
+      };
+      ws.onmessage = (event) => this.handleMessage(event);
+      ws.onerror = () => {
+        // Browsers don't surface error detail on a WS error event — the
+        // onclose handler that follows will reject queued segments with
+        // the close code.
+      };
+      ws.onclose = (ev) => {
+        clearTimeout(connectTimer);
+        this.failQueue(
+          new Error(
+            `Scribe stream closed (code=${ev.code}${ev.reason ? `, reason=${ev.reason}` : ""})`,
+          ),
+        );
+        this.ws = null;
+        if (!opened) reject(new Error(`Scribe stream did not open (close code=${ev.code})`));
+      };
+
+      // Wait for session_started before resolving start(). We piggy-back
+      // on handleMessage by enqueuing a sentinel that resolves on the
+      // first session_started. Cleaner: parse it inline.
+      const originalOnMessage = ws.onmessage;
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(typeof event.data === "string" ? event.data : "") as {
+            message_type?: string;
+          };
+          if (data.message_type === "session_started") {
+            clearTimeout(connectTimer);
+            // Restore the long-running message handler.
+            ws.onmessage = originalOnMessage;
+            resolve();
+            return;
+          }
+        } catch {
+          /* fall through */
+        }
+        originalOnMessage?.call(ws, event);
+      };
+    });
+  }
+
+  /**
+   * Send one audio segment, flush it (manual commit), and wait for the
+   * server's committed_transcript reply. Partial transcripts emitted by
+   * Scribe between the audio writes and the commit go to onPartial.
+   *
+   * Segments are processed sequentially — each call waits for the prior
+   * segment's promise to settle before sending its own audio. Without
+   * this the partial_transcript stream from segment N+1 could leak onto
+   * segment N's onPartial callback.
+   */
+  async pushSegment(
+    waveform16k: Float32Array,
+    callbacks: ScribeSegmentCallbacks = {},
+  ): Promise<string> {
+    if (this.stopped) throw new Error("ScribeStream stopped");
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("ScribeStream not open");
+    }
+
+    // Wait until the prior segment in the queue has its committed_transcript.
+    // Without this serialization, partial_transcripts and commit replies
+    // could interleave across segments since Scribe is ordered-but-async.
+    while (this.queue.length > 0) {
+      const prior = this.queue[0];
+      await new Promise<void>((resolve, reject) => {
+        const prevResolve = prior.resolve;
+        const prevReject = prior.reject;
+        prior.resolve = (text: string) => {
+          prevResolve(text);
+          resolve();
+        };
+        prior.reject = (err: Error) => {
+          prevReject(err);
+          reject(err);
+        };
+      }).catch(() => {});
+      if (this.stopped) throw new Error("ScribeStream stopped");
+    }
+
+    const sampleRate = this.config.sampleRate ?? 16000;
+    const sliceSamples = 4096;
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      throw new Error("ScribeStream not open");
+    }
+
+    return new Promise<string>((resolve, reject) => {
+      this.queue.push({
+        resolve,
+        reject,
+        onPartial: callbacks.onPartial,
+        finalText: "",
+      });
+
+      for (let off = 0; off < waveform16k.length; off += sliceSamples) {
+        const slice = waveform16k.subarray(off, off + sliceSamples);
+        try {
+          ws.send(
+            JSON.stringify({
+              message_type: "input_audio_chunk",
+              audio_base_64: float32ToBase64Pcm16(slice),
+              commit: false,
+              sample_rate: sampleRate,
+            }),
+          );
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error(String(err)));
+          return;
+        }
+      }
+      try {
+        ws.send(
+          JSON.stringify({
+            message_type: "input_audio_chunk",
+            audio_base_64: "",
+            commit: true,
+            sample_rate: sampleRate,
+          }),
+        );
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    let msg: ServerMessage;
+    try {
+      msg = JSON.parse(typeof event.data === "string" ? event.data : "") as ServerMessage;
+    } catch {
+      return;
+    }
+    const head = this.queue[0];
+    switch (msg.message_type) {
+      case "session_started":
+        // Handled inline in start(); shouldn't reach here on the long-
+        // running handler, but ignore safely if it does.
+        return;
+      case "partial_transcript":
+        if (msg.text && head?.onPartial) head.onPartial(msg.text);
+        return;
+      case "committed_transcript":
+      case "committed_transcript_with_timestamps": {
+        if (!head) return;
+        this.queue.shift();
+        head.resolve(msg.text ?? head.finalText);
+        return;
+      }
+      default: {
+        const errMsg = msg as { message_type: string; error?: string };
+        const err = new Error(
+          `Scribe stream ${errMsg.message_type}: ${errMsg.error ?? "no detail"}`,
+        );
+        // Bail the whole stream — server-side error invalidates the
+        // session. Caller falls back to one-shot per segment.
+        this.failQueue(err);
+        try {
+          this.ws?.close(1011, errMsg.message_type);
+        } catch {
+          /* ignore */
+        }
+        this.ws = null;
+      }
+    }
+  }
+
+  private failQueue(err: Error): void {
+    const pending = this.queue.splice(0);
+    for (const p of pending) p.reject(err);
+  }
+
+  async stop(): Promise<void> {
+    this.stopped = true;
+    this.failQueue(new Error("ScribeStream stopped"));
+    if (this.ws) {
+      try {
+        this.ws.close(1000, "client stop");
+      } catch {
+        /* ignore */
+      }
+      this.ws = null;
+    }
+  }
+}
+
 async function fetchScribeToken(signal?: AbortSignal): Promise<string> {
   const res = await fetch("/api/stt/scribe-token", {
     method: "POST",

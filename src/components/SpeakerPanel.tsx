@@ -174,7 +174,7 @@ export function SpeakerPanel({
             <button
               type="button"
               onClick={onAskWhoIsThis}
-              className="inline-flex min-h-[36px] items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-muted"
+              className="inline-flex min-h-[44px] items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-muted"
               title="Speak 'Sorry, who am I speaking with?' and hold the next utterance for manual attribution"
             >
               <HelpCircle className="h-3 w-3" />
@@ -183,7 +183,7 @@ export function SpeakerPanel({
             <button
               type="button"
               onClick={onForceNew}
-              className="inline-flex min-h-[36px] items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-muted"
+              className="inline-flex min-h-[44px] items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-muted"
               title="Treat the next utterance as a new speaker"
             >
               <UserPlus className="h-3 w-3" />
@@ -193,7 +193,7 @@ export function SpeakerPanel({
               <button
                 type="button"
                 onClick={() => setShowMergePicker((v) => !v)}
-                className="inline-flex min-h-[36px] items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-muted"
+                className="inline-flex min-h-[44px] items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-muted"
                 title="Merge this cluster into another person"
               >
                 <Merge className="h-3 w-3" />
@@ -204,7 +204,7 @@ export function SpeakerPanel({
               <button
                 type="button"
                 onClick={() => setShowAddPicker((v) => !v)}
-                className="min-h-[36px] rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-muted"
+                className="min-h-[44px] rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-muted"
                 title="Add a person who walked in late"
               >
                 + Add
@@ -257,7 +257,7 @@ export function SpeakerPanel({
                   onAddToRoster(p.id);
                   setShowAddPicker(false);
                 }}
-                className="min-h-[36px] rounded-full border border-input bg-background px-2 py-0.5 text-xs hover:bg-accent hover:text-accent-foreground"
+                className="min-h-[44px] rounded-full border border-input bg-background px-2 py-0.5 text-xs hover:bg-accent hover:text-accent-foreground"
               >
                 {p.name}
               </button>
@@ -280,7 +280,7 @@ export function SpeakerPanel({
                     onMergeInto(top.personId ?? undefined, p.id);
                     setShowMergePicker(false);
                   }}
-                  className="min-h-[36px] rounded-full border border-input bg-background px-2 py-0.5 text-xs hover:bg-accent hover:text-accent-foreground"
+                  className="min-h-[44px] rounded-full border border-input bg-background px-2 py-0.5 text-xs hover:bg-accent hover:text-accent-foreground"
                 >
                   {p.name}
                 </button>
@@ -330,14 +330,14 @@ function SpeakerRow({
           <button
             type="button"
             onClick={onConfirm}
-            className="min-h-[36px] rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-accent hover:text-accent-foreground"
+            className="min-h-[44px] rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-accent hover:text-accent-foreground"
           >
             Confirm
           </button>
           <button
             type="button"
             onClick={onReject}
-            className="min-h-[36px] rounded-md border border-input bg-background px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
+            className="min-h-[44px] rounded-md border border-input bg-background px-2 py-1 text-xs text-muted-foreground hover:bg-muted"
           >
             Not them
           </button>
