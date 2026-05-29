@@ -2731,7 +2731,7 @@ function EventDetail({ eventId }: { eventId: string }) {
                   onSelect={(d) => {
                     if (d) patch({ when: format(d, "EEE d MMM yyyy") });
                   }}
-                  initialFocus
+                  autoFocus
                   className={cn("p-3 pointer-events-auto")}
                 />
               </PopoverContent>
