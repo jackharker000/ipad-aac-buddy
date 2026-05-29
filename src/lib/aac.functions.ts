@@ -1258,7 +1258,7 @@ const speakerContextSchema = z.object({
   recentTranscript: z
     .array(z.object({ speaker: z.string(), text: z.string() }))
     .max(20),
-  confirmedSpeakers: z.record(z.string()),
+  confirmedSpeakers: z.record(z.string(), z.string()),
   candidateNames: z.array(z.string()).max(15),
   model: z.string().optional(),
 });
