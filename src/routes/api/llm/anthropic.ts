@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { corsPreflight, withCors } from "@/lib/api-cors";
+import { corsPreflight, requireClientToken, withCors } from "@/lib/api-cors";
 
 /**
  * Anthropic Messages API proxy. The browser sends an `LLMRequest`
@@ -22,6 +22,16 @@ import { corsPreflight, withCors } from "@/lib/api-cors";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION = "2023-06-01";
+
+// Input clamps — keep a public proxy from being driven into expensive calls.
+const MAX_OUTPUT_TOKENS = 2048;
+const MAX_TOTAL_CONTENT_CHARS = 200_000;
+
+// Upstream timeout. Without this, an Anthropic socket that hangs after sending
+// headers never resolves the fetch — and the cockpit suggestion grid waits
+// forever, breaking the "never go silent" degradation contract. 20s is
+// generous because streaming completions legitimately run long.
+const UPSTREAM_TIMEOUT_MS = 20_000;
 
 type Tier = "fast" | "smart" | undefined;
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
@@ -60,7 +70,7 @@ function buildAnthropicPayload(body: RequestBody) {
 
   return {
     model: modelFor(body.tier),
-    max_tokens: body.maxTokens ?? 1024,
+    max_tokens: Math.min(body.maxTokens ?? 1024, MAX_OUTPUT_TOKENS),
     temperature: body.temperature ?? 0.7,
     ...(systemParts.length > 0 ? { system: systemParts } : {}),
     messages,
@@ -70,8 +80,11 @@ function buildAnthropicPayload(body: RequestBody) {
 export const Route = createFileRoute("/api/llm/anthropic")({
   server: {
     handlers: {
-      OPTIONS: corsPreflight,
+      OPTIONS: ({ request }) => corsPreflight(request),
       POST: async ({ request }) => {
+        const denied = requireClientToken(request);
+        if (denied) return denied;
+
         const apiKey = process.env.ANTHROPIC_API_KEY;
         if (!apiKey) return errorResponse(500, "ANTHROPIC_API_KEY not set on the server");
 
@@ -82,19 +95,42 @@ export const Route = createFileRoute("/api/llm/anthropic")({
           return errorResponse(400, "Body must be JSON");
         }
 
+        if (!body || !Array.isArray(body.messages)) {
+          return errorResponse(400, "Body must be { messages: ChatMessage[] }");
+        }
+        const totalChars = body.messages.reduce(
+          (sum, m) => sum + (typeof m?.content === "string" ? m.content.length : 0),
+          0,
+        );
+        if (totalChars > MAX_TOTAL_CONTENT_CHARS) {
+          return errorResponse(400, `messages content must be ≤ ${MAX_TOTAL_CONTENT_CHARS} chars`);
+        }
+
         const stream = !!body.stream;
         const payload = buildAnthropicPayload(body);
 
-        const upstream = await fetch(ANTHROPIC_URL, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            "x-api-key": apiKey,
-            "anthropic-version": ANTHROPIC_VERSION,
-            ...(body.cacheSystem ? { "anthropic-beta": "prompt-caching-2024-07-31" } : {}),
-          },
-          body: JSON.stringify({ ...payload, stream }),
-        });
+        let upstream: Response;
+        try {
+          upstream = await fetch(ANTHROPIC_URL, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              "x-api-key": apiKey,
+              "anthropic-version": ANTHROPIC_VERSION,
+              ...(body.cacheSystem ? { "anthropic-beta": "prompt-caching-2024-07-31" } : {}),
+            },
+            body: JSON.stringify({ ...payload, stream }),
+            signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+          });
+        } catch (err) {
+          // AbortSignal.timeout fires a TimeoutError DOMException; anything else
+          // is a connect-level failure. Either way the route must resolve so the
+          // client's catch runs and degradation kicks in.
+          if (err instanceof DOMException && err.name === "TimeoutError") {
+            return errorResponse(504, `Anthropic timed out after ${UPSTREAM_TIMEOUT_MS}ms`);
+          }
+          return errorResponse(502, `Anthropic request failed: ${(err as Error).message}`);
+        }
 
         if (!upstream.ok) {
           const text = await upstream.text();
@@ -144,6 +180,11 @@ export const Route = createFileRoute("/api/llm/anthropic")({
           async pull(controller) {
             const { done, value } = await reader.read();
             if (done) {
+              // Flush any bytes the streaming decoder is still holding (a
+              // multi-byte char split across the final reads). Then drain the
+              // trailing partial SSE event so the last delta isn't dropped.
+              sseBuffer += decoder.decode();
+              emitSseEvents(sseBuffer, controller, encoder);
               controller.enqueue(encoder.encode(`${JSON.stringify({ done: true })}\n`));
               controller.close();
               return;
@@ -154,26 +195,13 @@ export const Route = createFileRoute("/api/llm/anthropic")({
             const events = sseBuffer.split("\n\n");
             sseBuffer = events.pop() ?? "";
             for (const eventBlock of events) {
-              for (const line of eventBlock.split("\n")) {
-                const trimmed = line.trim();
-                if (!trimmed.startsWith("data:")) continue;
-                const payloadText = trimmed.slice(5).trim();
-                if (!payloadText || payloadText === "[DONE]") continue;
-                try {
-                  const event = JSON.parse(payloadText) as {
-                    type?: string;
-                    delta?: { type?: string; text?: string; partial_json?: string };
-                  };
-                  if (event.type !== "content_block_delta" || !event.delta) continue;
-                  const piece = event.delta.text ?? event.delta.partial_json;
-                  if (typeof piece === "string" && piece.length > 0) {
-                    controller.enqueue(encoder.encode(`${JSON.stringify({ delta: piece })}\n`));
-                  }
-                } catch {
-                  /* ignore malformed events */
-                }
-              }
+              emitSseEvents(eventBlock, controller, encoder);
             }
+          },
+          // Consumer aborted (James interrupted, nav away). Cancel the keyed
+          // upstream body so we don't leak the Anthropic connection.
+          cancel() {
+            void reader.cancel().catch(() => {});
           },
         });
 
@@ -189,6 +217,35 @@ export const Route = createFileRoute("/api/llm/anthropic")({
     },
   },
 });
+
+// Parse one SSE event block (lines split on \n) and enqueue any `delta` text
+// as an NDJSON line. Shared between the live `pull` path and the EOF flush so
+// the trailing partial event isn't dropped.
+function emitSseEvents(
+  eventBlock: string,
+  controller: ReadableStreamDefaultController<Uint8Array>,
+  encoder: TextEncoder,
+): void {
+  for (const line of eventBlock.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) continue;
+    const payloadText = trimmed.slice(5).trim();
+    if (!payloadText || payloadText === "[DONE]") continue;
+    try {
+      const event = JSON.parse(payloadText) as {
+        type?: string;
+        delta?: { type?: string; text?: string; partial_json?: string };
+      };
+      if (event.type !== "content_block_delta" || !event.delta) continue;
+      const piece = event.delta.text ?? event.delta.partial_json;
+      if (typeof piece === "string" && piece.length > 0) {
+        controller.enqueue(encoder.encode(`${JSON.stringify({ delta: piece })}\n`));
+      }
+    } catch {
+      /* ignore malformed events */
+    }
+  }
+}
 
 function errorResponse(status: number, error: string): Response {
   return new Response(JSON.stringify({ error }), {

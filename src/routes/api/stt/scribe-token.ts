@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { corsPreflight, withCors } from "@/lib/api-cors";
+import { corsPreflight, requireClientToken, withCors } from "@/lib/api-cors";
 
 /**
  * Mints a single-use ElevenLabs Scribe-realtime token. The browser then opens
@@ -19,8 +19,11 @@ const TOKEN_URL = "https://api.elevenlabs.io/v1/single-use-token/realtime_scribe
 export const Route = createFileRoute("/api/stt/scribe-token")({
   server: {
     handlers: {
-      OPTIONS: corsPreflight,
-      POST: async () => {
+      OPTIONS: ({ request }) => corsPreflight(request),
+      POST: async ({ request }) => {
+        const denied = requireClientToken(request);
+        if (denied) return denied;
+
         const apiKey = process.env.ELEVENLABS_API_KEY;
         if (!apiKey) {
           return errorResponse(500, "ELEVENLABS_API_KEY not set on the server");

@@ -33,9 +33,7 @@ function RecentPage() {
   return (
     <div className="mx-auto w-full max-w-4xl space-y-6 px-4 py-8">
       <header className="space-y-1">
-        <p className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          Step 5 · Recent
-        </p>
+        <p className="text-sm font-medium uppercase tracking-wider text-muted-foreground">Recent</p>
         <h1 className="text-3xl font-semibold tracking-tight">Past conversations</h1>
         <p className="max-w-prose text-muted-foreground">
           Every conversation is summarised and indexed so future suggestions can call back to what

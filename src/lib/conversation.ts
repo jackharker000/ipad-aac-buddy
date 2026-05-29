@@ -19,6 +19,7 @@ import type { SpeakerEmbedder } from "@/lib/audio/embedder";
 import { setLastSegment } from "@/lib/audio/last-segment-store";
 import { transcribeSegmentStreaming } from "@/lib/audio/stt-streaming";
 import { TTSPlayer } from "@/lib/audio/tts-player";
+import { speakText } from "@/lib/audio/speak-text";
 import type { DomainAI, Mood, SuggestionDraft } from "@/lib/ai";
 import { makeTTS } from "@/lib/providers";
 import { enqueueJob } from "@/lib/jobs/drain";
@@ -139,6 +140,18 @@ export class LiveConversation {
   private perPersonHints: Map<string, PerPersonCategoryHints> = new Map();
 
   /**
+   * Top-K memories cached from the PREVIOUS turn's retrieval. Keeping them
+   * here means the per-turn suggestion prompt reads a field (no await)
+   * instead of blocking on an OpenAI embedding round-trip — that RTT used
+   * to sit serially in front of generateSuggestions, adding ~150–400 ms to
+   * every turn's latency. We refresh this in the background after kicking
+   * off each turn, so memories are at most one turn stale (fine for
+   * relevance) and never on the critical path.
+   */
+  private retrievedMemories: Memory[] = [];
+  private memoryRefreshInFlight = false;
+
+  /**
    * If true, the next incoming VAD segment should be labelled "Unknown"
    * regardless of similarity — used by the SpeakerColumn "New" button when
    * James knows the next utterance is a new person the matcher would
@@ -219,7 +232,15 @@ export class LiveConversation {
    * regenerateSuggestions; cache-key churn is acceptable since profile
    * edits are rare and the user changing them wants the update visible. */
   setJamesProfile(profile: JamesProfile | undefined): void {
-    this.deps = { ...this.deps, jamesProfile: profile };
+    // Patch jamesName too — it's captured once at construction from the
+    // profile's displayName, so a rename in Settings would otherwise leave
+    // the transcript "Me" label and every prompt's jamesName stuck on the
+    // old value for the life of this instance.
+    this.deps = {
+      ...this.deps,
+      jamesProfile: profile,
+      jamesName: profile?.displayName || this.deps.jamesName,
+    };
     if (this.state !== "idle" && this.state !== "stopping") {
       void this.refreshKeyterms();
     }
@@ -577,6 +598,7 @@ export class LiveConversation {
     this.styleProfile = null;
     this.deadPhrases = [];
     this.perPersonHints = new Map();
+    this.retrievedMemories = [];
     // Keep closedSet — the picker is a pre-Record control; the cockpit
     // resets it explicitly when the user reopens the picker.
     this.setState("idle");
@@ -636,7 +658,18 @@ export class LiveConversation {
         });
       }
 
-      await this.tts.speak({ text: args.text, voiceId: this.deps.settings.jamesVoiceId });
+      // Route the actual audio through the cache-first speakText path —
+      // NOT this.tts (TTSPlayer), which always pays full network + synth
+      // latency and goes silent with no network. speakText plays a pre-
+      // cached quick-phrase clip instantly when the text matches one of the
+      // five canned phrases, so "Yes"/"No"/"Wait" are zero-latency even
+      // mid-conversation. The Dexie logging above is the only thing
+      // LiveConversation.speak adds over the standalone path.
+      await speakText({
+        text: args.text,
+        voiceId: this.deps.settings.jamesVoiceId,
+        ttsProvider: this.deps.settings.ttsProvider,
+      });
     } catch (err) {
       this.emitError(err);
     }
@@ -912,25 +945,14 @@ export class LiveConversation {
       }
 
       // Top-K semantic memory retrieval — bias the prompt toward things
-      // James has said or learned about the people in the room. Best
-      // effort: if the embeddings proxy fails we just skip memories and
-      // the suggestion grid still fires.
-      let memories: Memory[] = [];
-      try {
-        if (activePersonIds.length > 0 || this.deps.placeId) {
-          const retrieved = await retrieveMemories({
-            personIds: activePersonIds,
-            placeId: this.deps.placeId,
-            recentTurns: this.transcriptCache.slice(-3).map((t) => ({
-              speaker: t.speakerKind === "self" ? this.deps.jamesName : (t.personName ?? "Other"),
-              text: t.text,
-            })),
-          });
-          memories = retrieved.map((r) => r.memory);
-        }
-      } catch (err) {
-        console.warn("[conversation] memory retrieval failed; continuing", err);
-      }
+      // James has said or learned about the people in the room. Read the
+      // memories cached from the PREVIOUS turn (no await — the OpenAI embed
+      // RTT must never sit on the critical path) and kick off a background
+      // refresh for the next turn. One-turn-stale memories are fine for
+      // relevance; an empty cache on the first turn just means no memory
+      // bias yet.
+      const memories = this.retrievedMemories;
+      void this.refreshMemories(activePersonIds);
       if (abort.signal.aborted) return;
 
       const drafts = await this.deps.ai.generateSuggestions(
@@ -1100,6 +1122,37 @@ export class LiveConversation {
       this.styleProfile = null;
       this.perPersonHints = new Map();
       this.deadPhrases = [];
+    }
+  }
+
+  /**
+   * Background top-K memory refresh. Runs OFF the suggestion critical path:
+   * the prompt reads `this.retrievedMemories` (last turn's result) while
+   * this updates it for the next turn. Single-flight so overlapping turns
+   * don't fire redundant embedding calls. Best-effort — a failed embed
+   * proxy leaves the prior memories in place rather than clearing them.
+   */
+  private async refreshMemories(activePersonIds: string[]): Promise<void> {
+    if (this.memoryRefreshInFlight) return;
+    if (activePersonIds.length === 0 && !this.deps.placeId) {
+      this.retrievedMemories = [];
+      return;
+    }
+    this.memoryRefreshInFlight = true;
+    try {
+      const retrieved = await retrieveMemories({
+        personIds: activePersonIds,
+        placeId: this.deps.placeId,
+        recentTurns: this.transcriptCache.slice(-3).map((t) => ({
+          speaker: t.speakerKind === "self" ? this.deps.jamesName : (t.personName ?? "Other"),
+          text: t.text,
+        })),
+      });
+      this.retrievedMemories = retrieved.map((r) => r.memory);
+    } catch (err) {
+      console.warn("[conversation] memory retrieval failed; keeping prior", err);
+    } finally {
+      this.memoryRefreshInFlight = false;
     }
   }
 

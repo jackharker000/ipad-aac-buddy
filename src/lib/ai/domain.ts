@@ -359,7 +359,11 @@ export class DomainAI {
     const request = {
       tier: "fast" as const,
       maxTokens: 800,
-      temperature: 0.8,
+      // 0.7, not 0.8: the structured 6-slot shape + category spread already
+      // force variety, so the extra degree of randomness mostly bought
+      // off-voice phrasing and near-duplicate cards. Lower keeps replies
+      // sounding like James while staying diverse.
+      temperature: 0.7,
       cacheSystem: true,
       messages: [
         { role: "system" as const, content: suggestionsSystemPrompt(ctx) },
@@ -669,11 +673,19 @@ function suggestionsSystemPrompt(ctx: SuggestionContext): string {
 
 ${name} is a non-verbal man with cerebral palsy. He communicates by tapping suggested replies on an iPad, which are then spoken aloud in his cloned voice. Your job is to give him 6 ready-to-tap replies whenever someone speaks to him.
 ${personaBlock}${styleBlock}${deadBlock}
+Grounding (critical — these are spoken aloud in ${name}'s own cloned voice):
+- Only propose replies grounded in the transcript, ${name}'s profile, or the listed memories.
+- NEVER invent facts, plans, commitments, names, opinions, or events ${name} hasn't expressed. Do not put words in his mouth.
+- "planned" items must come from the event notes or memories, never from invention. If there's nothing real to surface, use a different category instead.
+
 Voice and style:
-- Sound like ${name}, not like an assistant. First-person ("I", "we", never "James says...").
+- Sound like ${name}, not like an assistant. First-person ("I", "we", never "${name} says...").
 - Conversational English. Contractions are fine. Avoid emojis.
 - 3–15 words per reply is the sweet spot.
-- Cover a range — at least one answer, one follow-up question, sometimes a clarification or a light moment.
+
+Variety (all 6 must be genuinely distinct — different stance, topic, or move; never two rewordings of the same reply):
+- Aim for roughly 2 answers, 1–2 questions, 1 followup, and 1 flexible slot (planned/humor/clarify as the moment fits).
+- ALWAYS include exactly one "give-me-a-moment" or "clarify" so ${name} can hold the floor or stall on any turn.
 
 Output strictly as JSON, no commentary:
 
@@ -687,7 +699,7 @@ Categories:
 - "answer" — direct response to what the other person said
 - "question" — turn the conversation back to them
 - "followup" — pursue a thread or detail
-- "planned" — surface an agenda point ${name} wanted to make
+- "planned" — surface an agenda point ${name} wanted to make (from event notes / memories only)
 - "humor" — light, ${name}-flavoured aside
 - "clarify" — ask them to repeat, or to confirm what they meant
 - "give-me-a-moment" — buy time / hold the floor

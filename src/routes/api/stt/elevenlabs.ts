@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { corsPreflight, withCors } from "@/lib/api-cors";
+import { corsPreflight, requireClientToken, withCors } from "@/lib/api-cors";
 
 /**
  * ElevenLabs Scribe (batch REST) proxy.
@@ -18,11 +18,20 @@ import { corsPreflight, withCors } from "@/lib/api-cors";
 
 const SCRIBE_URL = "https://api.elevenlabs.io/v1/speech-to-text";
 
+// Upstream timeout. This batch path is the fallback when the streaming WS
+// transcription fails; if it also hangs after sending headers, the segment's
+// transcribe() never resolves and that turn is lost. 15s covers a long
+// utterance plus Scribe's processing.
+const UPSTREAM_TIMEOUT_MS = 15_000;
+
 export const Route = createFileRoute("/api/stt/elevenlabs")({
   server: {
     handlers: {
-      OPTIONS: corsPreflight,
+      OPTIONS: ({ request }) => corsPreflight(request),
       POST: async ({ request }) => {
+        const denied = requireClientToken(request);
+        if (denied) return denied;
+
         const apiKey = process.env.ELEVENLABS_API_KEY;
         if (!apiKey) return errorResponse(500, "ELEVENLABS_API_KEY not set on the server");
 
@@ -68,11 +77,20 @@ export const Route = createFileRoute("/api/stt/elevenlabs")({
           }
         }
 
-        const upstream = await fetch(SCRIBE_URL, {
-          method: "POST",
-          headers: { "xi-api-key": apiKey },
-          body: upstreamForm,
-        });
+        let upstream: Response;
+        try {
+          upstream = await fetch(SCRIBE_URL, {
+            method: "POST",
+            headers: { "xi-api-key": apiKey },
+            body: upstreamForm,
+            signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+          });
+        } catch (err) {
+          if (err instanceof DOMException && err.name === "TimeoutError") {
+            return errorResponse(504, `Scribe timed out after ${UPSTREAM_TIMEOUT_MS}ms`);
+          }
+          return errorResponse(502, `Scribe request failed: ${(err as Error).message}`);
+        }
 
         if (!upstream.ok) {
           const text = await upstream.text();

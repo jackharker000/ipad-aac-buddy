@@ -2,7 +2,17 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { HelpCircle, Loader2, Merge, Mic, MicOff, Rewind, Send, UserPlus } from "lucide-react";
+import {
+  HelpCircle,
+  Loader2,
+  Merge,
+  Mic,
+  MicOff,
+  Rewind,
+  Send,
+  Square,
+  UserPlus,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
@@ -30,6 +40,7 @@ import {
 } from "@/lib/audio/quick-phrase-cache";
 import { speakText, stopAllPlayback } from "@/lib/audio/speak-text";
 import { getLastSegment, playLastSegment } from "@/lib/audio/last-segment-store";
+import { drainPendingJobs } from "@/lib/jobs/drain";
 
 export const Route = createFileRoute("/")({
   component: HomePage,
@@ -44,8 +55,11 @@ const EMPTY_CONTRIBUTIONS: VoiceprintContribution[] = [];
 const QUICK_PHRASES: { text: string; label?: string }[] = [
   { text: "Yes" },
   { text: "No" },
+  { text: "Wait" },
+  { text: "I'm not finished" },
   { text: "Give me a moment" },
   { text: "Could you repeat that?" },
+  { text: "I need help" },
   { text: "Sorry, who am I speaking with?", label: "Who is this?" },
 ];
 
@@ -227,7 +241,13 @@ function Cockpit() {
   }, [mood]);
   useEffect(() => {
     conversationRef.current?.setJamesProfile(jamesProfile ?? undefined);
-  }, [jamesProfile]);
+    // Depend on the stable `updatedAt` scalar, NOT the object identity:
+    // useLiveQuery hands back a fresh object on every Dexie tick (i.e. every
+    // transcript write during a live conversation), and pushing that into
+    // setJamesProfile each turn would churn deps.jamesProfile and bust the
+    // Anthropic prompt cache. updatedAt only changes on a real profile edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jamesProfile?.updatedAt]);
 
   useEffect(() => {
     // Tear down on unmount (route change). Conversation also tears down on Stop.
@@ -317,6 +337,14 @@ function Cockpit() {
     await conversationRef.current?.stop();
     setSuggestions([]);
     setCandidates([]);
+    // Drain the Tier-2 queue now instead of waiting for the next app mount,
+    // so the summary + learning land while the app stays open. Non-blocking:
+    // stop() already returned, jobs are durable in IndexedDB, and the
+    // drainer is single-flight so this can't double-run.
+    void drainPendingJobs();
+    toast.message("Conversation saved", {
+      description: "Summarising and learning in the background.",
+    });
   };
 
   /**
@@ -384,6 +412,20 @@ function Cockpit() {
             <Button variant="destructive" size="lg" onClick={stop} className="px-8">
               <MicOff className="h-5 w-5" />
               Stop
+            </Button>
+          )}
+          {speakingText && (
+            <Button
+              variant="destructive"
+              size="lg"
+              onClick={() => {
+                stopAllPlayback();
+                setSpeakingText(null);
+              }}
+              className="px-8"
+            >
+              <Square className="h-5 w-5" />
+              Stop speaking
             </Button>
           )}
           <StateBadge state={state} embedderReady={embedderReady} />

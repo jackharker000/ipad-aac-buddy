@@ -26,9 +26,7 @@ function EventsPage() {
   return (
     <div className="mx-auto w-full max-w-4xl space-y-6 px-4 py-8">
       <header className="space-y-1">
-        <p className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          Step 4 · Events
-        </p>
+        <p className="text-sm font-medium uppercase tracking-wider text-muted-foreground">Events</p>
         <h1 className="text-3xl font-semibold tracking-tight">Upcoming &amp; past events</h1>
         <p className="max-w-prose text-muted-foreground">
           Anything James has on the calendar he'd like Parley to prep him for. Tagged attendees bias

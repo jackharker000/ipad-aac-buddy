@@ -20,6 +20,12 @@ const LRU_CAPACITY = 256;
 /** OpenAI's per-request input cap and our server proxy's enforced ceiling. */
 const SERVER_BATCH_CAP = 100;
 
+// Client-side wall-clock bound. The proxy already times out its own upstream,
+// but a stall in the proxy hop itself (cold function, edge network) would hang
+// the Tier-3 retrieval that gates a suggestion turn. Reject so the caller's
+// degradation path runs instead of the cockpit waiting on embeddings forever.
+const REQUEST_TIMEOUT_MS = 10_000;
+
 const cache = new Map<string, number[]>();
 
 function cacheKey(text: string): string {
@@ -99,8 +105,12 @@ async function fetchEmbeddings(texts: string[]): Promise<number[][]> {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ texts }),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
   } catch (err) {
+    if (err instanceof DOMException && err.name === "TimeoutError") {
+      throw new Error(`embedTexts: request timed out after ${REQUEST_TIMEOUT_MS}ms`);
+    }
     throw new Error(`embedTexts: network error: ${(err as Error).message}`);
   }
   if (!response.ok) {

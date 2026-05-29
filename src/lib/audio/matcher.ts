@@ -103,38 +103,25 @@ export function match(embedding: Float32Array, context: MatchContext): Candidate
   if (enrolled.length === 1) {
     const person = enrolled[0];
     const sim = cosine(embedding, context.centroidByPersonId.get(person.id)!);
-    if (sim >= SINGLE_ENROLL_THRESHOLD) {
-      return [
-        {
-          personId: person.id,
-          name: person.name,
-          similarity: sim,
-          prior: 1,
-          posterior: sim,
-        },
-        {
-          personId: null,
-          name: "Unknown speaker",
-          prior: 1,
-          posterior: 1 - sim,
-        },
-      ];
-    }
-    return [
-      {
-        personId: null,
-        name: "Unknown speaker",
-        prior: 1,
-        posterior: 1 - sim,
-      },
-      {
-        personId: person.id,
-        name: person.name,
-        similarity: sim,
-        prior: 1,
-        posterior: sim,
-      },
-    ];
+    // Cosine ranges [-1, 1]; a negative value (or >1 from fp drift) would
+    // make `posterior` negative or `1 - posterior` exceed 1, so the pair no
+    // longer reads as a probability for any downstream confidence display.
+    // Clamp before using sim as a posterior.
+    const p = clamp(sim, 0, 1);
+    const matched: Candidate = {
+      personId: person.id,
+      name: person.name,
+      similarity: sim,
+      prior: 1,
+      posterior: p,
+    };
+    const unknown: Candidate = {
+      personId: null,
+      name: "Unknown speaker",
+      prior: 1,
+      posterior: 1 - p,
+    };
+    return sim >= SINGLE_ENROLL_THRESHOLD ? [matched, unknown] : [unknown, matched];
   }
 
   const similarities = enrolled.map((p) =>

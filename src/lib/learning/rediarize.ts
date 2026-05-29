@@ -257,6 +257,12 @@ async function applyTieBreaker(args: {
   const ambiguous: Array<{ segmentId: string; pair: TopPair; seg: TranscriptSegment }> = [];
   const segById = new Map(args.segments.map((s) => [s.id, s]));
   for (const [segmentId, pair] of args.topPairs.entries()) {
+    // Only escalate segments the cosine + k-means pass left UNKNOWN. A
+    // segment that finalAssign confidently placed (gap cleared ASSIGN_GAP)
+    // must never be sent to the LLM — a hallucinated-but-confident reply
+    // would otherwise overwrite a good assignment. The tie-breaker's job is
+    // to rescue ambiguous unknowns, not to second-guess clean matches.
+    if (args.finalAssign.get(segmentId) !== "unknown") continue;
     if (pair.bestSim < ACCEPT_COSINE) continue;
     const gap = pair.bestSim - pair.secondSim;
     if (gap >= TIE_BREAKER_GAP) continue;
@@ -315,12 +321,14 @@ async function applyTieBreaker(args: {
     return;
   }
 
+  const escalated = new Set(truncated.map((t) => t.segmentId));
   for (const decision of result.decisions) {
+    // Defensive: only act on segments we actually escalated (all currently
+    // "unknown"). Ignore stray ids the model might echo back, and a
+    // sub-confidence or "unknown" verdict just leaves the segment unknown.
+    if (!escalated.has(decision.segmentId)) continue;
     if (decision.confidence < 0.6) continue;
-    if (decision.name === "unknown") {
-      args.finalAssign.set(decision.segmentId, "unknown");
-      continue;
-    }
+    if (decision.name === "unknown") continue;
     const personId = nameToId.get(decision.name.toLowerCase());
     if (!personId) continue;
     args.finalAssign.set(decision.segmentId, personId);
@@ -373,7 +381,7 @@ async function applyAssignments(
         personId: assignment,
         embedding: encodeEmbedding(e),
         conversationId,
-        source: "conversation",
+        source: "rediarize",
         previewText: seg.text.slice(0, 80),
         rms: 0,
         durationSec: Math.max(0, (seg.endedAt - seg.startedAt) / 1000),
@@ -382,6 +390,21 @@ async function applyAssignments(
     }
   }
 
+  // Idempotency: this job can re-run (retry, manual re-summarise, a second
+  // Stop). Each run derives one contribution per attributed segment, so
+  // without clearing the previous run's rows the rebuild job would average
+  // N copies of this conversation's audio and progressively drown the
+  // original enrollment samples — directly degrading speaker-ID, the #1
+  // priority. Delete this conversation's prior auto-derived rows first;
+  // enrollment-sourced rows (source !== "conversation") are never touched.
+  const priorAuto = await db()
+    .voiceprintContributions.where("conversationId")
+    .equals(conversationId)
+    .filter((c) => c.source === "rediarize")
+    .primaryKeys();
+  if (priorAuto.length > 0) {
+    await db().voiceprintContributions.bulkDelete(priorAuto);
+  }
   if (contributions.length > 0) {
     await db().voiceprintContributions.bulkAdd(contributions);
   }

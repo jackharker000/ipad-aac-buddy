@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { corsPreflight, withCors } from "@/lib/api-cors";
+import { corsPreflight, requireClientToken, withCors } from "@/lib/api-cors";
 
 /**
  * OpenAI embeddings proxy. Used for the Tier-3 semantic memory retrieval
@@ -23,6 +23,10 @@ const OPENAI_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings";
 const EMBEDDING_MODEL = "text-embedding-3-small";
 const MAX_BATCH = 100;
 
+// Upstream timeout. Embeddings feed the Tier-3 memory retrieval that gates a
+// suggestion turn; a hung call would stall that path, so cap it at 10s.
+const UPSTREAM_TIMEOUT_MS = 10_000;
+
 type RequestBody = {
   texts: string[];
 };
@@ -30,8 +34,11 @@ type RequestBody = {
 export const Route = createFileRoute("/api/embed/openai")({
   server: {
     handlers: {
-      OPTIONS: corsPreflight,
+      OPTIONS: ({ request }) => corsPreflight(request),
       POST: async ({ request }) => {
+        const denied = requireClientToken(request);
+        if (denied) return denied;
+
         const apiKey = process.env.OPENAI_API_KEY;
         if (!apiKey) return errorResponse(500, "OPENAI_API_KEY not set on the server");
 
@@ -58,14 +65,23 @@ export const Route = createFileRoute("/api/embed/openai")({
           return errorResponse(400, "Every texts[i] must be a string");
         }
 
-        const upstream = await fetch(OPENAI_EMBEDDINGS_URL, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({ model: EMBEDDING_MODEL, input: body.texts }),
-        });
+        let upstream: Response;
+        try {
+          upstream = await fetch(OPENAI_EMBEDDINGS_URL, {
+            method: "POST",
+            headers: {
+              "content-type": "application/json",
+              authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({ model: EMBEDDING_MODEL, input: body.texts }),
+            signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+          });
+        } catch (err) {
+          if (err instanceof DOMException && err.name === "TimeoutError") {
+            return errorResponse(504, `OpenAI embeddings timed out after ${UPSTREAM_TIMEOUT_MS}ms`);
+          }
+          return errorResponse(502, `OpenAI embeddings request failed: ${(err as Error).message}`);
+        }
 
         if (!upstream.ok) {
           const text = await upstream.text();

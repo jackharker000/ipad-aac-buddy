@@ -94,7 +94,6 @@ const NAV: Array<{ to: string; label: string }> = [
   { to: "/recent", label: "Recent" },
   { to: "/helpers", label: "Helpers" },
   { to: "/settings", label: "Settings" },
-  { to: "/spike/speaker-id", label: "Spike" },
 ];
 
 function TopNav() {

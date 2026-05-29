@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { corsPreflight, withCors } from "@/lib/api-cors";
+import { corsPreflight, requireClientToken, withCors } from "@/lib/api-cors";
 
 /**
  * ElevenLabs voices proxy. Calls the v2 voices endpoint (which supports
@@ -16,6 +16,11 @@ import { corsPreflight, withCors } from "@/lib/api-cors";
 const ELEVENLABS_VOICES_URL = "https://api.elevenlabs.io/v2/voices";
 const PAGE_SIZE = 100;
 const KEEP_CATEGORIES = new Set(["premade", "cloned"]);
+
+// Per-page upstream timeout. The Voice & Models tab opens this dropdown on
+// every render, so a hung catalog fetch would stall the settings page; 10s
+// per page is plenty for a list that barely changes.
+const UPSTREAM_TIMEOUT_MS = 10_000;
 
 type UpstreamVoice = {
   voice_id: string;
@@ -40,8 +45,13 @@ export type SimpleVoice = {
 export const Route = createFileRoute("/api/tts/voices")({
   server: {
     handlers: {
-      OPTIONS: corsPreflight,
-      GET: async () => {
+      OPTIONS: ({ request }) => corsPreflight(request),
+      // Only handler is GET, but it still makes a keyed ElevenLabs call, so it
+      // sits behind the same shared-secret gate as the POST routes.
+      GET: async ({ request }) => {
+        const denied = requireClientToken(request);
+        if (denied) return denied;
+
         const apiKey = process.env.ELEVENLABS_API_KEY;
         if (!apiKey) return errorResponse(500, "ELEVENLABS_API_KEY not set on the server");
 
@@ -60,6 +70,7 @@ export const Route = createFileRoute("/api/tts/voices")({
                 "xi-api-key": apiKey,
                 accept: "application/json",
               },
+              signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
             });
 
             if (!upstream.ok) {
@@ -84,6 +95,9 @@ export const Route = createFileRoute("/api/tts/voices")({
             // has_more=true. 5 pages × 100 voices = enough for any real user.
           } while (nextPageToken && voices.length < PAGE_SIZE * 5);
         } catch (err) {
+          if (err instanceof DOMException && err.name === "TimeoutError") {
+            return errorResponse(504, `ElevenLabs voices timed out after ${UPSTREAM_TIMEOUT_MS}ms`);
+          }
           const message = err instanceof Error ? err.message : String(err);
           return errorResponse(502, `Voices fetch failed: ${message}`);
         }

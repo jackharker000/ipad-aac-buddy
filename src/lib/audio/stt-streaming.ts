@@ -169,18 +169,74 @@ export async function transcribeSegmentStreaming(args: {
     let finalWords: ScribeWord[] | undefined;
     let opened = false;
     let aborted = false;
+    let settled = false;
 
     const ws = new WebSocket(url.toString());
 
+    // Two timers guard the socket. Without them a Scribe session that connects
+    // but never commits (or never opens at all) would leave James's per-turn
+    // wait hanging forever — the caller in conversation.ts only falls back to
+    // the batch REST path if THIS promise rejects.
+    //  - connect: fire if `onopen` hasn't run, so a dead handshake fails fast.
+    //  - overall: hard ceiling to the final/committed transcript.
+    const CONNECT_TIMEOUT_MS = 3_000;
+    const OVERALL_TIMEOUT_MS = 10_000;
+
+    const cleanup = () => {
+      signal?.removeEventListener("abort", abortHandler);
+      clearTimeout(connectTimer);
+      clearTimeout(overallTimer);
+    };
+
+    // Single-settle guards. Every exit path goes through these so a late event
+    // (e.g. onclose after a timeout already rejected) can't double-settle the
+    // promise or leave a timer armed.
+    const settleResolve = (text: string) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(text);
+    };
+    const settleReject = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+
+    const closeWs = (code: number, reason: string) => {
+      try {
+        ws.close(code, reason);
+      } catch {
+        /* socket may already be closing */
+      }
+    };
+
     const abortHandler = () => {
       aborted = true;
-      try {
-        ws.close(1000, "client abort");
-      } catch {
-        /* ignore */
-      }
-      reject(new Error("aborted"));
+      closeWs(1000, "client abort");
+      settleReject(new Error("aborted"));
     };
+
+    // Arm the timers before wiring abort: a synchronous already-aborted signal
+    // (below) runs abortHandler -> settleReject -> cleanup, which reads these
+    // bindings. Declaring them first keeps that path out of the const TDZ.
+    const connectTimer = setTimeout(() => {
+      if (opened || settled) return;
+      closeWs(1000, "connect timeout");
+      const err = new Error(`Scribe stream connect timed out after ${CONNECT_TIMEOUT_MS}ms`);
+      callbacks.onError?.(err);
+      settleReject(err);
+    }, CONNECT_TIMEOUT_MS);
+
+    const overallTimer = setTimeout(() => {
+      if (settled) return;
+      closeWs(1000, "overall timeout");
+      const err = new Error(`Scribe stream timed out after ${OVERALL_TIMEOUT_MS}ms`);
+      callbacks.onError?.(err);
+      settleReject(err);
+    }, OVERALL_TIMEOUT_MS);
+
     if (signal) {
       if (signal.aborted) {
         abortHandler();
@@ -189,12 +245,9 @@ export async function transcribeSegmentStreaming(args: {
       signal.addEventListener("abort", abortHandler, { once: true });
     }
 
-    const cleanup = () => {
-      signal?.removeEventListener("abort", abortHandler);
-    };
-
     ws.onopen = () => {
       opened = true;
+      clearTimeout(connectTimer);
       // Stream audio in ~250 ms slices so partials come back smoothly. With
       // 16 kHz that's 4096 samples per slice — matches the official client's
       // worklet buffer size.
@@ -241,13 +294,8 @@ export async function transcribeSegmentStreaming(args: {
         case "committed_transcript":
           finalText = msg.text ?? finalText;
           callbacks.onFinal?.(finalText, finalWords);
-          try {
-            ws.close(1000, "segment done");
-          } catch {
-            /* ignore */
-          }
-          cleanup();
-          resolve(finalText);
+          closeWs(1000, "segment done");
+          settleResolve(finalText);
           return;
         case "committed_transcript_with_timestamps":
           finalText = msg.text ?? finalText;
@@ -260,28 +308,18 @@ export async function transcribeSegmentStreaming(args: {
             logprob: w.logprob,
           }));
           callbacks.onFinal?.(finalText, finalWords);
-          try {
-            ws.close(1000, "segment done");
-          } catch {
-            /* ignore */
-          }
-          cleanup();
-          resolve(finalText);
+          closeWs(1000, "segment done");
+          settleResolve(finalText);
           return;
         // Error-class messages — log the code so the operator sees what
-        // went wrong, then let onclose reject with a useful error.
+        // went wrong, then reject with a useful error.
         default: {
           const errMsg = msg as { message_type: string; error?: string };
           const description = `${errMsg.message_type}: ${errMsg.error ?? "no detail"}`;
           const err = new Error(`Scribe stream ${description}`);
           callbacks.onError?.(err);
-          try {
-            ws.close(1011, errMsg.message_type);
-          } catch {
-            /* ignore */
-          }
-          cleanup();
-          reject(err);
+          closeWs(1011, errMsg.message_type);
+          settleReject(err);
         }
       }
     };
@@ -293,20 +331,17 @@ export async function transcribeSegmentStreaming(args: {
       if (!opened) {
         const err = new Error("Scribe stream connection failed");
         callbacks.onError?.(err);
-        cleanup();
-        reject(err);
+        settleReject(err);
       }
     };
 
     ws.onclose = (event) => {
-      if (aborted) return;
+      if (aborted || settled) return;
       if (event.code === 1000 || event.code === 1005) return;
       // Abnormal close before we resolved.
       const err = new Error(`Scribe stream closed (${event.code}): ${event.reason || "no reason"}`);
       callbacks.onError?.(err);
-      cleanup();
-      // If we already resolved or rejected, this is a no-op.
-      reject(err);
+      settleReject(err);
     };
   });
 }

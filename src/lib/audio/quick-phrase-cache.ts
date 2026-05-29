@@ -17,8 +17,11 @@ import { makeTTS } from "@/lib/providers";
 export const QUICK_PHRASES = [
   "Yes",
   "No",
+  "Wait",
+  "I'm not finished",
   "Give me a moment",
   "Could you repeat that?",
+  "I need help",
   "Sorry, who am I speaking with?",
 ] as const;
 

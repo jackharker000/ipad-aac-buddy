@@ -32,6 +32,7 @@ import { detectIntroductionsInConversation } from "@/lib/learning/intro-detect";
  */
 
 const MAX_ATTEMPTS = 3;
+const MAX_DRAIN_PASSES = 50;
 const SUMMARY_MAX_TRANSCRIPT_CHARS = 12000;
 
 let inflight: Promise<void> | null = null;
@@ -70,17 +71,40 @@ export function drainPendingJobs(): Promise<void> {
   if (inflight) return inflight;
   inflight = (async () => {
     try {
-      const queue = await db().pendingJobs.where("status").equals("pending").toArray();
-      if (queue.length === 0) return;
       const settings = await getSettingsSnapshot();
-      for (const job of queue) {
-        await runJob(job, settings.llmProvider, settings.ttsProvider);
+      // Loop until the queue drains. Re-querying each pass is what stops
+      // jobs enqueued *during* a drain — e.g. the cockpit Stop handler
+      // firing while a prior drain is still running — from being stranded
+      // until the next app mount. Bounded by MAX_DRAIN_PASSES so a job that
+      // perpetually re-queues can't spin forever in one drain.
+      for (let pass = 0; pass < MAX_DRAIN_PASSES; pass++) {
+        const now = Date.now();
+        const all = await db().pendingJobs.where("status").equals("pending").toArray();
+        const due = all.filter((job) => isDue(job, now));
+        if (due.length === 0) break;
+        for (const job of due) {
+          await runJob(job, settings.llmProvider, settings.ttsProvider);
+        }
       }
     } finally {
       inflight = null;
     }
   })();
   return inflight;
+}
+
+/**
+ * A freshly-enqueued job (attempts === 0) is always due. A job that failed
+ * and was re-queued as pending waits an exponential backoff window before
+ * the next attempt, so a rate-limited provider isn't hammered through all
+ * three attempts within the same drain. There's no timer that re-triggers
+ * the drain — a not-yet-due job is simply picked up by the next
+ * drainPendingJobs() call (next mount, or the next Stop).
+ */
+function isDue(job: PendingJob, now: number): boolean {
+  if (job.attempts <= 0) return true;
+  const backoff = Math.min(2 ** job.attempts * 1000, 60_000);
+  return now - job.updatedAt >= backoff;
 }
 
 async function runJob(

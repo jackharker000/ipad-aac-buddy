@@ -26,9 +26,7 @@ function PeoplePage() {
   return (
     <div className="mx-auto w-full max-w-4xl space-y-6 px-4 py-8">
       <header className="space-y-1">
-        <p className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
-          Step 4 · People
-        </p>
+        <p className="text-sm font-medium uppercase tracking-wider text-muted-foreground">People</p>
         <h1 className="text-3xl font-semibold tracking-tight">Roster &amp; voiceprints</h1>
         <p className="max-w-prose text-muted-foreground">
           Everyone James talks to. Each person carries a voiceprint — a centroid of enrolled samples

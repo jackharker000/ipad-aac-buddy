@@ -91,7 +91,10 @@ export type VoiceprintContribution = {
   /** L2-normalized ECAPA-TDNN embedding, base64-encoded float32. */
   embedding: string;
   conversationId?: string;
-  source: "enrollment" | "conversation";
+  /** "enrollment" = clean in-room sample; "conversation" = live-attributed or
+   * intro-seed utterance; "rediarize" = derived by the Tier-2 re-diarize pass
+   * (kept distinct so a re-diarize re-run can clear only its own rows). */
+  source: "enrollment" | "conversation" | "rediarize";
   /** Source-utterance preview text, when known. */
   previewText?: string;
   rms: number;
