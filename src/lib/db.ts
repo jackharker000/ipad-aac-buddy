@@ -507,6 +507,12 @@ export type SettingsRecord = {
   /** Cross-session dead-phrase suppression thresholds (System tab). */
   deadPhraseShownTimes?: number;
   deadPhraseWindowDays?: number;
+  /** When true, surface a link in Settings → System to the gated
+   * speaker-ID diagnostics page (the old Spike harness, minus the
+   * destructive Reset-all button). Off by default — the page exposes
+   * raw posteriors and per-segment scores which are useful for the
+   * caregiver tuning enrolment but noisy for normal use. */
+  enableSpeakerIdDiagnostics?: boolean;
 };
 
 export const DEFAULT_SETTINGS: SettingsRecord = {

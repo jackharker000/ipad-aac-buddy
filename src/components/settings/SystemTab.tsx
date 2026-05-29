@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { toast } from "sonner";
+import { Link } from "@tanstack/react-router";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,6 +40,7 @@ export function SystemTab() {
     <div className="space-y-6">
       <DisplayPresetCard />
       <SpeakerIdCard />
+      <SpeakerIdDiagnosticsCard />
       <GpsCard />
       <DeadPhraseCard />
       <StyleProfileCard />
@@ -202,6 +204,51 @@ function SliderRow({
         className="w-full"
       />
     </div>
+  );
+}
+
+// --------------------------------------------------------------------------
+
+function SpeakerIdDiagnosticsCard() {
+  const settings = useSettings();
+  const enabled = !!settings.enableSpeakerIdDiagnostics;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Speaker-ID diagnostics</CardTitle>
+        <CardDescription>
+          A live workbench showing the matcher's per-candidate posteriors and cosine similarity for
+          every utterance. Useful when tuning enrolment — record a sample for a person, then watch
+          whether the next utterance matches with a high score. Off by default; the page surfaces
+          raw numbers that are noisy for normal use.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium text-foreground">Enable diagnostics page</p>
+            <p className="text-xs text-muted-foreground">
+              When on, the page is reachable at{" "}
+              <code className="rounded bg-muted px-1.5 py-0.5 text-[11px]">/spike/speaker-id</code>{" "}
+              and the link below appears here.
+            </p>
+          </div>
+          <Switch
+            checked={enabled}
+            onCheckedChange={(v) => void persistSettings({ enableSpeakerIdDiagnostics: v })}
+          />
+        </div>
+        {enabled && (
+          <Link
+            to="/spike/speaker-id"
+            className="inline-flex items-center rounded-md border border-input bg-background px-3 py-2 text-sm hover:bg-muted"
+          >
+            Open speaker-ID diagnostics →
+          </Link>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

@@ -12,11 +12,7 @@ import { useSettings } from "@/lib/settings";
 import { makeEmbedder, type EmbedderKind, type SpeakerEmbedder } from "@/lib/audio/embedder";
 import { startCapture, type Capture } from "@/lib/audio/capture";
 import { SileroVAD, type VADSegment } from "@/lib/audio/vad";
-import {
-  deleteAllContributionsForPerson,
-  enrollSample,
-  resetAllEnrolments,
-} from "@/lib/audio/enrollment";
+import { deleteAllContributionsForPerson, enrollSample } from "@/lib/audio/enrollment";
 import {
   centroidsFromVoiceprints,
   match,
@@ -493,13 +489,6 @@ function PeopleCard() {
     toast.success(`Deleted ${p.name}`);
   };
 
-  const onResetAll = async () => {
-    if (people.length === 0) return;
-    if (!confirm(`Delete all ${people.length} people and every voiceprint?`)) return;
-    await resetAllEnrolments();
-    toast.success("Enrolments cleared");
-  };
-
   return (
     <Card>
       <CardHeader>
@@ -510,12 +499,9 @@ function PeopleCard() {
               Centroid = mean of all contributions, L2-normalized at capture.
             </CardDescription>
           </div>
-          {people.length > 0 && (
-            <Button variant="outline" size="sm" onClick={onResetAll}>
-              <Trash2 />
-              Reset all
-            </Button>
-          )}
+          {/* Bulk "Reset all enrolments" intentionally removed from this
+              diagnostics page — it lives in Settings → System → Danger
+              zone where the destructive action belongs. */}
         </div>
       </CardHeader>
       <CardContent>
