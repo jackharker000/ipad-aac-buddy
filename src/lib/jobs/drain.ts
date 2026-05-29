@@ -2,6 +2,12 @@ import { db, type LLMProviderId, type PendingJob, type TTSProviderId } from "@/l
 import { makeAI } from "@/lib/ai";
 import { getSettingsSnapshot } from "@/lib/settings";
 import { updatePersonLexicon } from "@/lib/learning/lexicon-extract";
+import { runStyleDistillation } from "@/lib/learning/style-distill";
+import { extractMemoriesFromConversation } from "@/lib/learning/memories-extract";
+import { rediarizeConversation } from "@/lib/learning/rediarize";
+import { rebuildVoiceprintsFromContributions } from "@/lib/learning/voiceprint-rebuild";
+import { enrichProfilesFromConversation } from "@/lib/learning/profile-enrich";
+import { detectIntroductionsInConversation } from "@/lib/learning/intro-detect";
 
 /**
  * Tier-2 / post-conversation job drainer. Jobs are queued in IndexedDB by
@@ -96,18 +102,37 @@ async function runJob(
     switch (job.type) {
       case "summariseConversation":
         await runSummariseConversation(job, llmProvider);
+        // Tier-1 cadence-guarded; runStyleDistillation early-exits if the
+        // last run was within 12h. Always safe to call here — keeps the
+        // style profile reasonably fresh without a manual rebuild.
+        await runStyleDistillation({ force: false });
         break;
       case "updateLexicon":
         await runUpdateLexicon(job, llmProvider);
         break;
       case "rediarize":
-      case "rebuildVoiceprints":
+        await rediarizeConversation(job.conversationId);
+        break;
+      case "rebuildVoiceprints": {
+        const conv = await db().conversations.get(job.conversationId);
+        if (conv && conv.personIds.length > 0) {
+          await rebuildVoiceprintsFromContributions({ personIds: conv.personIds });
+        }
+        break;
+      }
       case "enrichProfiles":
+        await enrichProfilesFromConversation(job.conversationId);
+        break;
       case "distillStyle":
+        // Manual rebuild (System tab) sets force=true; passing through here
+        // so the user always sees the run happen even if it's within 12h.
+        await runStyleDistillation({ force: true });
+        break;
       case "extractMemories":
+        await extractMemoriesFromConversation(job.conversationId);
+        break;
       case "detectIntroductions":
-        // Stubs for now — the legacy implementations will be ported in
-        // later PRs. Marking the job done so the queue doesn't loop on it.
+        await detectIntroductionsInConversation(job.conversationId);
         break;
     }
 

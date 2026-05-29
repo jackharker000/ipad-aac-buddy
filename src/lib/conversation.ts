@@ -23,6 +23,15 @@ import type { DomainAI, Mood, SuggestionDraft } from "@/lib/ai";
 import { makeTTS } from "@/lib/providers";
 import { enqueueJob } from "@/lib/jobs/drain";
 import { buildKeyterms } from "@/lib/learning/keyterms";
+import {
+  getCrossSessionDeadPhrases,
+  getStyleEvidence,
+  type PerPersonCategoryHints,
+} from "@/lib/learning/style-evidence";
+import { applyDeadPhraseFilter } from "@/lib/learning/dead-phrase-filter";
+import { repairNames } from "@/lib/audio/transcript-repair";
+import { retrieveMemories } from "@/lib/learning/retrieval";
+import type { StyleProfile, Memory } from "@/lib/db";
 
 /**
  * Drives one live cockpit session: starts VAD, transcribes each utterance,
@@ -116,6 +125,18 @@ export class LiveConversation {
    * outside of an active session.
    */
   private keyTerms: string[] = [];
+
+  /**
+   * Tier-1 + Tier-2 state cached at start(). The style profile + dead
+   * phrases + per-person category hints all read from Dexie tables that
+   * only change between conversations, so we hit the DB once at start and
+   * pass the cached values into every regenerateSuggestions call. The
+   * dead-phrase keys are pre-normalised so the per-turn post-filter
+   * doesn't redo the work.
+   */
+  private styleProfile: StyleProfile | null = null;
+  private deadPhrases: string[] = [];
+  private perPersonHints: Map<string, PerPersonCategoryHints> = new Map();
 
   /**
    * If true, the next incoming VAD segment should be labelled "Unknown"
@@ -466,6 +487,12 @@ export class LiveConversation {
       // tier-3 boost.
       await this.refreshKeyterms();
 
+      // Tier-1 style + dead-phrase cache. Best-effort — if the tables are
+      // empty (cold start), we just pass undefined and the model falls
+      // back to its baseline persona. Failures here never block the
+      // conversation start.
+      await this.refreshStyleCache();
+
       this.segmentCount = 0;
       this.lastResetAt = Date.now();
       this.dropped = 0;
@@ -504,13 +531,30 @@ export class LiveConversation {
       // route stays mounted. Skip if the conversation was empty — nothing
       // meaningful to summarise.
       if (hadSegments) {
+        // Order matters here — the drainer runs jobs in insertion order. We
+        // want rediarize + voiceprintRebuild to run before extractMemories
+        // and enrichProfiles so those latter calls see the corrected
+        // personId assignments. summarise sits first so the Recent view
+        // populates quickly for the user.
         await enqueueJob({ type: "summariseConversation", conversationId });
-        // Per-person lexicon extraction so future conversations bias Scribe
-        // toward the proper nouns/jargon this person actually used. Needs
-        // people in the roster — without any, there's no one to attach
-        // terms to.
+        // The Tier-2 chain only makes sense when ≥ 2 people contributed —
+        // single-person calls have nothing to rediarize or enrich beyond
+        // the matcher already did live. Self-only "conversations" (typing-
+        // only sessions) skip the whole chain.
+        const otherPersonCount = new Set(
+          this.transcriptCache
+            .filter((s) => s.speakerKind === "other" && s.personId)
+            .map((s) => s.personId),
+        ).size;
         if (this.people.length > 0) {
           await enqueueJob({ type: "updateLexicon", conversationId });
+        }
+        if (otherPersonCount >= 1 && this.transcriptCache.length >= 6) {
+          await enqueueJob({ type: "rediarize", conversationId });
+          await enqueueJob({ type: "rebuildVoiceprints", conversationId });
+          await enqueueJob({ type: "enrichProfiles", conversationId });
+          await enqueueJob({ type: "detectIntroductions", conversationId });
+          await enqueueJob({ type: "extractMemories", conversationId });
         }
       }
       this.conversation = null;
@@ -523,6 +567,9 @@ export class LiveConversation {
     this.eventName = null;
     this.eventKeyInfo = null;
     this.keyTerms = [];
+    this.styleProfile = null;
+    this.deadPhrases = [];
+    this.perPersonHints = new Map();
     // Keep closedSet — the picker is a pre-Record control; the cockpit
     // resets it explicitly when the user reopens the picker.
     this.setState("idle");
@@ -704,11 +751,21 @@ export class LiveConversation {
       }
     })();
 
-    const [candidates, text] = await Promise.all([embedAndMatch, transcribe]);
+    const [candidates, rawText] = await Promise.all([embedAndMatch, transcribe]);
 
     this.segmentCount++;
 
-    if (!text || text.length === 0) return;
+    if (!rawText || rawText.length === 0) return;
+
+    // T2 client-side fuzzy name repair. T1 keyterms already bias Scribe;
+    // this catches the residual misses ("Jacques" → "Jack"). Pure string
+    // in/string out — no DB write yet (TranscriptSegment.text stores the
+    // repaired version directly so the LLM and the suggestion log both
+    // see the corrected form).
+    const text = repairNames(rawText, {
+      roster: this.people,
+      jamesName: this.deps.jamesName,
+    });
 
     const top = candidates?.[0];
     const accept = this.deps.settings.speakerIdAcceptThreshold;
@@ -830,6 +887,40 @@ export class LiveConversation {
       // in the transcript so the prompt still has names to anchor against
       // when the user opted not to pre-pick a roster.
       const peopleNames = this.buildPeopleNamesForPrompt();
+      const activePersonIds = this.buildActivePersonIds();
+
+      // Per-person category-preference distribution. Only emit hints for
+      // people in the active roster (closed-set or live-confirmed) so the
+      // prompt isn't padded with irrelevant rows. Names are the key the
+      // model can match against.
+      const categoryHints = new Map<string, PerPersonCategoryHints>();
+      for (const personId of activePersonIds) {
+        const hint = this.perPersonHints.get(personId);
+        const person = this.people.find((p) => p.id === personId);
+        if (hint && person) categoryHints.set(person.name, hint);
+      }
+
+      // Top-K semantic memory retrieval — bias the prompt toward things
+      // James has said or learned about the people in the room. Best
+      // effort: if the embeddings proxy fails we just skip memories and
+      // the suggestion grid still fires.
+      let memories: Memory[] = [];
+      try {
+        if (activePersonIds.length > 0 || this.deps.placeId) {
+          const retrieved = await retrieveMemories({
+            personIds: activePersonIds,
+            placeId: this.deps.placeId,
+            recentTurns: this.transcriptCache.slice(-3).map((t) => ({
+              speaker: t.speakerKind === "self" ? this.deps.jamesName : (t.personName ?? "Other"),
+              text: t.text,
+            })),
+          });
+          memories = retrieved.map((r) => r.memory);
+        }
+      } catch (err) {
+        console.warn("[conversation] memory retrieval failed; continuing", err);
+      }
+      if (abort.signal.aborted) return;
 
       const drafts = await this.deps.ai.generateSuggestions(
         {
@@ -845,23 +936,49 @@ export class LiveConversation {
             ? { name: this.eventName, keyInfo: this.eventKeyInfo ?? undefined }
             : undefined,
           jamesProfile: this.deps.jamesProfile,
+          styleProfile: this.styleProfile ?? undefined,
+          deadPhrases: this.deadPhrases.length > 0 ? this.deadPhrases : undefined,
+          categoryHints: categoryHints.size > 0 ? categoryHints : undefined,
+          memories: memories.length > 0 ? memories : undefined,
         },
         (partial) => {
           if (abort.signal.aborted) return;
-          this.callbacks.onSuggestions?.(partial, true);
+          // Run partial drafts through the dead-phrase filter too so the
+          // UI never momentarily shows a banned phrase before the final
+          // pass drops it. Top-up is cheap; the user only sees a stable
+          // grid.
+          const filtered = applyDeadPhraseFilter({
+            drafts: partial,
+            deadPhrases: this.deadPhrases,
+          }).drafts;
+          this.callbacks.onSuggestions?.(filtered, true);
         },
       );
       if (abort.signal.aborted) return;
-      this.callbacks.onSuggestions?.(drafts, false);
+      // Final pass — the model occasionally still emits a dead phrase
+      // despite the system-prompt hint; this is the safety net.
+      const filtered = applyDeadPhraseFilter({
+        drafts,
+        deadPhrases: this.deadPhrases,
+      }).drafts;
+      this.callbacks.onSuggestions?.(filtered, false);
 
-      // Log every shown suggestion so Tier-1 (later) can learn from which
-      // ones get tapped vs ignored.
+      // Log every SHOWN suggestion (after dead-phrase filtering) so
+      // Tier-1 learns from what the cockpit actually rendered, not what
+      // the model spat out before suppression.
       if (this.conversation) {
         const now = Date.now();
-        const logs: SuggestionLog[] = drafts.map((d) => ({
+        // Resolve the triggering segment's personId so the per-person
+        // category-preference tally has someone to attribute to. Without
+        // this, every row goes into the global bucket and the per-person
+        // hint loop never fires.
+        const trigger = this.transcriptCache.find((t) => t.id === triggeringSegmentId);
+        const triggerPersonId = trigger?.personId;
+        const logs: SuggestionLog[] = filtered.map((d) => ({
           id: nanoid(),
           conversationId: this.conversation!.id,
           triggeringSegmentId,
+          personId: triggerPersonId,
           text: d.text,
           category: d.category,
           why: d.why,
@@ -943,6 +1060,52 @@ export class LiveConversation {
       console.warn("[conversation] buildKeyterms failed; continuing without bias", err);
       this.keyTerms = [];
     }
+  }
+
+  /**
+   * Load the Tier-1 learning artefacts for this session. Style profile +
+   * per-person category preferences come from past `suggestionsLog` rows;
+   * dead phrases come from things James has consistently ignored.
+   * Thresholds read from settings so the user can tune them in the
+   * System tab. All best-effort — empty tables / hiccups degrade to no
+   * learning rather than blocking the conversation.
+   */
+  private async refreshStyleCache(): Promise<void> {
+    try {
+      const settings = this.deps.settings;
+      const [profile, evidence, dead] = await Promise.all([
+        db().styleProfile.get("singleton"),
+        getStyleEvidence({ windowDays: 30 }),
+        getCrossSessionDeadPhrases({
+          shownTimes: settings.deadPhraseShownTimes,
+          windowDays: settings.deadPhraseWindowDays,
+        }),
+      ]);
+      this.styleProfile = profile ?? null;
+      this.perPersonHints = evidence.perPerson;
+      this.deadPhrases = dead;
+    } catch (err) {
+      console.warn("[conversation] style cache load failed; continuing without", err);
+      this.styleProfile = null;
+      this.perPersonHints = new Map();
+      this.deadPhrases = [];
+    }
+  }
+
+  /**
+   * Returns the personIds that should be treated as "active" for prompt
+   * context + retrieval. Closed-set wins; otherwise gather from confirmed
+   * transcript segments. Used by category hints + memory retrieval.
+   */
+  private buildActivePersonIds(): string[] {
+    if (this.closedSet && this.closedSet.length > 0) return [...this.closedSet];
+    const seen = new Set<string>();
+    for (const seg of this.transcriptCache) {
+      if (seg.speakerKind !== "other") continue;
+      if (!seg.personId) continue;
+      seen.add(seg.personId);
+    }
+    return Array.from(seen);
   }
 
   /**

@@ -1,5 +1,6 @@
 import type { LLMProvider } from "@/lib/providers";
-import type { JamesProfile, StyleProfile, SuggestionCategory } from "@/lib/db";
+import type { JamesProfile, Memory, StyleProfile, SuggestionCategory } from "@/lib/db";
+import type { PerPersonCategoryHints } from "@/lib/learning/style-evidence";
 
 /**
  * Domain-level AI client. Sits above the raw LLMProvider chat layer and
@@ -50,6 +51,34 @@ export type SuggestionContext = {
   /** Full James persona for the system block. Cache-friendly — stable
    * across a session, so it sits inside the cached system prompt. */
   jamesProfile?: JamesProfile;
+  /**
+   * Tier-1 distilled style profile (openers, sign-offs, taboo, formality,
+   * category preferences). Sits in the cached system block — it only
+   * rebuilds every ~12h via the post-summarise hook, so the LLM cache key
+   * stays stable across the whole conversation.
+   */
+  styleProfile?: StyleProfile;
+  /**
+   * Lowercased phrases the model should NOT propose — accumulated from
+   * suggestions shown ≥ N times and never tapped across recent sessions.
+   * Goes in the cached system block (cross-session stable). The post-
+   * generation filter at the call site is the safety net; this is the
+   * preventive hint.
+   */
+  deadPhrases?: string[];
+  /**
+   * Per-person category-selection rates keyed by person NAME (the model
+   * sees names, not IDs). Turn-volatile: the active roster can change
+   * mid-conversation, so this rides the user message rather than the
+   * cached system block.
+   */
+  categoryHints?: Map<string, PerPersonCategoryHints>;
+  /**
+   * Top-K relevant memories for the people in the room + place. Turn-
+   * volatile (the query rotates with the recent transcript), so this
+   * rides the user message too.
+   */
+  memories?: Memory[];
 };
 
 export type ExpandContext = {
@@ -534,10 +563,18 @@ export class DomainAI {
 function suggestionsSystemPrompt(ctx: SuggestionContext): string {
   const name = ctx.jamesName || "James";
   const personaBlock = ctx.jamesProfile ? `\n${jamesProfileBlock(ctx.jamesProfile)}` : "";
+  const styleBlock = ctx.styleProfile ? `\n${styleProfileBlock(ctx.styleProfile, name)}` : "";
+  const deadBlock =
+    ctx.deadPhrases && ctx.deadPhrases.length > 0
+      ? `\nDo NOT propose these phrases — ${name} has consistently ignored them:\n${ctx.deadPhrases
+          .slice(0, 25)
+          .map((p) => `- ${p}`)
+          .join("\n")}\n`
+      : "";
   return `You are Parley, an AAC reply assistant for ${name}.
 
 ${name} is a non-verbal man with cerebral palsy. He communicates by tapping suggested replies on an iPad, which are then spoken aloud in his cloned voice. Your job is to give him 6 ready-to-tap replies whenever someone speaks to him.
-${personaBlock}
+${personaBlock}${styleBlock}${deadBlock}
 Voice and style:
 - Sound like ${name}, not like an assistant. First-person ("I", "we", never "James says...").
 - Conversational English. Contractions are fine. Avoid emojis.
@@ -575,11 +612,66 @@ function suggestionsUserPrompt(ctx: SuggestionContext): string {
     lines.push(`People in the room: ${ctx.peopleNames.join(", ")}`);
   }
   lines.push(`Mood preset: ${ctx.mood}`);
+
+  if (ctx.categoryHints && ctx.categoryHints.size > 0) {
+    lines.push("");
+    lines.push(
+      `Per-person preferences (tap rate by category, ${ctx.jamesName || "James"}'s history):`,
+    );
+    for (const [personName, hints] of ctx.categoryHints.entries()) {
+      const top = Object.entries(hints)
+        .filter(([, v]) => typeof v === "number" && v > 0)
+        .sort(([, a], [, b]) => (b as number) - (a as number))
+        .slice(0, 3)
+        .map(([cat, rate]) => `${cat} ${((rate as number) * 100) | 0}%`)
+        .join(", ");
+      if (top) lines.push(`- ${personName}: ${top}`);
+    }
+  }
+
+  if (ctx.memories && ctx.memories.length > 0) {
+    lines.push("");
+    lines.push("Relevant memories:");
+    for (const m of ctx.memories.slice(0, 8)) {
+      lines.push(`- (${m.kind}) ${m.text}`);
+    }
+  }
+
   lines.push("");
   lines.push("Recent transcript:");
   lines.push(formatTranscript(ctx.transcript));
   lines.push("");
   lines.push("Generate 6 reply suggestions James could tap right now. JSON only.");
+  return lines.join("\n");
+}
+
+function styleProfileBlock(sp: StyleProfile, name: string): string {
+  const lines: string[] = [`${name}'s style fingerprint (distilled from past taps):`];
+  if (sp.formality) lines.push(`- Formality: ${sp.formality}`);
+  if (sp.preferredOpeners.length > 0) {
+    lines.push(`- Common openers: ${sp.preferredOpeners.slice(0, 6).join(", ")}`);
+  }
+  if (sp.preferredSignOffs.length > 0) {
+    lines.push(`- Common sign-offs: ${sp.preferredSignOffs.slice(0, 6).join(", ")}`);
+  }
+  if (sp.humorMarkers.length > 0) {
+    lines.push(`- Humour markers: ${sp.humorMarkers.slice(0, 6).join(", ")}`);
+  }
+  if (sp.tabooPhrases.length > 0) {
+    lines.push(`- Avoid (taboo): ${sp.tabooPhrases.slice(0, 8).join(", ")}`);
+  }
+  if (sp.averageSentenceLength > 0) {
+    lines.push(`- Target sentence length: ~${Math.round(sp.averageSentenceLength)} words`);
+  }
+  if (sp.categoryPreferenceScores && Object.keys(sp.categoryPreferenceScores).length > 0) {
+    const top = Object.entries(sp.categoryPreferenceScores)
+      .filter(([, v]) => typeof v === "number" && (v as number) > 0)
+      .sort(([, a], [, b]) => (b as number) - (a as number))
+      .slice(0, 4)
+      .map(([cat, rate]) => `${cat} ${((rate as number) * 100) | 0}%`)
+      .join(", ");
+    if (top) lines.push(`- Preferred categories: ${top}`);
+  }
   return lines.join("\n");
 }
 
