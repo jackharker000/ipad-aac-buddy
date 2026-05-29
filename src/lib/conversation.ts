@@ -32,7 +32,7 @@ import {
 import { applyDeadPhraseFilter } from "@/lib/learning/dead-phrase-filter";
 import { repairNames } from "@/lib/audio/transcript-repair";
 import { retrieveMemories } from "@/lib/learning/retrieval";
-import type { StyleProfile, Memory } from "@/lib/db";
+import type { StyleProfile, Memory, LiveSessionSnapshot } from "@/lib/db";
 
 /**
  * Drives one live cockpit session: starts VAD, transcribes each utterance,
@@ -160,6 +160,14 @@ export class LiveConversation {
   private forceNextSegmentNewCluster = false;
 
   /**
+   * Latest suggestion grid the cockpit was shown. Captured here so the
+   * persisted snapshot can restore a non-empty grid on reload — without
+   * this, a recovered conversation would look like nothing was happening
+   * until the next VAD segment triggered a fresh suggestion call.
+   */
+  private lastSuggestions: SuggestionDraft[] = [];
+
+  /**
    * If set, the next incoming segment(s) up to a 20 s timeout are held
    * for manual confirmation rather than auto-assigned. Used by the
    * "Ask" button — when James asks the room "Sorry, who am I speaking
@@ -183,15 +191,23 @@ export class LiveConversation {
   private inFlight = 0;
   private segmentCount = 0;
   private lastResetAt = 0;
+  /**
+   * When the most recent VAD segment ended. Used by `shouldResetEmbedder`
+   * to delay the dispose+warmup cycle until James is between turns — so
+   * the WASM heap drop happens during a pause, never mid-utterance. Set on
+   * every segment received, regardless of whether we throttle it.
+   */
+  private lastSegmentEndedAt = 0;
   private dropped = 0;
   private static readonly MAX_IN_FLIGHT = 1;
-  // Tighter than before — the previous run was still hitting the OOM eviction
-  // every ~2 min, which means activations were accumulating between resets.
-  // With a real model.dispose() releasing the ORT session, resetting more
-  // often is cheap (model files stay in the browser cache, so re-warm is
-  // ~5–10 s, not the original ~30 s).
+  // Periodic dispose+warmup keeps the ORT WASM heap from accumulating. We
+  // count segments as a SAFETY ceiling, but the timer-based trigger is gone
+  // — the user reports a "page actually refreshes" symptom that lines up
+  // with the prior 90 s timer firing mid-turn, so the reset now only runs
+  // when VAD has been silent for at least EMBEDDER_RESET_IDLE_GAP_MS. The
+  // segment cap still applies if James talks continuously past it.
   private static readonly EMBEDDER_RESET_AFTER_N_SEGMENTS = 12;
-  private static readonly EMBEDDER_RESET_INTERVAL_MS = 90 * 1000;
+  private static readonly EMBEDDER_RESET_IDLE_GAP_MS = 3_000;
   private static readonly TRANSCRIPT_CACHE_MAX = 10;
 
   constructor(private deps: ConversationDeps) {
@@ -516,6 +532,7 @@ export class LiveConversation {
 
       this.segmentCount = 0;
       this.lastResetAt = Date.now();
+      this.lastSegmentEndedAt = Date.now();
       this.dropped = 0;
 
       const vad = new SileroVAD();
@@ -599,6 +616,12 @@ export class LiveConversation {
     this.deadPhrases = [];
     this.perPersonHints = new Map();
     this.retrievedMemories = [];
+    this.lastSuggestions = [];
+    // The session is over — drop the snapshot so a later mount doesn't
+    // mistake it for a recoverable in-flight conversation.
+    await db()
+      .liveSessionSnapshot.delete("singleton")
+      .catch(() => {});
     // Keep closedSet — the picker is a pre-Record control; the cockpit
     // resets it explicitly when the user reopens the picker.
     this.setState("idle");
@@ -678,6 +701,10 @@ export class LiveConversation {
   // -----------------------------------------------------------------------
 
   private async handleSegment(segment: VADSegment): Promise<void> {
+    // Stamp the end-of-utterance time for the idle-gap embedder reset.
+    // shouldResetEmbedder() only fires after this gap goes quiet, so any
+    // dispose+warmup happens during a pause rather than mid-turn.
+    this.lastSegmentEndedAt = Date.now();
     // Always remember the most recent segment audio so James can hit the
     // "What did they say?" Replay button. This is the only place the store
     // gets updated; the in-flight throttle below would skip the dropped
@@ -867,6 +894,7 @@ export class LiveConversation {
       this.transcriptCache.shift();
     }
     this.callbacks.onTranscriptSegment?.(liveSegment);
+    void this.persistSnapshot();
 
     if (isConfirmed && personId) {
       this.recentSpeakers = [
@@ -881,11 +909,13 @@ export class LiveConversation {
   private shouldResetEmbedder(): boolean {
     if (this.state === "idle" || this.state === "stopping") return false;
     if (this.inFlight > 0) return false;
-    const elapsed = Date.now() - this.lastResetAt;
-    return (
-      this.segmentCount >= LiveConversation.EMBEDDER_RESET_AFTER_N_SEGMENTS ||
-      elapsed >= LiveConversation.EMBEDDER_RESET_INTERVAL_MS
-    );
+    if (this.segmentCount < LiveConversation.EMBEDDER_RESET_AFTER_N_SEGMENTS) return false;
+    // Wait for an idle gap before disposing — the dispose+warmup cycle
+    // pauses embed for several seconds, and James reports the prior
+    // timer-based reset feels like the page reloads mid-conversation.
+    // Running it only between turns keeps the cycle invisible.
+    const idle = Date.now() - this.lastSegmentEndedAt;
+    return idle >= LiveConversation.EMBEDDER_RESET_IDLE_GAP_MS;
   }
 
   /**
@@ -995,6 +1025,8 @@ export class LiveConversation {
         deadPhrases: this.deadPhrases,
       }).drafts;
       this.callbacks.onSuggestions?.(filtered, false);
+      this.lastSuggestions = filtered;
+      void this.persistSnapshot();
 
       // Log every SHOWN suggestion (after dead-phrase filtering) so
       // Tier-1 learns from what the cockpit actually rendered, not what
@@ -1092,6 +1124,50 @@ export class LiveConversation {
     } catch (err) {
       console.warn("[conversation] buildKeyterms failed; continuing without bias", err);
       this.keyTerms = [];
+    }
+  }
+
+  /**
+   * Snapshot the live conversation to IndexedDB so a tab reload (iPad
+   * Safari evicts on memory pressure) doesn't lose state. Called on every
+   * transcript add and every suggestion-final from inside processSegment,
+   * so the most we can lose is one in-flight turn. Failures are silent —
+   * persistence is a recovery convenience, not a correctness invariant.
+   */
+  private async persistSnapshot(): Promise<void> {
+    const conv = this.conversation;
+    if (!conv) return;
+    const snapshot: LiveSessionSnapshot = {
+      id: "singleton",
+      conversationId: conv.id,
+      startedAt: conv.startedAt,
+      updatedAt: Date.now(),
+      placeId: this.deps.placeId,
+      eventId: this.deps.eventId,
+      closedSet: this.closedSet ? [...this.closedSet] : [],
+      mood: this.mood,
+      transcript: this.transcriptCache.map((s) => ({
+        id: s.id,
+        text: s.text,
+        speakerKind: s.speakerKind,
+        speakerLabel: s.speakerLabel,
+        personId: s.personId,
+        personName: s.personName,
+        confidence: s.confidence,
+        startedAt: s.startedAt,
+        endedAt: s.endedAt,
+        status: s.status,
+      })),
+      suggestions: this.lastSuggestions.map((d) => ({
+        text: d.text,
+        category: d.category,
+        why: d.why,
+      })),
+    };
+    try {
+      await db().liveSessionSnapshot.put(snapshot);
+    } catch (err) {
+      console.warn("[conversation] snapshot persist failed (non-fatal)", err);
     }
   }
 

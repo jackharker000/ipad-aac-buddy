@@ -52,6 +52,15 @@ const EMPTY_EVENTS: EventRecord[] = [];
 const EMPTY_PLACES: Place[] = [];
 const EMPTY_CONTRIBUTIONS: VoiceprintContribution[] = [];
 
+/**
+ * Window inside which the cockpit will offer to restore a snapshotted
+ * conversation. Longer than the typical Safari reload-to-resume gap (~10
+ * s) but shorter than the "I came back later, I'm starting a new
+ * conversation" interval. James never has to think about this — if the
+ * snapshot's too old, it's dropped silently and the cockpit boots fresh.
+ */
+const RECOVERY_WINDOW_MS = 5 * 60 * 1000;
+
 const QUICK_PHRASES: { text: string; label?: string }[] = [
   { text: "Yes" },
   { text: "No" },
@@ -256,6 +265,53 @@ function Cockpit() {
     };
   }, []);
 
+  // Live-session restore. iPad Safari can evict the tab from memory mid-
+  // conversation (the user reports a "page actually refreshes every 2 min"
+  // symptom). On mount, check for a snapshot less than RECOVERY_WINDOW_MS
+  // old and offer Continue / Discard. The snapshot is repainted to the
+  // cockpit so James sees the partial conversation immediately; the
+  // suggestion grid + speaker matcher then resume from the next VAD
+  // segment.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const snap = await db().liveSessionSnapshot.get("singleton");
+        if (cancelled || !snap) return;
+        const age = Date.now() - snap.updatedAt;
+        if (age > RECOVERY_WINDOW_MS) {
+          // Stale snapshot — drop it silently.
+          await db()
+            .liveSessionSnapshot.delete("singleton")
+            .catch(() => {});
+          return;
+        }
+        const minutes = Math.max(1, Math.round(age / 60_000));
+        const ok = confirm(
+          `Pick up where the last conversation left off? (${minutes} minute${minutes === 1 ? "" : "s"} ago)`,
+        );
+        if (cancelled) return;
+        if (!ok) {
+          await db()
+            .liveSessionSnapshot.delete("singleton")
+            .catch(() => {});
+          return;
+        }
+        setTranscript(snap.transcript as LiveTranscriptSegment[]);
+        setSuggestions(snap.suggestions as SuggestionDraft[]);
+        if (snap.closedSet.length > 0) setSelectedPersonIds(snap.closedSet);
+        if (snap.placeId) setSelectedPlaceId(snap.placeId);
+        if (snap.eventId) setSelectedEventId(snap.eventId);
+        toast.message("Restored the previous conversation. Tap Record to keep going.");
+      } catch (err) {
+        console.warn("[cockpit] snapshot restore failed", err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Warm the quick-phrase audio cache as soon as the voice id is known.
   // Single-iPad app: this runs once per voice on first cockpit mount and
   // never again unless the voice id changes. Failure is silent — the speak
@@ -446,6 +502,7 @@ function Cockpit() {
       </header>
 
       {missingKeys.size > 0 && <MissingKeysBanner keys={missingKeys} />}
+      <DiagOverlay state={state} transcriptLength={transcript.length} />
 
       {state === "idle" && (
         <RosterPicker
@@ -511,6 +568,54 @@ function Cockpit() {
 function detectMissingKey(message: string): string | null {
   const m = message.match(/\b([A-Z][A-Z0-9_]+_API_KEY)\b[^"]*not set/);
   return m ? m[1] : null;
+}
+
+/**
+ * Diagnostic overlay shown only when the URL has `?diag=1`. Reports the JS
+ * heap size, the conversation state, and transcript length on a 2-second
+ * tick. Lets the user (or me, via screenshot) confirm whether the iPad
+ * Safari "page refreshes every 2 minutes" is correlated with the heap
+ * climbing toward an eviction. No side effects — purely a read of
+ * `performance.memory` (Chrome / Safari Tech Preview only; Safari Stable
+ * returns undefined and the overlay just shows "n/a").
+ */
+function DiagOverlay({
+  state,
+  transcriptLength,
+}: {
+  state: ConversationState;
+  transcriptLength: number;
+}) {
+  const [enabled, setEnabled] = useState(false);
+  const [heapMB, setHeapMB] = useState<string>("n/a");
+  const [uptimeSec, setUptimeSec] = useState(0);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const on = new URLSearchParams(window.location.search).has("diag");
+    setEnabled(on);
+    if (!on) return;
+    const mountedAt = Date.now();
+    const tick = () => {
+      const memAny = (performance as unknown as { memory?: { usedJSHeapSize?: number } }).memory;
+      const used = memAny?.usedJSHeapSize;
+      setHeapMB(typeof used === "number" ? (used / 1_048_576).toFixed(1) : "n/a");
+      setUptimeSec(Math.floor((Date.now() - mountedAt) / 1000));
+    };
+    tick();
+    const id = window.setInterval(tick, 2000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  if (!enabled) return null;
+  return (
+    <div className="pointer-events-none fixed bottom-3 right-3 z-50 rounded-md bg-black/80 px-3 py-2 font-mono text-[11px] leading-tight text-white shadow-lg">
+      <div>heap: {heapMB} MB</div>
+      <div>uptime: {uptimeSec}s</div>
+      <div>state: {state}</div>
+      <div>transcript: {transcriptLength}</div>
+    </div>
+  );
 }
 
 function MissingKeysBanner({ keys }: { keys: Set<string> }) {

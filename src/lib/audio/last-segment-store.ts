@@ -21,11 +21,23 @@ export type LastSegment = {
 let lastSegment: LastSegment | null = null;
 let activePlayback: { source: AudioBufferSourceNode; ctx: AudioContext } | null = null;
 
+/**
+ * How long to retain a captured segment before self-evicting. The audio
+ * Float32Array is non-trivial (~100 kB for a 3 s clip) and iPad Safari has
+ * an aggressive per-tab memory cap; holding the last segment indefinitely
+ * across conversations contributed to memory pressure that may be what
+ * triggers the production "page actually refreshes" complaint.
+ */
+const MAX_RETAINED_MS = 30_000;
+
 export function setLastSegment(segment: LastSegment): void {
   lastSegment = segment;
 }
 
 export function getLastSegment(): LastSegment | null {
+  if (lastSegment && Date.now() - lastSegment.capturedAt > MAX_RETAINED_MS) {
+    lastSegment = null;
+  }
   return lastSegment;
 }
 

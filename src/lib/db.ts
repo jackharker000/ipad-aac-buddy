@@ -447,6 +447,42 @@ export type PersonLexiconEntry = {
   createdAt: number;
 };
 
+/**
+ * Snapshot of the live cockpit state, written every turn and cleared on
+ * Stop. If iPad Safari reloads the tab mid-conversation (memory pressure
+ * is the prime suspect for the "page actually refreshes every 2 min"
+ * symptom), the cockpit can restore the in-flight conversation from this
+ * row instead of starting from scratch. Single-row table — only one live
+ * session exists at a time.
+ */
+export type LiveSessionSnapshot = {
+  id: "singleton";
+  conversationId: string;
+  startedAt: number;
+  updatedAt: number;
+  placeId?: string;
+  eventId?: string;
+  closedSet: string[];
+  mood: string;
+  /** Lightweight transcript copy — enough to repaint the column on
+   * restore, not the full audio. */
+  transcript: Array<{
+    id: string;
+    text: string;
+    speakerKind: "self" | "other";
+    speakerLabel: string;
+    personId?: string;
+    personName?: string;
+    confidence?: number;
+    startedAt: number;
+    endedAt: number;
+    status?: "partial" | "final";
+  }>;
+  /** Last-generated suggestion grid so the cockpit doesn't look empty on
+   * restore until the next turn produces fresh suggestions. */
+  suggestions: Array<{ text: string; category: string; why?: string }>;
+};
+
 export type SettingsRecord = {
   id: "singleton";
   llmProvider: LLMProviderId;
@@ -532,6 +568,8 @@ export class ParleyDB extends Dexie {
   profileProposals!: EntityTable<ProfileProposal, "id">;
   personLexicon!: EntityTable<PersonLexiconEntry, "id">;
 
+  liveSessionSnapshot!: EntityTable<LiveSessionSnapshot, "id">;
+
   constructor() {
     super("parley");
     this.version(1).stores({
@@ -587,6 +625,13 @@ export class ParleyDB extends Dexie {
       styleDistillRuns: "id, startedAt, status",
       profileProposals: "id, personId, conversationId, status, createdAt",
       personLexicon: "id, term, personId, source, createdAt",
+    });
+
+    // v4: single-row live-session snapshot so a tab reload mid-conversation
+    // doesn't lose state. Cleared on every Stop; mount checks for a row no
+    // older than RECOVERY_WINDOW_MS to decide whether to offer Continue.
+    this.version(4).stores({
+      liveSessionSnapshot: "id",
     });
   }
 }
