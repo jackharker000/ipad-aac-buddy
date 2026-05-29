@@ -41,6 +41,7 @@ import {
 import { speakText, stopAllPlayback } from "@/lib/audio/speak-text";
 import { getLastSegment, playLastSegment } from "@/lib/audio/last-segment-store";
 import { drainPendingJobs } from "@/lib/jobs/drain";
+import { SpeakerPanel } from "@/components/SpeakerPanel";
 
 export const Route = createFileRoute("/")({
   component: HomePage,
@@ -348,6 +349,38 @@ function Cockpit() {
     setSelectedPersonIds((prev) => (prev.includes(personId) ? prev : [...prev, personId]));
   }, []);
 
+  /**
+   * Confirm the matcher's top guess for the most-recent segment. Mirrors
+   * the legacy SpeakerPanel's per-row Confirm button: re-attribute the
+   * current top segment to this person so the centroid learns from the
+   * sample even when the borderline posterior left it as "suggested."
+   */
+  const confirmTopSpeaker = useCallback((personId: string) => {
+    const conv = conversationRef.current;
+    if (!conv) return;
+    const segId = conv.getLastOtherSegmentId();
+    if (!segId) return;
+    void conv.reassignSegment(segId, personId).catch((err) => {
+      toast.error(err instanceof Error ? err.message : String(err));
+    });
+  }, []);
+
+  /**
+   * "Not them" — reject the matcher's current top guess. Strips the
+   * personId from the last segment and tells the matcher to treat the
+   * NEXT utterance as a new cluster, matching the legacy "this isn't
+   * them, clear" behaviour.
+   */
+  const clearTopSpeaker = useCallback(() => {
+    const conv = conversationRef.current;
+    if (!conv) return;
+    const segId = conv.getLastOtherSegmentId();
+    if (segId) {
+      void conv.reassignSegment(segId, null).catch(() => {});
+    }
+    conv.forceNewClusterNextSegment();
+  }, []);
+
   const reassignSegment = useCallback(async (segmentId: string, personId: string | null) => {
     const conv = conversationRef.current;
     if (!conv) return;
@@ -524,8 +557,9 @@ function Cockpit() {
       )}
 
       <div className="grid gap-5 lg:grid-cols-[1fr_2fr_1fr]">
-        <SpeakerColumn
+        <SpeakerPanel
           candidates={candidates}
+          transcript={transcript}
           acceptThreshold={settings.speakerIdAcceptThreshold}
           people={people}
           selectedPersonIds={selectedPersonIds}
@@ -534,6 +568,8 @@ function Cockpit() {
           onAskWhoIsThis={askWhoIsThis}
           onForceNew={forceNewSpeaker}
           onMergeInto={mergeIntoPerson}
+          onConfirmTop={confirmTopSpeaker}
+          onClearTop={clearTopSpeaker}
         />
         <div className="flex flex-col gap-4">
           <TypeAndSpeakInput speakingText={speakingText} onSpeak={(text) => speak({ text })} />
@@ -879,175 +915,6 @@ function TranscriptColumn({
               );
             })}
           </ul>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// --------------------------------------------------------------------------
-
-function SpeakerColumn({
-  candidates,
-  acceptThreshold,
-  people,
-  selectedPersonIds,
-  isLive,
-  onAddToRoster,
-  onAskWhoIsThis,
-  onForceNew,
-  onMergeInto,
-}: {
-  candidates: Candidate[];
-  acceptThreshold: number;
-  people: Person[];
-  selectedPersonIds: string[];
-  isLive: boolean;
-  onAddToRoster: (personId: string) => void;
-  onAskWhoIsThis: () => void;
-  onForceNew: () => void;
-  onMergeInto: (fromPersonId: string | undefined, toPersonId: string) => void;
-}) {
-  const top = candidates[0];
-  const [showAddPicker, setShowAddPicker] = useState(false);
-  const [showMergePicker, setShowMergePicker] = useState(false);
-
-  // People enrolled but not currently in the active roster — the candidates
-  // for the "Add to roster" mid-conversation chip.
-  const offRoster = useMemo(
-    () => people.filter((p) => !selectedPersonIds.includes(p.id)),
-    [people, selectedPersonIds],
-  );
-  const rosterPeople = useMemo(
-    () => people.filter((p) => selectedPersonIds.includes(p.id)),
-    [people, selectedPersonIds],
-  );
-
-  return (
-    <div className="rounded-2xl border border-border bg-card">
-      <div className="flex flex-wrap items-center justify-between gap-1 px-4 pt-3">
-        <span className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-          Speaker
-        </span>
-        {isLive && (
-          <div className="flex flex-wrap items-center gap-1">
-            <button
-              type="button"
-              onClick={onAskWhoIsThis}
-              className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-muted"
-              title="Speak 'Sorry, who am I speaking with?' and hold the next utterance for manual attribution"
-            >
-              <HelpCircle className="h-3 w-3" />
-              Ask
-            </button>
-            <button
-              type="button"
-              onClick={onForceNew}
-              className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-muted"
-              title="Treat the next utterance as a new speaker"
-            >
-              <UserPlus className="h-3 w-3" />
-              New
-            </button>
-            {top?.personId && rosterPeople.length > 1 && (
-              <button
-                type="button"
-                onClick={() => setShowMergePicker((v) => !v)}
-                className="inline-flex items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-muted"
-                title="Merge this cluster into another person"
-              >
-                <Merge className="h-3 w-3" />
-                Merge
-              </button>
-            )}
-            {offRoster.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setShowAddPicker((v) => !v)}
-                className="rounded-md border border-input bg-background px-2 py-1 text-xs hover:bg-muted"
-                title="Add a person who walked in late"
-              >
-                + Add
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-      <div className="p-4">
-        {!top ? (
-          <p className="text-sm text-muted-foreground">Listening…</p>
-        ) : (
-          <>
-            <div className="flex items-baseline justify-between">
-              <span className="text-lg font-semibold">{top.name}</span>
-              <span
-                className={cn(
-                  "rounded-full px-2 py-0.5 text-xs font-medium",
-                  top.personId && top.posterior >= acceptThreshold
-                    ? "bg-accent text-accent-foreground"
-                    : "bg-muted text-foreground",
-                )}
-              >
-                {top.personId && top.posterior >= acceptThreshold ? "confirmed" : "suggested"}
-              </span>
-            </div>
-            <p className="mt-1 text-xs text-muted-foreground">
-              {(top.posterior * 100).toFixed(0)}% posterior
-              {top.similarity !== undefined && <> · sim {(top.similarity * 100).toFixed(0)}%</>}
-            </p>
-            {candidates.length > 1 && (
-              <ul className="mt-3 space-y-1 text-xs text-muted-foreground">
-                {candidates.slice(1, 4).map((c) => (
-                  <li key={c.personId ?? "unknown"} className="flex items-center justify-between">
-                    <span>{c.name}</span>
-                    <span>{(c.posterior * 100).toFixed(0)}%</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </>
-        )}
-        {showAddPicker && offRoster.length > 0 && (
-          <div className="mt-3 flex flex-wrap gap-1 border-t border-border pt-3">
-            <span className="w-full text-[10px] uppercase tracking-wider text-muted-foreground">
-              Add to roster
-            </span>
-            {offRoster.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => {
-                  onAddToRoster(p.id);
-                  setShowAddPicker(false);
-                }}
-                className="rounded-full border border-input bg-background px-2.5 py-0.5 text-xs hover:bg-muted"
-              >
-                {p.name}
-              </button>
-            ))}
-          </div>
-        )}
-        {showMergePicker && top?.personId && (
-          <div className="mt-3 flex flex-wrap gap-1 border-t border-border pt-3">
-            <span className="w-full text-[10px] uppercase tracking-wider text-muted-foreground">
-              Merge {top.name} into…
-            </span>
-            {rosterPeople
-              .filter((p) => p.id !== top.personId)
-              .map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => {
-                    onMergeInto(top.personId ?? undefined, p.id);
-                    setShowMergePicker(false);
-                  }}
-                  className="rounded-full border border-input bg-background px-2.5 py-0.5 text-xs hover:bg-muted"
-                >
-                  {p.name}
-                </button>
-              ))}
-          </div>
         )}
       </div>
     </div>

@@ -128,10 +128,13 @@ export function match(embedding: Float32Array, context: MatchContext): Candidate
     cosine(embedding, context.centroidByPersonId.get(p.id)!),
   );
 
-  // Likelihood = softmax over similarities with a sharp temperature so that
-  // a clearly-better match dominates. 0.07 is a reasonable starting point;
-  // tune once we have real WavLM numbers from the spike.
-  const likelihoods = softmax(similarities, context.temperature ?? 0.07);
+  // Likelihood = softmax over similarities with a temperature. 0.07 was
+  // too sharp — small cosine differences pushed posteriors to extremes and
+  // the user described matches as "wobbly" because the prior could flip the
+  // top candidate between turns. 0.10 keeps a clearly-better match dominant
+  // while leaving borderline cases visibly uncertain (the SpeakerPanel
+  // surfaces this as "Maybe X / Maybe Y").
+  const likelihoods = softmax(similarities, context.temperature ?? 0.1);
 
   const priors = enrolled.map((p) => computePrior(p.id, context));
   const priorSum = priors.reduce((a, b) => a + b, 0) || 1;
@@ -171,14 +174,20 @@ export function match(embedding: Float32Array, context: MatchContext): Candidate
 
 function computePrior(personId: string, context: MatchContext): number {
   let prior = 1;
-  if (context.placePersonIds?.includes(personId)) prior *= 2.0;
-  if (context.eventPersonIds?.includes(personId)) prior *= 2.5;
+  // Softer context boosts: the old values (2.0× / 2.5×) flipped top-1
+  // between turns as the prior shifted, even when the voice match itself
+  // was stable. 1.5× / 2.0× still tilts the matcher meaningfully toward
+  // the expected attendees without overwhelming the voice signal.
+  if (context.placePersonIds?.includes(personId)) prior *= 1.5;
+  if (context.eventPersonIds?.includes(personId)) prior *= 2.0;
 
-  // Recency bias: decay with rank. Most-recent gets 1.6×, second 1.3×, third 1.15×.
+  // Recency bias: decay with rank. Halved from the prior 0.6 base so the
+  // last-heard speaker isn't disproportionately weighted on the next turn
+  // when somebody else actually started speaking.
   if (context.recentSpeakers) {
     const idx = context.recentSpeakers.indexOf(personId);
     if (idx >= 0) {
-      const boost = 1 + 0.6 / Math.pow(2, idx);
+      const boost = 1 + 0.3 / Math.pow(2, idx);
       prior *= boost;
     }
   }

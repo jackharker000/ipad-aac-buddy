@@ -299,6 +299,19 @@ export class LiveConversation {
   }
 
   /**
+   * Id of the most-recent "other"-speaker transcript segment, used by the
+   * SpeakerPanel's per-row Confirm / Not-them buttons. Returns null if the
+   * cache is empty or the most recent segment is James himself.
+   */
+  getLastOtherSegmentId(): string | null {
+    for (let i = this.transcriptCache.length - 1; i >= 0; i--) {
+      const s = this.transcriptCache[i];
+      if (s.speakerKind === "other") return s.id;
+    }
+    return null;
+  }
+
+  /**
    * Speak the "Sorry, who am I speaking with?" phrase and hold subsequent
    * segments for manual confirmation. Held segments are still written to
    * the transcript so James can see the response text, but the speaker
