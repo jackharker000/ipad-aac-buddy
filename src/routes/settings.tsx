@@ -489,6 +489,38 @@ function SystemTab() {
                       }
                     />
                   </div>
+
+                  {/* Speaker-ID engine selector — neural is scaffolded but
+                      OFF until device-verified on the real iPad. */}
+                  <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-card p-3">
+                    <div className="min-w-0 flex-1">
+                      <label className="text-sm font-medium">
+                        Neural speaker-ID engine (experimental)
+                      </label>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        When on, uses an on-device neural model (WavLM-class
+                        via WebGPU/WASM) instead of MFCC for speaker matching.
+                        Higher accuracy in noise, but heavier and not yet
+                        verified on this iPad — leave OFF unless you're
+                        actively testing. Enrolment supports both formats; the
+                        matcher never compares across engines.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={settings.speaker_id_engine === "neural"}
+                      onCheckedChange={(v) =>
+                        updateSettings({
+                          speaker_id_engine: v ? "neural" : "mfcc",
+                        }).then(() =>
+                          toast.success(
+                            v
+                              ? "Neural engine on — restart conversation to take effect"
+                              : "Reverted to MFCC engine",
+                          ),
+                        )
+                      }
+                    />
+                  </div>
                 </>
               );
             })()}

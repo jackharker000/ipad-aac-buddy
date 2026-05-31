@@ -189,6 +189,12 @@ export type Settings = {
     name: string;
     labels?: Record<string, string>;
   }>;
+  /** Speaker-ID engine selector. The neural engine (Silero VAD + WavLM/ECAPA
+   *  via @huggingface/transformers, WebGPU→WASM fallback) sits in rebuild-src/
+   *  ready to port, but the live cockpit pipeline is MFCC-only. This flag
+   *  reserves the toggle so it can ship gated and OFF — the active engine
+   *  stays MFCC until the neural path is device-verified on the real iPad. */
+  speaker_id_engine?: "mfcc" | "neural";
 };
 
 export type IPadModel =
@@ -318,9 +324,17 @@ export type EventDocument = {
 export type Voiceprint = {
   id: string; // == person_id
   person_id: string;
-  centroid: number[]; // mean MFCC vector (length = MFCC_COEFFS)
+  centroid: number[]; // mean embedding vector (MFCC today; neural in future)
   sample_count: number;
   updated_at: number;
+  /** Which engine produced `centroid`. Tagged so dual-format enrollment can
+   *  coexist and the matcher refuses to cosine-compare across engines (would
+   *  return garbage similarities). Absent on legacy rows == "mfcc". */
+  engine?: "mfcc" | "neural";
+  /** Embedding dimension. Belt-and-braces guard on top of the engine tag for
+   *  the same cross-format-cosine concern (same fix the embedding-model
+   *  retrieval gate uses). */
+  dim?: number;
   /** Optional sub-centroids when the speaker has multiple stable modes
    *  (e.g. calm vs animated, in-person vs phone). Written by the offline
    *  re-clustering pass when 2-means split is significantly tighter than
@@ -548,6 +562,8 @@ export const DEFAULT_SETTINGS: Settings = {
   fast_model: "gemini/gemini-2.5-flash-lite",
   smart_model: "gemini/gemini-2.5-flash",
   suggestion_feedback_enabled: true,
+  // Default OFF — neural engine ships disabled until device-verified.
+  speaker_id_engine: "mfcc",
 };
 
 /**
