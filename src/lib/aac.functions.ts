@@ -966,8 +966,8 @@ ACCURACY IS PARAMOUNT — this record is re-read to shape what James says to rea
 Return, via the tool:
 - summary: a faithful narrative of the conversation. For a substantive conversation this is multiple paragraphs (roughly 6–12 sentences); for a brief exchange it may be just 1–3 sentences — match the real content. Cover what was actually discussed (each distinct topic), the emotional tone and how it shifted, anything decided or planned, and questions left open. Write in clear past tense about the real content — never generic filler.
 - highlights: 4–8 short, concrete bullet points — the moments, facts, or exchanges most worth remembering at a glance.
-- memories: extract EVERY durable thing worth remembering for future conversations — be thorough, not minimal. Include facts (about James or the people present), stated preferences and dislikes, life events (past or upcoming), plans and commitments (todos), opinions expressed, health/work/family/hobby details, and relationships mentioned. Each memory: a single self-contained sentence plus its kind (fact | preference | event | todo). Aim for as many as the conversation genuinely supports (often 5–15 for a real conversation); return an empty list only if nothing was said.
-- followUps: specific topics or questions to raise next time (e.g. "Ask how Mum's hospital appointment went"). Be concrete.`;
+- memories: extract EVERY durable thing worth remembering for future conversations — be thorough, not minimal. Include facts (about James or the people present), stated preferences and dislikes, life events (past or upcoming), plans and commitments (todos), opinions expressed, health/work/family/hobby details, and relationships mentioned. Each memory: a single self-contained sentence plus its kind (fact | preference | event | todo), AND a personName when the memory is clearly about ONE specific person in the conversation (use their exact transcript name; leave empty for general facts about James or things that apply to everyone). Aim for as many as the conversation genuinely supports (often 5–15 for a real conversation); return an empty list only if nothing was said.
+- followUps: specific topics or questions to raise next time (e.g. "Ask how Mum's hospital appointment went"). Be concrete; include personName when it's clearly directed at one specific person.`;
 
     const ctx = `${data.placeName ? `Place: ${data.placeName}\n` : ""}${data.peopleNames?.length ? `People present: ${data.peopleNames.join(", ")}\n` : ""}\nTranscript:\n${transcriptText}`;
 
@@ -1010,6 +1010,11 @@ Return, via the tool:
                           type: "string",
                           enum: ["fact", "preference", "event", "todo"],
                         },
+                        personName: {
+                          type: "string",
+                          description:
+                            "Exact transcript name of the ONE person this memory is about. Leave empty for general facts.",
+                        },
                       },
                       required: ["text", "kind"],
                     },
@@ -1017,7 +1022,14 @@ Return, via the tool:
                   followUps: {
                     type: "array",
                     description: "Specific topics/questions to raise next time.",
-                    items: { type: "string" },
+                    items: {
+                      type: "object",
+                      properties: {
+                        text: { type: "string" },
+                        personName: { type: "string" },
+                      },
+                      required: ["text"],
+                    },
                   },
                 },
                 required: ["summary", "highlights", "memories", "followUps"],

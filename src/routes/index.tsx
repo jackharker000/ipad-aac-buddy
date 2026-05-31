@@ -1434,15 +1434,33 @@ function Home() {
           });
           if (r.memories?.length) {
             const primary = personIdsRef.current[0];
+            // Resolve a personName (from the AI) to the actual personId in the
+            // current conversation roster. Falls back to the primary person
+            // when the name is missing or doesn't match a participant — but
+            // memories that ARE about a specific person are now attributed
+            // correctly, instead of all being pinned to personIds[0].
+            const conversationPeople = (await db.people.bulkGet(personIdsRef.current))
+              .filter((p): p is Person => !!p);
+            const resolvePersonId = (name?: string): string | undefined => {
+              if (!name?.trim()) return primary;
+              const lower = name.trim().toLowerCase();
+              const exact = conversationPeople.find((p) => p.name.toLowerCase() === lower);
+              if (exact) return exact.id;
+              const partial = conversationPeople.find(
+                (p) => p.name.toLowerCase().includes(lower) || lower.includes(p.name.toLowerCase()),
+              );
+              return partial?.id ?? primary;
+            };
             const memoryRows = r.memories.map(
               (m: {
                 text: string;
                 kind: "fact" | "preference" | "event" | "todo";
+                personName?: string;
               }) => ({
                 id: newId(),
                 conversation_id: cid,
                 place_id: placeIdRef.current,
-                person_id: primary,
+                person_id: resolvePersonId(m.personName),
                 text: m.text,
                 kind: m.kind,
                 status: "auto" as const,
@@ -1460,15 +1478,35 @@ function Home() {
           }
           if (r.followUps?.length) {
             const primary = personIdsRef.current[0];
+            const conversationPeople = (await db.people.bulkGet(personIdsRef.current))
+              .filter((p): p is Person => !!p);
+            const resolvePersonId = (name?: string): string | undefined => {
+              if (!name?.trim()) return primary;
+              const lower = name.trim().toLowerCase();
+              const exact = conversationPeople.find((p) => p.name.toLowerCase() === lower);
+              if (exact) return exact.id;
+              const partial = conversationPeople.find(
+                (p) => p.name.toLowerCase().includes(lower) || lower.includes(p.name.toLowerCase()),
+              );
+              return partial?.id ?? primary;
+            };
+            // Normalise: AI now returns objects with optional personName, but
+            // legacy/older fallback paths may still return plain strings.
+            type FUEmit = string | { text: string; personName?: string };
             await db.follow_ups.bulkAdd(
-              r.followUps.map((t: string) => ({
-                id: newId(),
-                for_place_id: placeIdRef.current,
-                for_person_id: primary,
-                text: t,
-                created_at: Date.now(),
-                used: false,
-              })),
+              (r.followUps as FUEmit[])
+                .map((entry) =>
+                  typeof entry === "string" ? { text: entry, personName: undefined } : entry,
+                )
+                .filter((f) => f.text?.trim())
+                .map((f) => ({
+                  id: newId(),
+                  for_place_id: placeIdRef.current,
+                  for_person_id: resolvePersonId(f.personName),
+                  text: f.text,
+                  created_at: Date.now(),
+                  used: false,
+                })),
             );
           }
           // Honest toast: don't claim "Saved" if the summary actually errored
