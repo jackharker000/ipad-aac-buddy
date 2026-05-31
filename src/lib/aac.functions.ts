@@ -2410,18 +2410,26 @@ export const embedTexts = createServerFn({ method: "POST" })
     // without semantic recall) instead of throwing.
     const geminiKey = getGeminiApiKey();
     if (geminiKey) {
-      // Gemini's OpenAI-compatible embeddings endpoint.
+      // Gemini's OpenAI-compatible embeddings endpoint. `text-embedding-004` is
+      // deprecated; use the current `gemini-embedding-001`. Request 1536 dims to
+      // match the OpenAI path's length — this also means any older 768-dim
+      // `text-embedding-004` vectors are cleanly skipped by retrieval's length
+      // guard (rather than wrongly compared across a different embedding space).
       const res = await fetch(
         "https://generativelanguage.googleapis.com/v1beta/openai/embeddings",
         {
           method: "POST",
           headers: { Authorization: `Bearer ${geminiKey}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ model: "text-embedding-004", input: data.texts }),
+          body: JSON.stringify({
+            model: "gemini-embedding-001",
+            input: data.texts,
+            dimensions: 1536,
+          }),
         },
       );
       if (!res.ok) throw new Error(`Embed failed: ${res.status} ${await res.text()}`);
       const json = (await res.json()) as { data: Array<{ embedding: number[] }> };
-      return { embeddings: json.data.map((d) => d.embedding), model: "text-embedding-004" };
+      return { embeddings: json.data.map((d) => d.embedding), model: "gemini-embedding-001" };
     }
 
     const openaiKey = getOpenAIApiKey();

@@ -242,6 +242,8 @@ function Home() {
   // === Preference learning / feedback ===
   // The suggestion currently being given long-press feedback (null = menu closed).
   const [feedbackTarget, setFeedbackTarget] = useState<Suggestion | null>(null);
+  // Whether the long-press feedback gesture is enabled (Settings toggle).
+  const [feedbackEnabled, setFeedbackEnabled] = useState(true);
   // True while a suggestion is being held for feedback — pauses auto-refresh so
   // the held card isn't remounted (which would abort the hold) by a new batch.
   const holdingCardRef = useRef(false);
@@ -1023,6 +1025,7 @@ function Home() {
       if (cancelled) return;
       setVoiceId(s.voice_id);
       setIpadModel(s.ipad_model ?? "auto");
+      setFeedbackEnabled(s.suggestion_feedback_enabled ?? true);
       fastModelRef.current =
         s.fast_model ?? s.suggestion_model ?? "anthropic/claude-haiku-4-5";
       smartModelRef.current = s.smart_model ?? "anthropic/claude-sonnet-4-5";
@@ -2454,6 +2457,9 @@ function Home() {
                 key={`${i}-${s.text}`}
                 suggestion={s}
                 disabled={speaking}
+                // Predictions are completions of what James is typing — feedback
+                // only applies to AI conversation suggestions.
+                feedbackEnabled={feedbackEnabled && !predicting}
                 onActivate={() =>
                   predicting
                     ? speakPrediction(s.text)
@@ -2926,7 +2932,7 @@ function ScaledShell({
 }
 
 /** Hold duration (ms) before a suggestion's feedback menu opens. */
-const FEEDBACK_HOLD_MS = 10_000;
+const FEEDBACK_HOLD_MS = 5_000;
 
 /**
  * A single suggestion chip. A quick tap activates it (speak / pick a
@@ -2937,12 +2943,15 @@ const FEEDBACK_HOLD_MS = 10_000;
 function SuggestionCard({
   suggestion,
   disabled,
+  feedbackEnabled = true,
   onActivate,
   onLongPress,
   onHoldChange,
 }: {
   suggestion: Suggestion;
   disabled: boolean;
+  /** When false, the card is a plain tap button — no long-press feedback. */
+  feedbackEnabled?: boolean;
   onActivate: () => void;
   onLongPress: () => void;
   /** Notifies the parent while this card is held, so it can pause auto-refresh
@@ -2962,6 +2971,7 @@ function SuggestionCard({
   };
 
   const start = () => {
+    if (!feedbackEnabled) return; // feedback gesture disabled → plain tap only
     firedRef.current = false;
     setHolding(true);
     onHoldChange?.(true);
@@ -3009,7 +3019,7 @@ function SuggestionCard({
         onActivate();
       }}
       disabled={disabled}
-      title="Tap to speak · hold to give feedback"
+      title={feedbackEnabled ? "Tap to speak · hold to give feedback" : "Tap to speak"}
       className={`relative flex h-full min-h-0 w-full select-none items-center justify-center overflow-hidden rounded-2xl border-2 p-3 text-center text-xl font-medium leading-snug transition-transform active:scale-[0.98] ${categoryClass(suggestion.category)} ${holding ? "ring-2 ring-[var(--accent)]" : ""}`}
     >
       <span className="line-clamp-5">{suggestion.text}</span>

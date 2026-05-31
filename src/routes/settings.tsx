@@ -458,6 +458,26 @@ function SystemTab() {
                     to the others if it's rate-limited or unavailable — so
                     suggestions keep working.
                   </p>
+
+                  {/* Long-press feedback toggle */}
+                  <div className="mt-5 flex items-center justify-between border-t border-border pt-4">
+                    <div className="pr-4">
+                      <Label className="text-base">Hold a suggestion for feedback</Label>
+                      <p className="text-sm text-muted-foreground">
+                        Press and hold a suggestion for 5 seconds to rate it
+                        (sounds like me / too formal / not me…). Teaches the AI
+                        your style. Handy while tuning; turn off for daily use.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={settings.suggestion_feedback_enabled ?? true}
+                      onCheckedChange={(v) =>
+                        updateSettings({ suggestion_feedback_enabled: v }).then(() =>
+                          toast.success(v ? "Feedback hold on" : "Feedback hold off"),
+                        )
+                      }
+                    />
+                  </div>
                 </>
               );
             })()}

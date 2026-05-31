@@ -181,6 +181,9 @@ export type Settings = {
   fast_model?: string;
   /** Quality-critical tier: post-conversation summary, memory extraction, event prep, drafts. */
   smart_model?: string;
+  /** When true, holding a suggestion opens the long-press feedback menu.
+   *  Defaults on — a tuning/testing aid that can be switched off for daily use. */
+  suggestion_feedback_enabled?: boolean;
   custom_voices?: Array<{
     voice_id: string;
     name: string;
@@ -509,6 +512,7 @@ export const DEFAULT_SETTINGS: Settings = {
   expand_model: "anthropic/claude-haiku-4-5",
   fast_model: "anthropic/claude-haiku-4-5",
   smart_model: "anthropic/claude-sonnet-4-5",
+  suggestion_feedback_enabled: true,
 };
 
 export type ModelOption = {
