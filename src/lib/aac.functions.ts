@@ -39,6 +39,9 @@ function getGeminiApiKey(): string | undefined {
     process.env.GEMINI_API_KEY ||
     process.env.GOOGLE_API_KEY ||
     process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+    // The key set on this deploy is named after the project/month.
+    process.env.gemini_parleymay2026 ||
+    process.env.GEMINI_PARLEYMAY2026 ||
     undefined
   );
 }
@@ -109,11 +112,18 @@ function resolveChatTarget(model: string | undefined): {
     return geminiTarget(mapToGemini(m));
   }
 
-  // 2. Auto-pick by available key, Anthropic first (it's what's set on this
-  //    deploy), then OpenAI, then Gemini, then the legacy Lovable gateway.
+  // 2. Optional hard override: PARLEY_AI_PROVIDER = anthropic | openai | gemini.
+  const forced = (process.env.PARLEY_AI_PROVIDER || "").toLowerCase().trim();
+  if (forced === "anthropic") return anthropicTarget(mapToAnthropic(m));
+  if (forced === "openai") return openaiTarget(mapToOpenAI(m));
+  if (forced === "gemini" || forced === "google") return geminiTarget(mapToGemini(m));
+
+  // 3. Auto-pick by available key. Gemini first — it's the free-tier key
+  //    set on this deploy, so it's the cheapest default; then Anthropic,
+  //    then OpenAI, then the legacy Lovable gateway.
+  if (getGeminiApiKey()) return geminiTarget(mapToGemini(m));
   if (getAnthropicApiKey()) return anthropicTarget(mapToAnthropic(m));
   if (getOpenAIApiKey()) return openaiTarget(mapToOpenAI(m));
-  if (getGeminiApiKey()) return geminiTarget(mapToGemini(m));
   if (process.env.LOVABLE_API_KEY) {
     return {
       url: "https://ai.gateway.lovable.dev/v1/chat/completions",
@@ -154,10 +164,18 @@ function mapToOpenAI(m: string): string {
   return /pro|opus|sonnet/i.test(m) ? "gpt-4o" : "gpt-4o-mini";
 }
 function mapToGemini(m: string): string {
-  // Strip the "google/" prefix if present; otherwise pick a default.
-  if (m.startsWith("google/")) return m.slice("google/".length);
-  if (m.startsWith("gemini-")) return m;
-  return /pro/i.test(m) ? "gemini-2.5-pro" : "gemini-2.5-flash";
+  // Free-tier safe: the Gemini free tier has little/no quota on 2.5-pro, so
+  // collapse EVERYTHING to flash / flash-lite (generous free quota) rather
+  // than honouring "pro" tier hints. flash handles tool-calling fine for
+  // every feature here.
+  const id = m.startsWith("google/")
+    ? m.slice("google/".length)
+    : m.startsWith("gemini-")
+      ? m
+      : "gemini-2.5-flash";
+  // Downgrade any pro id to flash so a free key never 429s/403s on quota.
+  if (/pro/i.test(id)) return "gemini-2.5-flash";
+  return id;
 }
 
 /* ------------------------- ElevenLabs: Scribe token ------------------------- */
@@ -2203,21 +2221,9 @@ export const embedTexts = createServerFn({ method: "POST" })
   .inputValidator((d) => embedSchema.parse(d))
   .handler(async ({ data }) => {
     // Embeddings power Tier-3 semantic memory retrieval — a nice-to-have,
-    // not core. Use OpenAI when its key is present, else Gemini, else
-    // degrade to empty embeddings so an Anthropic-only deploy still works
-    // fully (just without semantic recall) instead of throwing.
-    const openaiKey = getOpenAIApiKey();
-    if (openaiKey) {
-      const res = await fetch("https://api.openai.com/v1/embeddings", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${openaiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ model: "text-embedding-3-small", input: data.texts }),
-      });
-      if (!res.ok) throw new Error(`Embed failed: ${res.status} ${await res.text()}`);
-      const json = (await res.json()) as { data: Array<{ embedding: number[] }> };
-      return { embeddings: json.data.map((d) => d.embedding), model: "text-embedding-3-small" };
-    }
-
+    // not core. Prefer the free Gemini key, then OpenAI, else degrade to
+    // empty embeddings so an Anthropic-only deploy still works fully (just
+    // without semantic recall) instead of throwing.
     const geminiKey = getGeminiApiKey();
     if (geminiKey) {
       // Gemini's OpenAI-compatible embeddings endpoint.
@@ -2234,7 +2240,19 @@ export const embedTexts = createServerFn({ method: "POST" })
       return { embeddings: json.data.map((d) => d.embedding), model: "text-embedding-004" };
     }
 
-    // No embeddings provider (e.g. Anthropic-only). Return zero-length
-    // vectors so callers can skip semantic features without erroring.
+    const openaiKey = getOpenAIApiKey();
+    if (openaiKey) {
+      const res = await fetch("https://api.openai.com/v1/embeddings", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${openaiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: "text-embedding-3-small", input: data.texts }),
+      });
+      if (!res.ok) throw new Error(`Embed failed: ${res.status} ${await res.text()}`);
+      const json = (await res.json()) as { data: Array<{ embedding: number[] }> };
+      return { embeddings: json.data.map((d) => d.embedding), model: "text-embedding-3-small" };
+    }
+
+    // No embeddings provider. Return zero-length vectors so callers can
+    // skip semantic features without erroring.
     return { embeddings: data.texts.map(() => []), model: "none" };
   });
