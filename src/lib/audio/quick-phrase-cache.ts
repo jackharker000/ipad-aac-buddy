@@ -125,20 +125,24 @@ export async function warmQuickPhraseCache(args: {
     }
   }
 
-  for (const phrase of QUICK_PHRASES) {
-    try {
-      const existing = await getCachedAudio(phrase, args.voiceId);
-      if (existing) continue;
-      await synthAndStore({
-        text: phrase,
-        voiceId: args.voiceId,
-        kind: "phrase",
-        synth: args.synth,
-      });
-    } catch (err) {
-      console.warn(`[quick-phrase-cache] synth failed for "${phrase}"`, err);
-    }
-  }
+  // Parallelise the 5 phrase synths — serial took ~5x as long for no reason.
+  // allSettled so one provider blip can't leave the rest unsynthesised.
+  await Promise.allSettled(
+    QUICK_PHRASES.map(async (phrase) => {
+      try {
+        const existing = await getCachedAudio(phrase, args.voiceId);
+        if (existing) return;
+        await synthAndStore({
+          text: phrase,
+          voiceId: args.voiceId,
+          kind: "phrase",
+          synth: args.synth,
+        });
+      } catch (err) {
+        console.warn(`[quick-phrase-cache] synth failed for "${phrase}"`, err);
+      }
+    }),
+  );
 }
 
 /**

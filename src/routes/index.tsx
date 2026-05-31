@@ -1517,7 +1517,10 @@ function Home() {
             toast.success("Saved", { id: "sum" });
           }
 
-          /* Post-stop pipeline: summary → [Tier 2 jobs in Promise.all] → [Tier 3 embed memories] */
+          /* Post-stop pipeline: summary saved → kick off Tier-2 in the
+             background so Stop returns immediately (was locked 10-30s while
+             rediarize + voiceprint rebuild + enrichment + intro detection
+             ran in sequence — James felt every second). */
           const tier2Ctx = {
             conversationId: cid,
             segs,
@@ -1526,20 +1529,23 @@ function Home() {
             smartModel: smartModelRef.current,
             fastModel: fastModelRef.current,
           };
-          toast.loading("Analysing conversation…", { id: "tier2" });
-          try {
-            // 2.1 must complete before 2.4 (needs corrected labels + centroids).
-            const rediarizeResult = await rediarizeAfterStop(tier2Ctx);
-            await Promise.all([
-              rebuildVoiceprintsAfterStop(tier2Ctx),
-              enrichProfilesAfterStop(tier2Ctx),
-              detectIntroductionsAfterStop(tier2Ctx, rediarizeResult),
-            ]);
-            toast.success("Updated profiles", { id: "tier2" });
-          } catch (e) {
-            console.warn("[tier2] post-pass failed", e);
-            toast.dismiss("tier2");
-          }
+          toast.message("Analysing in background…", { id: "tier2", duration: 4000 });
+          // Fire-and-forget. 2.1 must complete before 2.4 (needs corrected
+          // labels + centroids), and 2.2/2.3 are independent — parallelise.
+          void (async () => {
+            try {
+              const rediarizeResult = await rediarizeAfterStop(tier2Ctx);
+              await Promise.all([
+                rebuildVoiceprintsAfterStop(tier2Ctx),
+                enrichProfilesAfterStop(tier2Ctx),
+                detectIntroductionsAfterStop(tier2Ctx, rediarizeResult),
+              ]);
+              toast.success("Profiles updated", { id: "tier2", duration: 2000 });
+            } catch (e) {
+              console.warn("[tier2] post-pass failed", e);
+              toast.dismiss("tier2");
+            }
+          })();
         }
       }
       // === Tier 1.2: auto-distil style profile ===
