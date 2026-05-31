@@ -13,9 +13,26 @@ function requireLovableApiKey(): string {
   return key;
 }
 
+function getOpenAIApiKey(): string | undefined {
+  // Accept the common alternate names so a key set under any of them works.
+  return (
+    process.env.OPENAI_API_KEY ||
+    process.env.VITE_OPENAI_API_KEY ||
+    process.env.OPENAI_KEY ||
+    undefined
+  );
+}
+
 function requireOpenAIApiKey(): string {
-  const key = process.env.OPENAI_API_KEY;
-  if (!key) throw new Error("OPENAI_API_KEY is not configured. Add it in Settings → AI model.");
+  const key = getOpenAIApiKey();
+  if (!key) {
+    throw new Error(
+      "OPENAI_API_KEY is not configured on the server. In Vercel → ipad-aac-buddy → " +
+        "Settings → Environment Variables, add OPENAI_API_KEY for ALL environments " +
+        "(Production, Preview, Development), then redeploy. A key scoped to Production " +
+        "only will not reach preview deployments.",
+    );
+  }
   return key;
 }
 
