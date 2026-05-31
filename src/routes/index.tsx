@@ -1388,25 +1388,39 @@ function Home() {
           // forever (the smart model + provider-fallback walk can run long).
           const sumAbort = new AbortController();
           const sumTimer = setTimeout(() => sumAbort.abort(), 30_000);
-          const r = await Promise.race([
-            summarizeFn({
-              data: {
-                transcript,
-                placeName: placeName ?? undefined,
-                peopleNames,
-                // Summaries are quality-dominant and run post-conversation (no
-                // live-latency cost), so use the provider's flagship model
-                // rather than the fast "smart" tier — fixes thin/inaccurate
-                // summaries. Falls back automatically if rate-limited.
-                model: flagshipModelFor(smartModelRef.current),
-              },
-            }),
-            new Promise<never>((_, rej) =>
-              sumAbort.signal.addEventListener("abort", () =>
-                rej(new Error("Summary timed out — transcript saved without it")),
+          const runSummary = (model: string) =>
+            Promise.race([
+              summarizeFn({
+                data: {
+                  transcript,
+                  placeName: placeName ?? undefined,
+                  peopleNames,
+                  model,
+                },
+              }),
+              new Promise<never>((_, rej) =>
+                sumAbort.signal.addEventListener("abort", () =>
+                  rej(new Error("Summary timed out — transcript saved without it")),
+                ),
               ),
-            ),
-          ]).finally(() => clearTimeout(sumTimer));
+            ]);
+          let r;
+          try {
+            // Summaries are quality-dominant and run post-conversation (no
+            // live-latency cost), so prefer the provider's flagship model
+            // (e.g. Gemini Pro) rather than the fast "smart" tier — this is
+            // what fixes thin/inaccurate summaries.
+            r = await runSummary(flagshipModelFor(smartModelRef.current));
+            // If the flagship failed or came back empty (e.g. a free-tier key
+            // can't reach Gemini Pro, and no other provider key is set), retry
+            // with the user's configured smart model — known-good for their
+            // tier — so we never regress to "no summary".
+            if ((r.error || !r.summary?.trim()) && !sumAbort.signal.aborted) {
+              r = await runSummary(smartModelRef.current);
+            }
+          } finally {
+            clearTimeout(sumTimer);
+          }
           await db.conversations.update(cid, {
             summary: r.summary,
             highlights: r.highlights,

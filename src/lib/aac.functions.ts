@@ -217,17 +217,25 @@ async function chatCompletion(
       }
     }
     let res: Response;
+    // Per-attempt timeout so a single hung/dead provider can't burn the whole
+    // serverless function budget and starve the fallback chain. 25s is well
+    // above a legitimately slow smart-tier summary, but bounds a stuck socket.
+    const ac = new AbortController();
+    const attemptTimer = setTimeout(() => ac.abort(), 25_000);
     try {
       res = await fetch(target.url, {
         method: "POST",
         headers: target.headers,
         body: JSON.stringify(perBody),
+        signal: ac.signal,
       });
     } catch (e) {
       console.warn(`[ai] ${target.provider} network error${isLast ? "" : " — falling back"}`, e);
       last = new Response(JSON.stringify({ error: String(e) }), { status: 503 });
       if (isLast) return last;
       continue;
+    } finally {
+      clearTimeout(attemptTimer);
     }
     if (res.ok) return res;
     // Any non-2xx → try the next provider. A 429 is the common case (free-tier
