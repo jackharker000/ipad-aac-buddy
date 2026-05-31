@@ -792,7 +792,7 @@ function Home() {
         }
       }
 
-      console.debug("[diarize]", {
+      if (import.meta.env.DEV) console.debug("[diarize]", {
         chosen: speakerLabel,
         sim: assignSim.toFixed(3),
         isNew: assignNew,
@@ -1084,7 +1084,7 @@ function Home() {
               speakerShiftTimestampsRef.current =
                 speakerShiftTimestampsRef.current.filter((t) => t !== shiftTs);
               if (preMfcc && postMfcc) {
-                console.debug("[diarize] split chunk at shift", {
+                if (import.meta.env.DEV) console.debug("[diarize] split chunk at shift", {
                   shiftAtSec: shiftSecFromUtteranceStart.toFixed(2),
                   preText,
                   postText,
@@ -1099,7 +1099,7 @@ function Home() {
               } else {
                 // MFCC failed for one or both halves — fall through to single-
                 // utterance processing below. Timestamp is already consumed.
-                console.debug("[diarize] split MFCC failed, processing as single utterance");
+                if (import.meta.env.DEV) console.debug("[diarize] split MFCC failed, processing as single utterance");
               }
             }
           }
@@ -1291,7 +1291,7 @@ function Home() {
           speakerShiftTimestampsRef.current =
             speakerShiftTimestampsRef.current.filter((t) => t > cutoff);
         });
-        console.debug("[voiceprint] capture started", {
+        if (import.meta.env.DEV) console.debug("[voiceprint] capture started", {
           sampleRate: cap.sampleRate,
         });
       } catch (err) {
@@ -2414,9 +2414,9 @@ function Home() {
             place: ctx.place,
             // === Cross-conversation voice learning ===
             jamesVoiceSamples: ctx.jamesVoiceSamples,
-            // Use smart model for expansion — it's a one-shot operation so the
-            // extra latency is acceptable, and quality matters more than speed here.
-            model: smartModelRef.current,
+            // Expand is latency-critical (James is mid-conversation waiting to
+            // speak) — CLAUDE.md puts expand on the FAST tier, not smart.
+            model: fastModelRef.current,
           },
         }),
         new Promise<never>((_, rej) => {

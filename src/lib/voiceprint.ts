@@ -219,7 +219,7 @@ export class VoiceCapture {
       }, 1200);
     }
 
-    console.debug("[voiceprint] capture ready", {
+    if (import.meta.env.DEV) console.debug("[voiceprint] capture ready", {
       sampleRate: this.sampleRate,
       ctxState: ctx.state,
       captureMode: this.captureMode,
