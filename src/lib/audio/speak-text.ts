@@ -46,10 +46,25 @@ export type SpeakArgs = {
   streaming?: boolean;
 };
 
-/** Stop all playback paths (streaming, cached). Used by the cockpit stop handler. */
+/** The plain-Audio element from the full-synth fallback, tracked so
+ *  `stopSpeaking()` can silence it too (the streaming + cached paths track
+ *  their own; this one previously kept playing on stop/unmount). */
+let activeFallbackAudio: HTMLAudioElement | null = null;
+
+/** Stop ALL playback paths (streaming, cached, full-synth fallback). Used by
+ *  the cockpit's Stop-Voice button, conversation stop, and unmount cleanup. */
 export function stopSpeaking(): void {
   stopStreamingPlayback();
   stopCachedPlayback();
+  if (activeFallbackAudio) {
+    try {
+      activeFallbackAudio.pause();
+      activeFallbackAudio.currentTime = 0;
+    } catch {
+      /* ignore */
+    }
+    activeFallbackAudio = null;
+  }
 }
 
 /** Play already-synthesised base64 audio through a plain HTMLAudioElement. */
@@ -60,12 +75,17 @@ async function playBase64(audioBase64: string, mime: string): Promise<Blob> {
   const blob = new Blob([bytes] as BlobPart[], { type: mime || "audio/mpeg" });
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
-  audio.addEventListener("ended", () => URL.revokeObjectURL(url));
-  audio.addEventListener("error", () => URL.revokeObjectURL(url));
+  activeFallbackAudio = audio;
+  const cleanup = () => {
+    URL.revokeObjectURL(url);
+    if (activeFallbackAudio === audio) activeFallbackAudio = null;
+  };
+  audio.addEventListener("ended", cleanup);
+  audio.addEventListener("error", cleanup);
   try {
     await audio.play();
   } catch (err) {
-    URL.revokeObjectURL(url);
+    cleanup();
     throw err instanceof Error ? err : new Error("audio playback failed");
   }
   return blob;

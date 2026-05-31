@@ -1374,14 +1374,25 @@ function Home() {
             .filter((p): p is Person => !!p)
             .map((p) => p.name);
           toast.loading("Saving summary…", { id: "sum" });
-          const r = await summarizeFn({
-            data: {
-              transcript,
-              placeName: placeName ?? undefined,
-              peopleNames,
-              model: smartModelRef.current,
-            },
-          });
+          // Client timeout so a hung/slow summary doesn't leave "Saving…" up
+          // forever (the smart model + provider-fallback walk can run long).
+          const sumAbort = new AbortController();
+          const sumTimer = setTimeout(() => sumAbort.abort(), 30_000);
+          const r = await Promise.race([
+            summarizeFn({
+              data: {
+                transcript,
+                placeName: placeName ?? undefined,
+                peopleNames,
+                model: smartModelRef.current,
+              },
+            }),
+            new Promise<never>((_, rej) =>
+              sumAbort.signal.addEventListener("abort", () =>
+                rej(new Error("Summary timed out — transcript saved without it")),
+              ),
+            ),
+          ]).finally(() => clearTimeout(sumTimer));
           await db.conversations.update(cid, {
             summary: r.summary,
             highlights: r.highlights,
@@ -1425,7 +1436,13 @@ function Home() {
               })),
             );
           }
-          toast.success("Saved", { id: "sum" });
+          // Honest toast: don't claim "Saved" if the summary actually errored
+          // or came back empty (the transcript IS saved either way).
+          if (r.error || !r.summary?.trim()) {
+            toast.message("Transcript saved — summary didn't generate", { id: "sum" });
+          } else {
+            toast.success("Saved", { id: "sum" });
+          }
 
           /* Post-stop pipeline: summary → [Tier 2 jobs in Promise.all] → [Tier 3 embed memories] */
           const tier2Ctx = {
@@ -1747,6 +1764,8 @@ function Home() {
       ]).finally(() => clearTimeout(timer));
       if (r.suggestions?.length) {
         succeeded = true;
+        // AI is reachable again — clear any "AI down" notice.
+        toast.dismiss("ai-down");
         setSuggestions(r.suggestions as Suggestion[]);
         // Remember this batch so that if James types his own reply instead of
         // tapping one, we can mark all of them as "missed".
@@ -1790,6 +1809,15 @@ function Home() {
             })),
           );
         }
+      } else if (r.error) {
+        // Every provider returned an error object (e.g. all keys 401/429) — the
+        // server fn resolves with {suggestions:[], error} rather than throwing,
+        // so this path used to leave the grid silently blank. Surface a
+        // persistent, de-duped notice; quick phrases + typed speech still work.
+        toast.error(
+          "Can't reach the AI right now — quick phrases and typed speech still work.",
+          { id: "ai-down", duration: Infinity },
+        );
       }
     } catch (e: any) {
       console.error(e);
@@ -2685,6 +2713,24 @@ function Home() {
             {expanding ? "Clarifying" : "Speak"}
           </span>
         </button>
+
+        {/* Stop-Voice — lets James interrupt a wrong/unwanted utterance the
+            instant he hears it. Visible during a conversation; a no-op when
+            nothing is playing. Once audio starts there was previously NO way
+            to stop it, which for a non-verbal user is a real harm path. */}
+        {active && (
+          <button
+            onClick={() => {
+              stopSpeaking();
+              setSpeaking(false);
+            }}
+            aria-label="Stop speaking"
+            className="flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl bg-[var(--coral)] text-white shadow-sm transition-all active:scale-95 hover:opacity-90"
+          >
+            <Square className="size-7" />
+            <span className="text-sm font-medium">Stop voice</span>
+          </button>
+        )}
 
         {/* Recent conversations */}
         <Link
