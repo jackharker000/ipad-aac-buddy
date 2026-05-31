@@ -202,14 +202,29 @@ const VOICE_SAMPLE_STOPWORDS = new Set(
   ].map((s) => s.toLowerCase()),
 );
 
+/** Make a string safe to embed inside a double-quoted prompt bullet: collapse
+ *  whitespace/newlines and neutralise quote chars so a transcript line can't
+ *  break out of its quotes and read as prompt instructions. */
+export function sanitizeForPrompt(s: string, max = 160): string {
+  const t = (s ?? "")
+    .replace(/\s+/g, " ")
+    .replace(/["“”`]/g, "'")
+    .trim();
+  return t.length > max ? t.slice(0, max - 1) + "…" : t;
+}
+
 /**
  * Collect real lines James has spoken in PAST conversations, so the AI can
- * mirror his genuine voice. Prioritises conversations that involved the
- * present people (style is relationship-specific), then backfills from his
- * global recent history. Deduped, trivial/quick-phrase lines dropped.
+ * mirror his genuine voice.
  *
- * Bounded scans keep this cheap: ≤60 recent conversations, ≤20 relevant ones,
- * and a ≤600-segment global recency window.
+ * Privacy: when participants are known, we only mirror lines from conversations
+ * held EXCLUSIVELY among the present people (so a line that quotes/relates to an
+ * absent person can't surface in a different chat). With no participants
+ * selected there's nothing to leak relative to, so we fall back to recent
+ * global lines. Deduped; trivial/quick-phrase/single-word lines dropped.
+ *
+ * Bounded scans keep this cheap: ≤60 recent conversations and a ≤600-segment
+ * global recency window (only when no participants are set).
  */
 export async function getJamesVoiceSamples(
   personIds: string[],
@@ -231,18 +246,24 @@ export async function getJamesVoiceSamples(
   };
 
   try {
-    // 1. Lines from past conversations that involved the present people.
     if (personIds.length) {
+      // Only mirror lines from conversations held exclusively among the present
+      // people — no absent identified person was in the room, so nothing of
+      // theirs can leak through James's phrasing.
+      const present = new Set(personIds);
       const convos = await db.conversations
         .orderBy("started_at")
         .reverse()
         .limit(60)
         .toArray();
-      const relevantIds = convos
-        .filter((c) => c.person_ids?.some((pid) => personIds.includes(pid)))
+      const safeIds = convos
+        .filter((c) => {
+          const ids = c.person_ids ?? [];
+          return ids.length > 0 && ids.every((pid) => present.has(pid));
+        })
         .slice(0, 20)
         .map((c) => c.id);
-      for (const cid of relevantIds) {
+      for (const cid of safeIds) {
         if (out.length >= limit) break;
         const segs = await db.transcript_segments
           .where("conversation_id")
@@ -254,10 +275,8 @@ export async function getJamesVoiceSamples(
           if (out.length >= limit) break;
         }
       }
-    }
-
-    // 2. Backfill from globally most-recent James lines.
-    if (out.length < limit) {
+    } else {
+      // No participants selected → recent global lines (nothing to leak against).
       const recent = await db.transcript_segments
         .orderBy("ts")
         .reverse()
@@ -284,10 +303,7 @@ export async function getRecentChoiceMemories(
   personIds: string[],
   limit = 12,
 ): Promise<string[]> {
-  const trim = (s: string, n = 80) => {
-    const t = (s ?? "").trim().replace(/\s+/g, " ");
-    return t.length > n ? t.slice(0, n - 1) + "…" : t;
-  };
+  const trim = (s: string, n = 80) => sanitizeForPrompt(s, n);
   try {
     let rows = await db.suggestion_choices
       .orderBy("ts")
@@ -295,13 +311,13 @@ export async function getRecentChoiceMemories(
       .limit(200)
       .toArray();
     // Privacy: when we know who's present, only surface choices tied to one of
-    // them (plus generic person-less ones). A choice's `context`/`typed_own`
-    // can quote what a DIFFERENT person said, so backfilling globally would leak
-    // one person's conversation into a chat with someone else — mirror the
-    // place/follow-up filtering elsewhere in this module.
+    // them. A choice's `context`/`typed_own` can quote what a DIFFERENT person
+    // said, so we drop both other-person AND person-less rows (which may carry
+    // content from a session with someone we can't attribute) rather than risk
+    // leaking one person's conversation into a chat with someone else.
     if (personIds.length) {
       const present = new Set(personIds);
-      rows = rows.filter((r) => !r.person_id || present.has(r.person_id));
+      rows = rows.filter((r) => !!r.person_id && present.has(r.person_id));
     }
     const out: string[] = [];
     for (const r of rows) {

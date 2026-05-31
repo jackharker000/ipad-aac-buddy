@@ -32,7 +32,7 @@ export const AI_PROVIDERS: AiProvider[] = [
   {
     id: "gemini",
     label: "Gemini",
-    note: "Google. The free-tier key is rate-limited, so it's used as a fallback by default.",
+    note: "Google — the default. If the free tier rate-limits, Parley auto-falls-back to Anthropic/OpenAI so suggestions keep working.",
     models: [
       {
         id: "gemini/gemini-2.5-flash-lite",
@@ -56,7 +56,7 @@ export const AI_PROVIDERS: AiProvider[] = [
   {
     id: "anthropic",
     label: "Anthropic",
-    note: "Claude. Paid key — reliable and fast; the recommended default for live use.",
+    note: "Claude. Paid key — most reliable/lowest-latency; pick this if the Gemini free tier rate-limits too often.",
     models: [
       {
         id: "anthropic/claude-haiku-4-5",
@@ -90,12 +90,15 @@ export const AI_PROVIDERS: AiProvider[] = [
   },
 ];
 
-/** Which provider a stored model id belongs to (defaults to Gemini). */
+/** Which provider a stored model id belongs to. Anthropic / OpenAI by explicit
+ *  prefix; everything else (gemini/, legacy google/, unknown) → Gemini, the
+ *  default provider — matching DEFAULT_SETTINGS, getSettings healing, and the
+ *  auto-pick order, so an unrecognised id never shows the wrong provider. */
 export function providerIdForModel(modelId: string | undefined): AiProviderId {
   if (modelId?.startsWith("anthropic/")) return "anthropic";
   if (modelId?.startsWith("openai-direct/") || modelId?.startsWith("openai/"))
     return "openai";
-  return "gemini"; // gemini/… , google/… , and any legacy default
+  return "gemini";
 }
 
 export function getProvider(id: AiProviderId): AiProvider {

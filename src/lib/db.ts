@@ -505,99 +505,16 @@ export const DEFAULT_SETTINGS: Settings = {
   cloud_sync: false,
   suggestion_refresh_ms: 3500,
   ipad_model: "auto",
-  // Default to the reliable, paid Anthropic tier (prefixed ids route to it as
-  // primary; the server still falls back to Gemini/OpenAI automatically). The
-  // free Gemini tier 429s under live load, so it's a fallback, not the default.
-  suggestion_model: "anthropic/claude-haiku-4-5",
-  expand_model: "anthropic/claude-haiku-4-5",
-  fast_model: "anthropic/claude-haiku-4-5",
-  smart_model: "anthropic/claude-sonnet-4-5",
+  // Default to Gemini (prefixed ids route to it as primary). If the free tier
+  // rate-limits, the server's fallback chain automatically retries on
+  // Anthropic / OpenAI, so suggestions never break — switch the primary in
+  // Settings → AI models.
+  suggestion_model: "gemini/gemini-2.5-flash-lite",
+  expand_model: "gemini/gemini-2.5-flash-lite",
+  fast_model: "gemini/gemini-2.5-flash-lite",
+  smart_model: "gemini/gemini-2.5-flash",
   suggestion_feedback_enabled: true,
 };
-
-export type ModelOption = {
-  id: string;
-  label: string;
-  hint: string;
-  provider: "gateway" | "openai-direct";
-};
-
-// Models served via Lovable AI Gateway (no extra key needed) plus
-// "openai-direct/*" options that use the user's own OPENAI_API_KEY.
-export const MODEL_OPTIONS: ModelOption[] = [
-  {
-    id: "openai-direct/gpt-5.5-pro",
-    label: "GPT-5.5 Pro (your key)",
-    hint: "Premium · deepest reasoning",
-    provider: "openai-direct",
-  },
-  {
-    id: "openai-direct/gpt-5.5",
-    label: "GPT-5.5 (your key)",
-    hint: "Most capable · state of the art",
-    provider: "openai-direct",
-  },
-  {
-    id: "openai-direct/gpt-5.4-pro",
-    label: "GPT-5.4 Pro (your key)",
-    hint: "Premium reasoning",
-    provider: "openai-direct",
-  },
-  {
-    id: "openai-direct/gpt-5.4",
-    label: "GPT-5.4 (your key)",
-    hint: "Advanced reasoning · code",
-    provider: "openai-direct",
-  },
-  {
-    id: "openai-direct/gpt-5.4-mini",
-    label: "GPT-5.4 mini (your key)",
-    hint: "Faster · balanced 5.4",
-    provider: "openai-direct",
-  },
-  {
-    id: "openai-direct/gpt-5.4-nano",
-    label: "GPT-5.4 nano (your key)",
-    hint: "Fastest · cheapest 5.4",
-    provider: "openai-direct",
-  },
-  {
-    id: "openai-direct/gpt-5.2",
-    label: "GPT-5.2 (your key)",
-    hint: "Enhanced reasoning",
-    provider: "openai-direct",
-  },
-  {
-    id: "openai-direct/gpt-5",
-    label: "GPT-5 (your key)",
-    hint: "Powerful all-rounder",
-    provider: "openai-direct",
-  },
-  {
-    id: "openai-direct/gpt-5-mini",
-    label: "GPT-5 mini (your key)",
-    hint: "Fast · balanced · your OpenAI key",
-    provider: "openai-direct",
-  },
-  {
-    id: "openai-direct/gpt-5-nano",
-    label: "GPT-5 nano (your key)",
-    hint: "Fastest · cheapest · your OpenAI key",
-    provider: "openai-direct",
-  },
-  {
-    id: "openai-direct/gpt-4o",
-    label: "GPT-4o (your key)",
-    hint: "Legacy · uses your OpenAI key",
-    provider: "openai-direct",
-  },
-  {
-    id: "openai-direct/gpt-4o-mini",
-    label: "GPT-4o mini (your key)",
-    hint: "Legacy · fast · your OpenAI key",
-    provider: "openai-direct",
-  },
-];
 
 /**
  * Normalize a stored model id to a provider-prefixed one. Legacy gateway ids
@@ -617,7 +534,17 @@ function normalizeModelId(
   ) {
     return id;
   }
-  return tier === "fast" ? "anthropic/claude-haiku-4-5" : "anthropic/claude-sonnet-4-5";
+  // Legacy / unknown id → the default provider (Gemini) for the tier.
+  return tier === "fast"
+    ? "gemini/gemini-2.5-flash-lite"
+    : "gemini/gemini-2.5-flash";
+}
+
+/** Provider family of a prefixed model id (must match ai-models.providerIdForModel). */
+function providerOf(id: string): "anthropic" | "gemini" | "openai" {
+  if (id.startsWith("gemini/") || id.startsWith("google/")) return "gemini";
+  if (id.startsWith("openai-direct/") || id.startsWith("openai/")) return "openai";
+  return id.startsWith("anthropic/") ? "anthropic" : "gemini";
 }
 
 export async function getSettings(): Promise<Settings> {
@@ -630,7 +557,19 @@ export async function getSettings(): Promise<Settings> {
       existing.fast_model ?? existing.suggestion_model,
       "fast",
     );
-    const smart = normalizeModelId(existing.smart_model, "smart");
+    let smart = normalizeModelId(existing.smart_model, "smart");
+    // Keep both tiers on the SAME provider so the Settings picker (which derives
+    // the active provider from the fast model) can't display the wrong smart
+    // model. If they diverge, snap smart to the fast provider's smart default.
+    if (providerOf(smart) !== providerOf(fast)) {
+      const p = providerOf(fast);
+      smart =
+        p === "anthropic"
+          ? "anthropic/claude-sonnet-4-5"
+          : p === "openai"
+            ? "openai-direct/gpt-4o"
+            : "gemini/gemini-2.5-flash";
+    }
     if (
       existing.fast_model !== fast ||
       existing.smart_model !== smart ||

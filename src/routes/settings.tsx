@@ -252,19 +252,13 @@ function SystemTab() {
   }
 
   async function clearAllData() {
-    await Promise.all([
-      db.conversations.clear(),
-      db.transcript_segments.clear(),
-      db.suggestions_log.clear(),
-      db.manual_replies.clear(),
-      db.memories.clear(),
-      db.follow_ups.clear(),
-      db.people.clear(),
-      db.places.clear(),
-      db.style_profile.clear(),
-      db.james_profile.clear(),
-      db.james_documents.clear(),
-    ]);
+    // Clear EVERY table except `settings` (keeps voice/model/display prefs).
+    // Driven off `db.tables` so new tables (voiceprints, choice memories,
+    // profile proposals, events, …) are always included — the old hand-kept
+    // list silently left more than half the data behind.
+    await Promise.all(
+      db.tables.filter((t) => t.name !== "settings").map((t) => t.clear()),
+    );
     toast.success("All data cleared");
   }
 
@@ -2692,7 +2686,7 @@ function EventDetail({ eventId }: { eventId: string }) {
           docs: docSnips,
           existingPoints: event.key_points.map((k) => k.text),
           existingQuestions: event.key_questions.map((k) => k.text),
-          model: s.smart_model ?? "anthropic/claude-sonnet-4-5",
+          model: s.smart_model ?? "gemini/gemini-2.5-flash",
           jamesProfile: {
             name: profile.display_name || "James",
             background: profile.background,

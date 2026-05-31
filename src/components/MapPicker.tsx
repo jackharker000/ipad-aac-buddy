@@ -157,15 +157,20 @@ export function MapPicker({
       setResults([]);
       return;
     }
+    let cancelled = false;
     debounceRef.current = setTimeout(async () => {
       setSearching(true);
       try {
         const r = await searchPlace(query);
-        setResults(r);
+        if (!cancelled) setResults(r);
       } finally {
-        setSearching(false);
+        if (!cancelled) setSearching(false);
       }
     }, 350);
+    return () => {
+      cancelled = true;
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
   }, [query]);
 
   async function useGps() {

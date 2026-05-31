@@ -247,6 +247,9 @@ function Home() {
   // True while a suggestion is being held for feedback — pauses auto-refresh so
   // the held card isn't remounted (which would abort the hold) by a new batch.
   const holdingCardRef = useRef(false);
+  // committed.length captured when a hold began, so on release we can tell
+  // whether a conversation turn landed during the hold and needs a refresh.
+  const heldAtCommittedLenRef = useRef(0);
 
   // Speech
   const [draft, setDraft] = useState("");
@@ -266,8 +269,8 @@ function Home() {
   } | null>(null);
   const [voiceId, setVoiceId] = useState<string>("EXAVITQu4vr4xnSDxMaL");
   const [ipadModel, setIpadModel] = useState<string>("auto");
-  const fastModelRef = useRef<string>("anthropic/claude-haiku-4-5");
-  const smartModelRef = useRef<string>("anthropic/claude-sonnet-4-5");
+  const fastModelRef = useRef<string>("gemini/gemini-2.5-flash-lite");
+  const smartModelRef = useRef<string>("gemini/gemini-2.5-flash");
 
   // Speaker map
   // `speakerMap` only ever contains CONFIRMED entries (label -> personId).
@@ -1027,8 +1030,8 @@ function Home() {
       setIpadModel(s.ipad_model ?? "auto");
       setFeedbackEnabled(s.suggestion_feedback_enabled ?? true);
       fastModelRef.current =
-        s.fast_model ?? s.suggestion_model ?? "anthropic/claude-haiku-4-5";
-      smartModelRef.current = s.smart_model ?? "anthropic/claude-sonnet-4-5";
+        s.fast_model ?? s.suggestion_model ?? "gemini/gemini-2.5-flash-lite";
+      smartModelRef.current = s.smart_model ?? "gemini/gemini-2.5-flash";
 
       const people = await db.people.orderBy("name").toArray();
       if (!cancelled) setAllPeople(people);
@@ -1313,6 +1316,13 @@ function Home() {
       setActive(false);
       setStopping(false);
       conversationIdRef.current = null;
+      // Reset per-conversation scratch so anything typed-and-spoken BETWEEN
+      // sessions can't be logged as a preference choice against the previous
+      // conversation's batch/context (which would poison the learning loop).
+      convoSuggestionsRef.current = [];
+      currentContextRef.current = "";
+      lastSuggestKeyRef.current = "";
+      setSuggestions([]);
     }
   }, [active, stopping, scribe, summarizeFn, placeName]);
 
@@ -2126,7 +2136,24 @@ function Home() {
         await speak(spoken);
       }
     } catch (e: any) {
-      toast.error(e?.message ?? "Could not expand text");
+      // Never go silent: if the AI expansion fails/times out, still speak what
+      // James actually typed (TTS is independent of the chat provider).
+      const fallback = draft.trim();
+      if (fallback) {
+        toast.error(
+          (e?.message ?? "Could not expand text") + " — speaking your text as typed.",
+        );
+        setLastExpansion({ raw: fallback, expanded: fallback });
+        setDraft("");
+        void commitManualReply(fallback);
+        try {
+          await speak(fallback);
+        } catch {
+          /* speak() already toasts on TTS failure */
+        }
+      } else {
+        toast.error(e?.message ?? "Could not expand text");
+      }
     } finally {
       setExpanding(false);
     }
@@ -2223,7 +2250,9 @@ function Home() {
             model: fastModelRef.current,
           },
         });
-        if (!cancelled && r.predictions?.length) {
+        // Don't clobber the grid if this keystroke was superseded, or while a
+        // card is being held for feedback (a remount would abort the hold).
+        if (!cancelled && !holdingCardRef.current && r.predictions?.length) {
           setSuggestions(r.predictions as Suggestion[]);
         }
       } catch (err) {
@@ -2468,6 +2497,18 @@ function Home() {
                 onLongPress={() => setFeedbackTarget(s)}
                 onHoldChange={(h) => {
                   holdingCardRef.current = h;
+                  if (h) {
+                    heldAtCommittedLenRef.current = committed.length;
+                  } else if (
+                    active &&
+                    !predicting &&
+                    committed.length !== heldAtCommittedLenRef.current
+                  ) {
+                    // A turn landed while we were paused for the hold — refresh
+                    // now so the suggestions aren't a turn stale.
+                    lastSuggestKeyRef.current = "";
+                    void refreshSuggestions();
+                  }
                 }}
               />
             ))}
@@ -3004,9 +3045,19 @@ function SuggestionCard({
 
   return (
     <button
-      onPointerDown={start}
+      onPointerDown={(e) => {
+        // Capture the pointer so the 5s hold survives finger jitter/drift —
+        // critical for a user with impaired motor control. With capture, events
+        // keep flowing to this element and `pointerleave` won't spuriously fire,
+        // so we deliberately don't cancel on leave.
+        try {
+          e.currentTarget.setPointerCapture(e.pointerId);
+        } catch {
+          /* not supported → fall back to default behaviour */
+        }
+        start();
+      }}
       onPointerUp={cancel}
-      onPointerLeave={cancel}
       onPointerCancel={cancel}
       onClick={(e) => {
         // If the long-press already fired, swallow the click so we don't also
@@ -3025,7 +3076,7 @@ function SuggestionCard({
       <span className="line-clamp-5">{suggestion.text}</span>
       {holding && (
         <span
-          className="pointer-events-none absolute bottom-0 left-0 h-1 bg-[var(--accent)]"
+          className="pointer-events-none absolute bottom-0 left-0 h-2 bg-[var(--accent)]"
           style={{
             width: fill ? "100%" : "0%",
             transition: fill ? `width ${FEEDBACK_HOLD_MS}ms linear` : "none",
@@ -3080,7 +3131,7 @@ function FeedbackMenu({
             <button
               key={o.value}
               onClick={() => onPick(o.value)}
-              className="flex items-center gap-2 rounded-xl border-2 border-border bg-background px-3 py-3 text-left text-sm font-medium hover:border-primary hover:bg-primary/5 active:scale-[0.98]"
+              className="flex min-h-12 items-center gap-2 rounded-xl border-2 border-border bg-background px-3 py-4 text-left text-base font-medium hover:border-primary hover:bg-primary/5 active:scale-[0.98]"
             >
               <span className="text-lg">{o.emoji}</span>
               {o.label}

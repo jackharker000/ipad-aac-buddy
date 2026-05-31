@@ -125,12 +125,12 @@ function buildTarget(
  * Primary selection:
  *   1. Explicit "provider/model" prefix wins.
  *   2. PARLEY_AI_PROVIDER env override.
- *   3. Auto-pick: ANTHROPIC → OPENAI → GEMINI → LOVABLE.
- *      Anthropic is first because it's a paid, reliable key — the live cockpit
- *      fires suggestions every turn and the free Gemini tier 429s under that
- *      load. Gemini stays in the chain as a fallback / cost-saver.
+ *   3. Auto-pick: GEMINI → ANTHROPIC → OPENAI → LOVABLE.
+ *      Gemini is the default; because every feature here goes through this
+ *      chain, a Gemini 429 (free-tier rate limit) transparently falls through
+ *      to Anthropic, so suggestions never break — they just cost a retry.
  *
- * To prefer the free Gemini tier instead, set PARLEY_AI_PROVIDER=gemini.
+ * To make Anthropic the primary instead, set PARLEY_AI_PROVIDER=anthropic.
  */
 function resolveChatChain(model: string | undefined): ChatTarget[] {
   const m = model ?? "google/gemini-2.5-flash-lite";
@@ -155,8 +155,10 @@ function resolveChatChain(model: string | undefined): ChatTarget[] {
     else if (forced === "gemini" || forced === "google") primary = "gemini";
   }
 
-  // 3. Auto-pick order — paid/reliable first so live suggestions don't 429.
-  const order: ChatProvider[] = ["anthropic", "openai", "gemini", "lovable"];
+  // 3. Auto-pick order — Gemini is the default; if its (often free-tier) quota
+  //    429s, the chain falls through to Anthropic → OpenAI → Lovable, so a
+  //    feature never breaks just because the primary is rate-limited.
+  const order: ChatProvider[] = ["gemini", "anthropic", "openai", "lovable"];
 
   const chain: ChatTarget[] = [];
   const seen = new Set<ChatProvider>();
@@ -205,12 +207,14 @@ async function chatCompletion(
     // (1) with a 400. Several callers pass a custom temperature, so strip it for
     // those models — otherwise the request 400s and the fallback chain would
     // silently mask the user's chosen model never running.
-    if (
-      target.provider === "openai" &&
-      /^(gpt-5|o\d)/i.test(target.model) &&
-      "temperature" in perBody
-    ) {
-      delete perBody.temperature;
+    if (target.provider === "openai" && /^(gpt-5|o\d)/i.test(target.model)) {
+      // GPT-5 / o-series reject a non-default `temperature` and use
+      // `max_completion_tokens` instead of `max_tokens`.
+      if ("temperature" in perBody) delete perBody.temperature;
+      if ("max_tokens" in perBody) {
+        perBody.max_completion_tokens = perBody.max_tokens;
+        delete perBody.max_tokens;
+      }
     }
     let res: Response;
     try {
@@ -274,6 +278,16 @@ function mapToGemini(m: string): string {
   // Downgrade any pro id to flash so a free key never 429s/403s on quota.
   if (/pro/i.test(id)) return "gemini-2.5-flash";
   return id;
+}
+
+/**
+ * Make user-derived text safe to embed inside a double-quoted prompt bullet:
+ * collapse whitespace/newlines and neutralise quote chars so a transcript line
+ * can't break out of its quotes and read as injected prompt instructions.
+ */
+function promptQuote(s: string, max = 200): string {
+  const t = (s ?? "").replace(/\s+/g, " ").replace(/["“”`]/g, "'").trim();
+  return t.length > max ? t.slice(0, max - 1) + "…" : t;
 }
 
 /* ------------------------- ElevenLabs: Scribe token ------------------------- */
@@ -625,7 +639,7 @@ Strongly bias suggestions toward making these key points and asking these key qu
     const voiceSamplesBlock = data.jamesVoiceSamples?.length
       ? `# How James actually talks (real quotes from his past conversations)
 These are genuine lines James has spoken before. Mirror his natural phrasing, vocabulary, sentence length, rhythm, and humour. Reuse his real turns of phrase where they fit the moment. Do NOT copy a quote verbatim unless it's a perfect fit — adapt the VOICE, not the exact words.
-${data.jamesVoiceSamples.map((s) => `- "${s}"`).join("\n")}
+${data.jamesVoiceSamples.map((s) => `- "${promptQuote(s)}"`).join("\n")}
 `
       : "";
 
@@ -916,7 +930,11 @@ Return, via the tool:
 
     const ctx = `${data.placeName ? `Place: ${data.placeName}\n` : ""}${data.peopleNames?.length ? `People present: ${data.peopleNames.join(", ")}\n` : ""}\nTranscript:\n${transcriptText}`;
 
-    const res = await chatCompletion(data.model ?? "google/gemini-2.5-flash", {
+    // Summarisation is quality-dominant (long narrative + many memories), so the
+    // default must map to the SMART tier; `max_tokens` is raised so a dense
+    // conversation's tool-call JSON can't truncate mid-object → Parse error.
+    const res = await chatCompletion(data.model ?? "google/gemini-2.5-pro", {
+        max_tokens: 4096,
         messages: [
           { role: "system", content: system },
           { role: "user", content: ctx },
@@ -1047,7 +1065,7 @@ export const expandUtterance = createServerFn({ method: "POST" })
       : "";
     const placeBlock = data.place ? `Location: ${data.place.name}\n` : "";
     const voiceSamplesBlock = data.jamesVoiceSamples?.length
-      ? `How James actually talks (real quotes from past conversations — match this voice, vocabulary, and rhythm):\n${data.jamesVoiceSamples.map((s) => `- "${s}"`).join("\n")}\n`
+      ? `How James actually talks (real quotes from past conversations — match this voice, vocabulary, and rhythm):\n${data.jamesVoiceSamples.map((s) => `- "${promptQuote(s)}"`).join("\n")}\n`
       : "";
 
     const system = `You are an AAC writing assistant for ${jp?.name ?? "James"}, a non-speaking user with cerebral palsy whose typing is heavily truncated and full of typos. Your job: take his raw typed input and rewrite it as ONE clear, natural spoken sentence (or two short sentences max) in HIS voice, appropriate as the next reply in the live conversation. Preserve his intent exactly — never add facts, opinions, claims, or details he did not type.
@@ -1122,7 +1140,7 @@ export const predictUtterances = createServerFn({ method: "POST" })
       : "";
     const placeBlock = data.place ? `Location: ${data.place.name}\n` : "";
     const voiceSamplesBlock = data.jamesVoiceSamples?.length
-      ? `How James actually talks (real quotes — match this voice):\n${data.jamesVoiceSamples.map((s) => `- "${s}"`).join("\n")}\n`
+      ? `How James actually talks (real quotes — match this voice):\n${data.jamesVoiceSamples.map((s) => `- "${promptQuote(s)}"`).join("\n")}\n`
       : "";
 
     const system = `You are an AAC predictive-text engine for ${jp?.name ?? "James"}, a non-speaking user with cerebral palsy and slow, effortful typing. He has begun typing a reply. Your job: predict the most likely COMPLETE sentences he is trying to say, so he can tap one instead of finishing typing.
@@ -2412,9 +2430,10 @@ export const embedTexts = createServerFn({ method: "POST" })
     if (geminiKey) {
       // Gemini's OpenAI-compatible embeddings endpoint. `text-embedding-004` is
       // deprecated; use the current `gemini-embedding-001`. Request 1536 dims to
-      // match the OpenAI path's length — this also means any older 768-dim
-      // `text-embedding-004` vectors are cleanly skipped by retrieval's length
-      // guard (rather than wrongly compared across a different embedding space).
+      // match the OpenAI path's length — any older 768-dim `text-embedding-004`
+      // vectors are then skipped by retrieval's LENGTH-mismatch guard (the
+      // model-label guard is effectively a no-op today because embed-backfill
+      // hard-codes the EMBEDDING_MODEL label regardless of provider).
       const res = await fetch(
         "https://generativelanguage.googleapis.com/v1beta/openai/embeddings",
         {
