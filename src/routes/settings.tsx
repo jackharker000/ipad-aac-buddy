@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { useServerFn } from "@tanstack/react-start";
 import {
@@ -34,6 +34,8 @@ import {
   Map as MapIcon,
   FileText,
   Upload,
+  Download,
+  Lock,
   Calendar as CalendarIcon,
   Check,
   Mic,
@@ -92,6 +94,11 @@ import {
   IPAD_PRESETS,
   type IPadModel,
 } from "@/lib/db";
+import {
+  exportEncryptedBackup,
+  importEncryptedBackup,
+  suggestedBackupFilename,
+} from "@/lib/backup";
 import { AI_PROVIDERS, providerIdForModel, getProvider } from "@/lib/ai-models";
 import {
   listVoices,
@@ -103,7 +110,6 @@ import {
 import { getCurrentPosition } from "@/lib/geo";
 import { getPersonStats, groupMemories } from "@/lib/people-stats";
 import { runStyleDistillation } from "@/lib/style-distill";
-import { AccountCard } from "@/components/AccountCard";
 
 export const Route = createFileRoute("/settings")({
   component: SettingsPage,
@@ -287,7 +293,6 @@ function SystemTab() {
 
   return (
     <div className="space-y-3">
-      <AccountCard />
       <Accordion type="multiple" defaultValue={[]} className="space-y-2">
         <AccordionItem value="voice" className="rounded-xl border border-border bg-card px-5">
           <AccordionTrigger className="text-base font-semibold hover:no-underline">
@@ -550,33 +555,36 @@ function SystemTab() {
             <span className="flex items-center gap-2"><FileText className="size-4" /> Storage &amp; privacy</span>
           </AccordionTrigger>
           <AccordionContent className="pb-5">
-            <p className="mb-5 text-sm text-muted-foreground">
-              Your data lives on this iPad and is automatically backed up to your Lovable Cloud account whenever it changes. Sign in with the same email on another device to restore everything.
+            <p className="mb-3 text-sm text-muted-foreground">
+              Your data lives on this iPad only. No account, no server, no cloud sync. Export an encrypted backup any time and save it to Files or iCloud Drive yourself — that's how you move data to a new iPad or recover from an accidental wipe.
             </p>
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="destructive" className="h-11">
-                  Clear all local data
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Clear all local data?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    This will permanently delete all conversations, memories, people, places, events, and profile data stored on this device. This cannot be undone.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel className="h-12 text-base">Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    className="h-12 bg-destructive text-base text-destructive-foreground hover:bg-destructive/90"
-                    onClick={clearAllData}
-                  >
-                    Delete everything
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
+            <EncryptedBackupCard />
+            <div className="mt-5">
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="destructive" className="h-11">
+                    Clear all local data
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Clear all local data?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will permanently delete all conversations, memories, people, places, events, and profile data stored on this device. James's profile is preserved. This cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel className="h-12 text-base">Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      className="h-12 bg-destructive text-base text-destructive-foreground hover:bg-destructive/90"
+                      onClick={clearAllData}
+                    >
+                      Delete everything
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
           </AccordionContent>
         </AccordionItem>
       </Accordion>
@@ -3094,5 +3102,131 @@ function EventLocationField({
         </Select>
       </div>
     </Field>
+  );
+}
+
+/** Encrypted local backup — export to a downloadable file (save it to Files /
+ *  iCloud Drive yourself) or import an earlier file. AES-GCM with a
+ *  PBKDF2-derived key from a user passphrase; the passphrase is never stored.
+ *  This replaces the deleted Supabase cloud-sync as the only way to move data
+ *  between devices or recover from a wipe. */
+function EncryptedBackupCard() {
+  const [exportPass, setExportPass] = useState("");
+  const [importPass, setImportPass] = useState("");
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [replaceOnImport, setReplaceOnImport] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  async function doExport() {
+    if (exportPass.length < 6) {
+      toast.error("Passphrase must be at least 6 characters");
+      return;
+    }
+    setBusy(true);
+    try {
+      const { blob, meta } = await exportEncryptedBackup(exportPass);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = suggestedBackupFilename(meta.exportedAt);
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast.success(`Exported ${meta.rowCount} rows — save the file to Files / iCloud`);
+      setExportPass("");
+    } catch (err: any) {
+      toast.error(err?.message ?? "Export failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function doImport() {
+    if (!importFile) {
+      toast.error("Pick a backup file first");
+      return;
+    }
+    if (importPass.length < 6) {
+      toast.error("Enter the passphrase you used when exporting");
+      return;
+    }
+    setBusy(true);
+    try {
+      const bytes = await importFile.arrayBuffer();
+      const meta = await importEncryptedBackup(bytes, importPass, { replace: replaceOnImport });
+      toast.success(`Imported ${meta.rowCount} rows`);
+      setImportPass("");
+      setImportFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    } catch (err: any) {
+      toast.error(err?.message ?? "Import failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="space-y-4 rounded-xl border border-border bg-secondary/30 p-4">
+      <div className="flex items-center gap-2 text-sm font-medium">
+        <Lock className="size-4 text-muted-foreground" />
+        Encrypted local backup
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-xs text-muted-foreground">
+          Export — encrypts everything with your passphrase and downloads a single file. <strong>Keep the passphrase safe</strong>; without it the file cannot be opened, even by us.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            type="password"
+            value={exportPass}
+            onChange={(e) => setExportPass(e.target.value)}
+            placeholder="Passphrase (≥ 6 characters)"
+            className="h-11 flex-1 min-w-[180px]"
+            autoComplete="new-password"
+          />
+          <Button onClick={doExport} disabled={busy} className="h-11">
+            <Download className="mr-1 size-4" /> Export backup
+          </Button>
+        </div>
+      </div>
+
+      <div className="space-y-2 border-t border-border pt-3">
+        <p className="text-xs text-muted-foreground">
+          Import — restore from a Parley backup file. Use the same passphrase that was set when the file was exported.
+        </p>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".parlbak,application/octet-stream"
+          onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
+          className="block w-full text-xs file:mr-3 file:h-9 file:cursor-pointer file:rounded-md file:border-0 file:bg-secondary file:px-3 file:text-sm file:font-medium file:text-foreground"
+        />
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            type="password"
+            value={importPass}
+            onChange={(e) => setImportPass(e.target.value)}
+            placeholder="Backup passphrase"
+            className="h-11 flex-1 min-w-[180px]"
+            autoComplete="off"
+          />
+          <Button onClick={doImport} disabled={busy} className="h-11">
+            <Upload className="mr-1 size-4" /> Import
+          </Button>
+        </div>
+        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+          <input
+            type="checkbox"
+            checked={replaceOnImport}
+            onChange={(e) => setReplaceOnImport(e.target.checked)}
+            className="size-4"
+          />
+          Replace existing data (clear first, then import — instead of merging)
+        </label>
+      </div>
+    </div>
   );
 }
