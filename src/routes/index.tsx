@@ -2744,24 +2744,6 @@ function Home() {
           </span>
         </button>
 
-        {/* Stop-Voice — lets James interrupt a wrong/unwanted utterance the
-            instant he hears it. Visible during a conversation; a no-op when
-            nothing is playing. Once audio starts there was previously NO way
-            to stop it, which for a non-verbal user is a real harm path. */}
-        {active && (
-          <button
-            onClick={() => {
-              stopSpeaking();
-              setSpeaking(false);
-            }}
-            aria-label="Stop speaking"
-            className="flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl bg-[var(--coral)] text-white shadow-sm transition-all active:scale-95 hover:opacity-90"
-          >
-            <Square className="size-7" />
-            <span className="text-sm font-medium">Stop voice</span>
-          </button>
-        )}
-
         {/* Recent conversations */}
         <Link
           to="/recent"
