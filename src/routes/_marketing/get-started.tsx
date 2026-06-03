@@ -44,14 +44,10 @@ function GetStartedPage() {
       }
 
       setStatus("error");
-      setErrorMessage(
-        body?.error ?? "Something went wrong. Please try again in a moment.",
-      );
+      setErrorMessage(body?.error ?? "Something went wrong. Please try again in a moment.");
     } catch {
       setStatus("error");
-      setErrorMessage(
-        "We couldn't reach the server. Check your connection and try again.",
-      );
+      setErrorMessage("We couldn't reach the server. Check your connection and try again.");
     }
   }
 
@@ -80,21 +76,15 @@ function GetStartedPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-5 py-16 md:py-24">
-      <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">
-        Get started
-      </h1>
+      <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">Get started</h1>
       <p className="mt-5 text-lg leading-relaxed text-[var(--ink-soft)]">
-        We&apos;re inviting a small first cohort of users. Tell us a little
-        about who Parley would be for, and we&apos;ll come back to you to talk
-        it through.
+        We&apos;re inviting a small first cohort of users. Tell us a little about who Parley would
+        be for, and we&apos;ll come back to you to talk it through.
       </p>
 
       <form onSubmit={handleSubmit} className="mt-12 flex flex-col gap-6">
         <div className="flex flex-col gap-2">
-          <label
-            htmlFor="waitlist-name"
-            className="text-sm font-semibold text-[var(--ink)]"
-          >
+          <label htmlFor="waitlist-name" className="text-sm font-semibold text-[var(--ink)]">
             Your name
           </label>
           <input
@@ -110,10 +100,7 @@ function GetStartedPage() {
         </div>
 
         <div className="flex flex-col gap-2">
-          <label
-            htmlFor="waitlist-email"
-            className="text-sm font-semibold text-[var(--ink)]"
-          >
+          <label htmlFor="waitlist-email" className="text-sm font-semibold text-[var(--ink)]">
             Your email
           </label>
           <input
@@ -129,10 +116,7 @@ function GetStartedPage() {
         </div>
 
         <div className="flex flex-col gap-2">
-          <label
-            htmlFor="waitlist-about"
-            className="text-sm font-semibold text-[var(--ink)]"
-          >
+          <label htmlFor="waitlist-about" className="text-sm font-semibold text-[var(--ink)]">
             Who is Parley for?
           </label>
           <textarea

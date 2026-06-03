@@ -45,8 +45,7 @@ const FEATURES: Feature[] = [
   },
   {
     title: "Type-and-expand",
-    description:
-      "Type rough shorthand. Parley expands it into a full sentence in your voice.",
+    description: "Type rough shorthand. Parley expands it into a full sentence in your voice.",
     asset: "features-expand.png",
   },
   {
@@ -57,8 +56,7 @@ const FEATURES: Feature[] = [
   },
   {
     title: "Conversation history",
-    description:
-      "Every conversation summarised, transcript searchable, all on-device.",
+    description: "Every conversation summarised, transcript searchable, all on-device.",
     asset: "features-recent.png",
   },
   {
@@ -69,8 +67,7 @@ const FEATURES: Feature[] = [
   },
   {
     title: "Built for accessibility",
-    description:
-      "Large targets, high contrast, full-screen, works on any iPad.",
+    description: "Large targets, high contrast, full-screen, works on any iPad.",
     asset: "features-accessibility.png",
   },
 ];
@@ -78,15 +75,9 @@ const FEATURES: Feature[] = [
 function FeatureCard({ feature }: { feature: Feature }) {
   return (
     <article className="flex flex-col gap-5 rounded-2xl border border-[var(--line)] bg-white/70 p-6 md:p-8">
-      <h3 className="text-xl font-semibold tracking-tight md:text-2xl">
-        {feature.title}
-      </h3>
-      <p className="text-base leading-relaxed text-[var(--ink-soft)]">
-        {feature.description}
-      </p>
-      <MediaPlaceholder
-        label={`Screenshot — assets/screenshots/${feature.asset}`}
-      />
+      <h3 className="text-xl font-semibold tracking-tight md:text-2xl">{feature.title}</h3>
+      <p className="text-base leading-relaxed text-[var(--ink-soft)]">{feature.description}</p>
+      <MediaPlaceholder label={`Screenshot — assets/screenshots/${feature.asset}`} />
     </article>
   );
 }
@@ -94,12 +85,10 @@ function FeatureCard({ feature }: { feature: Feature }) {
 function FeaturesPage() {
   return (
     <div className="mx-auto max-w-5xl px-5 py-16 md:py-24">
-      <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">
-        Features
-      </h1>
+      <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">Features</h1>
       <p className="mt-5 text-lg leading-relaxed text-[var(--ink-soft)]">
-        Everything in Parley exists because something in a real conversation
-        almost didn&apos;t happen.
+        Everything in Parley exists because something in a real conversation almost didn&apos;t
+        happen.
       </p>
 
       <div className="mt-12 grid gap-6 md:grid-cols-2">
@@ -112,9 +101,7 @@ function FeaturesPage() {
       </div>
 
       <div className="mt-20 rounded-3xl bg-[var(--coral-soft)] px-6 py-14 text-center md:px-12 md:py-16">
-        <h2 className="text-xl font-semibold tracking-tight md:text-2xl">
-          Ready to try it?
-        </h2>
+        <h2 className="text-xl font-semibold tracking-tight md:text-2xl">Ready to try it?</h2>
         <div className="mt-6">
           <Link
             to="/get-started"

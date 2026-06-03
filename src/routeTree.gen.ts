@@ -22,6 +22,7 @@ import { Route as AppRecentRouteImport } from './routes/app/recent'
 import { Route as AppPeopleRouteImport } from './routes/app/people'
 import { Route as AppHelpersRouteImport } from './routes/app/helpers'
 import { Route as AppEventsRouteImport } from './routes/app/events'
+import { Route as ApiWaitlistRouteImport } from './routes/api/waitlist'
 import { Route as MarketingStoryRouteImport } from './routes/_marketing/story'
 import { Route as MarketingPrivacyRouteImport } from './routes/_marketing/privacy'
 import { Route as MarketingHowItWorksRouteImport } from './routes/_marketing/how-it-works'
@@ -101,6 +102,11 @@ const AppEventsRoute = AppEventsRouteImport.update({
   id: '/events',
   path: '/events',
   getParentRoute: () => AppRoute,
+} as any)
+const ApiWaitlistRoute = ApiWaitlistRouteImport.update({
+  id: '/api/waitlist',
+  path: '/api/waitlist',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const MarketingStoryRoute = MarketingStoryRouteImport.update({
   id: '/story',
@@ -194,6 +200,7 @@ export interface FileRoutesByFullPath {
   '/how-it-works': typeof MarketingHowItWorksRoute
   '/privacy': typeof MarketingPrivacyRoute
   '/story': typeof MarketingStoryRoute
+  '/api/waitlist': typeof ApiWaitlistRoute
   '/app/events': typeof AppEventsRoute
   '/app/helpers': typeof AppHelpersRoute
   '/app/people': typeof AppPeopleRoute
@@ -221,6 +228,7 @@ export interface FileRoutesByTo {
   '/how-it-works': typeof MarketingHowItWorksRoute
   '/privacy': typeof MarketingPrivacyRoute
   '/story': typeof MarketingStoryRoute
+  '/api/waitlist': typeof ApiWaitlistRoute
   '/app/events': typeof AppEventsRoute
   '/app/helpers': typeof AppHelpersRoute
   '/app/people': typeof AppPeopleRoute
@@ -252,6 +260,7 @@ export interface FileRoutesById {
   '/_marketing/how-it-works': typeof MarketingHowItWorksRoute
   '/_marketing/privacy': typeof MarketingPrivacyRoute
   '/_marketing/story': typeof MarketingStoryRoute
+  '/api/waitlist': typeof ApiWaitlistRoute
   '/app/events': typeof AppEventsRoute
   '/app/helpers': typeof AppHelpersRoute
   '/app/people': typeof AppPeopleRoute
@@ -284,6 +293,7 @@ export interface FileRouteTypes {
     | '/how-it-works'
     | '/privacy'
     | '/story'
+    | '/api/waitlist'
     | '/app/events'
     | '/app/helpers'
     | '/app/people'
@@ -311,6 +321,7 @@ export interface FileRouteTypes {
     | '/how-it-works'
     | '/privacy'
     | '/story'
+    | '/api/waitlist'
     | '/app/events'
     | '/app/helpers'
     | '/app/people'
@@ -341,6 +352,7 @@ export interface FileRouteTypes {
     | '/_marketing/how-it-works'
     | '/_marketing/privacy'
     | '/_marketing/story'
+    | '/api/waitlist'
     | '/app/events'
     | '/app/helpers'
     | '/app/people'
@@ -366,6 +378,7 @@ export interface RootRouteChildren {
   MarketingRoute: typeof MarketingRouteWithChildren
   AdminRoute: typeof AdminRouteWithChildren
   AppRoute: typeof AppRouteWithChildren
+  ApiWaitlistRoute: typeof ApiWaitlistRoute
   AuthCallbackRoute: typeof AuthCallbackRoute
   ApiEmbedOpenaiRoute: typeof ApiEmbedOpenaiRoute
   ApiLlmAnthropicRoute: typeof ApiLlmAnthropicRoute
@@ -469,6 +482,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/app/events'
       preLoaderRoute: typeof AppEventsRouteImport
       parentRoute: typeof AppRoute
+    }
+    '/api/waitlist': {
+      id: '/api/waitlist'
+      path: '/api/waitlist'
+      fullPath: '/api/waitlist'
+      preLoaderRoute: typeof ApiWaitlistRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_marketing/story': {
       id: '/_marketing/story'
@@ -656,6 +676,7 @@ const rootRouteChildren: RootRouteChildren = {
   MarketingRoute: MarketingRouteWithChildren,
   AdminRoute: AdminRouteWithChildren,
   AppRoute: AppRouteWithChildren,
+  ApiWaitlistRoute: ApiWaitlistRoute,
   AuthCallbackRoute: AuthCallbackRoute,
   ApiEmbedOpenaiRoute: ApiEmbedOpenaiRoute,
   ApiLlmAnthropicRoute: ApiLlmAnthropicRoute,

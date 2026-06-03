@@ -61,12 +61,9 @@ const STEPS: StepData[] = [
 function HowItWorksPage() {
   return (
     <div className="mx-auto max-w-3xl px-5 py-16 md:py-24">
-      <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">
-        How Parley works
-      </h1>
+      <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">How Parley works</h1>
       <p className="mt-5 text-lg leading-relaxed text-[var(--ink-soft)]">
-        One conversation, end to end — what Parley does and what stays on your
-        iPad.
+        One conversation, end to end — what Parley does and what stays on your iPad.
       </p>
 
       <ol className="mt-16 flex flex-col gap-16">
@@ -75,28 +72,19 @@ function HowItWorksPage() {
             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[var(--teal)] text-base font-semibold text-white">
               {step.number}
             </div>
-            <h3 className="text-xl font-semibold tracking-tight md:text-2xl">
-              {step.title}
-            </h3>
-            <p className="text-base leading-relaxed text-[var(--ink-soft)]">
-              {step.description}
-            </p>
-            <MediaPlaceholder
-              label={`Screenshot — assets/screenshots/${step.asset}`}
-            />
+            <h3 className="text-xl font-semibold tracking-tight md:text-2xl">{step.title}</h3>
+            <p className="text-base leading-relaxed text-[var(--ink-soft)]">{step.description}</p>
+            <MediaPlaceholder label={`Screenshot — assets/screenshots/${step.asset}`} />
           </li>
         ))}
       </ol>
 
       <p className="mt-16 text-base leading-relaxed text-[var(--ink-soft)]">
-        That&apos;s the loop — listen, understand, suggest, speak — usually in a
-        second or two.
+        That&apos;s the loop — listen, understand, suggest, speak — usually in a second or two.
       </p>
 
       <div className="mt-20 rounded-3xl bg-[var(--coral-soft)] px-6 py-14 text-center md:px-12 md:py-16">
-        <h2 className="text-xl font-semibold tracking-tight md:text-2xl">
-          Ready to try it?
-        </h2>
+        <h2 className="text-xl font-semibold tracking-tight md:text-2xl">Ready to try it?</h2>
         <div className="mt-6">
           <Link
             to="/get-started"
