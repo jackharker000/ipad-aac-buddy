@@ -20,6 +20,19 @@ import { getSupabaseServiceClient } from "@/lib/supabase/server";
  * and won't survive structured clone across the network boundary cleanly.
  */
 
+/**
+ * JSON-shaped value. TanStack Start's `createServerFn` return-type validator
+ * rejects `unknown` (it's not provably serializable), so the metadata bags
+ * are typed against this instead of `Record<string, unknown>`.
+ */
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
 /** Compact, serializable shape of an auth user — only the fields the UI uses. */
 export type AdminUser = {
   id: string;
@@ -29,8 +42,8 @@ export type AdminUser = {
   email_confirmed_at: string | null;
   provider: string | null;
   is_admin: boolean;
-  app_metadata: Record<string, unknown>;
-  user_metadata: Record<string, unknown>;
+  app_metadata: { [key: string]: JsonValue };
+  user_metadata: { [key: string]: JsonValue };
 };
 
 /** A row from the `waitlist` table. */
@@ -53,8 +66,20 @@ type RawUser = {
   identities?: Array<{ provider?: string | null }> | null;
 };
 
+/** Round-trip arbitrary metadata through JSON so the result is provably
+ * serialisable for the server-fn return-type validator. */
+function asJsonObject(raw: unknown): { [key: string]: JsonValue } {
+  if (!raw || typeof raw !== "object") return {};
+  try {
+    return JSON.parse(JSON.stringify(raw)) as { [key: string]: JsonValue };
+  } catch {
+    return {};
+  }
+}
+
 function toAdminUser(u: RawUser): AdminUser {
-  const meta = (u.app_metadata ?? {}) as Record<string, unknown>;
+  const appMeta = asJsonObject(u.app_metadata);
+  const userMeta = asJsonObject(u.user_metadata);
   return {
     id: u.id,
     email: u.email ?? null,
@@ -62,9 +87,9 @@ function toAdminUser(u: RawUser): AdminUser {
     last_sign_in_at: u.last_sign_in_at ?? null,
     email_confirmed_at: u.email_confirmed_at ?? null,
     provider: u.identities?.[0]?.provider ?? null,
-    is_admin: meta.is_admin === true || meta.role === "admin",
-    app_metadata: meta,
-    user_metadata: (u.user_metadata ?? {}) as Record<string, unknown>,
+    is_admin: appMeta.is_admin === true || appMeta.role === "admin",
+    app_metadata: appMeta,
+    user_metadata: userMeta,
   };
 }
 
