@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AuthError, signUp } from "@/lib/auth";
+import { GoogleSignInButton } from "@/components/auth/GoogleSignInButton";
 
 export const Route = createFileRoute("/_auth/signup")({
   component: SignupPage,
@@ -48,11 +49,13 @@ function SignupPage() {
       <p className="mt-2 text-sm text-[var(--ink-soft)]">
         Set up your Parley account to get started.
       </p>
-      <p className="mt-1 text-xs text-[var(--ink-soft)]">
-        Your account is stored on this device.
-      </p>
 
-      <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
+      <div className="mt-6 space-y-4">
+        <GoogleSignInButton label="Sign up with Google" />
+        <Divider />
+      </div>
+
+      <form className="mt-4 space-y-4" onSubmit={handleSubmit}>
         <div className="space-y-2">
           <Label htmlFor="email">Email</Label>
           <Input
@@ -107,6 +110,16 @@ function SignupPage() {
           Log in.
         </Link>
       </p>
+    </div>
+  );
+}
+
+function Divider() {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="h-px flex-1 bg-[var(--line)]" />
+      <span className="text-xs uppercase tracking-wider text-[var(--ink-soft)]">or</span>
+      <div className="h-px flex-1 bg-[var(--line)]" />
     </div>
   );
 }

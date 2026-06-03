@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { AuthError, signIn } from "@/lib/auth";
+import { GoogleSignInButton } from "@/components/auth/GoogleSignInButton";
 
 const LoginSearch = z.object({
   redirect: z.string().optional(),
@@ -46,11 +47,14 @@ function LoginPage() {
   return (
     <div className="rounded-2xl border border-[var(--line)] bg-white p-8 shadow-sm">
       <h1 className="text-2xl font-semibold tracking-tight">Log in</h1>
-      <p className="mt-2 text-sm text-[var(--ink-soft)]">
-        Welcome back. Enter your email and password to continue.
-      </p>
+      <p className="mt-2 text-sm text-[var(--ink-soft)]">Welcome back.</p>
 
-      <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
+      <div className="mt-6 space-y-4">
+        <GoogleSignInButton redirect={search.redirect} />
+        <Divider />
+      </div>
+
+      <form className="mt-4 space-y-4" onSubmit={handleSubmit}>
         <div className="space-y-2">
           <Label htmlFor="email">Email</Label>
           <Input
@@ -93,6 +97,16 @@ function LoginPage() {
           Create one.
         </Link>
       </p>
+    </div>
+  );
+}
+
+function Divider() {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="h-px flex-1 bg-[var(--line)]" />
+      <span className="text-xs uppercase tracking-wider text-[var(--ink-soft)]">or</span>
+      <div className="h-px flex-1 bg-[var(--line)]" />
     </div>
   );
 }

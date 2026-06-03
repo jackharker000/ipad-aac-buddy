@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import {
+  GoogleAuthProvider,
   createUserWithEmailAndPassword,
   onAuthStateChanged,
   signInWithEmailAndPassword,
+  signInWithPopup,
   signOut as fbSignOut,
   type User,
 } from "firebase/auth";
@@ -108,6 +110,31 @@ export async function signIn(email: string, password: string): Promise<SessionUs
     return await resolve(cred.user, true);
   } catch (err) {
     throw new AuthError(friendlyError((err as { code?: string })?.code));
+  }
+}
+
+export async function signInWithGoogle(): Promise<SessionUser> {
+  if (!isFirebaseConfigured()) {
+    throw new AuthError("Sign-in isn't configured yet (missing Firebase config).");
+  }
+  try {
+    const provider = new GoogleAuthProvider();
+    const cred = await signInWithPopup(getFirebaseAuth(), provider);
+    return await resolve(cred.user, true);
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    if (code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request") {
+      throw new AuthError("Sign-in cancelled.");
+    }
+    if (code === "auth/popup-blocked") {
+      throw new AuthError("Your browser blocked the Google sign-in popup. Allow popups and try again.");
+    }
+    if (code === "auth/account-exists-with-different-credential") {
+      throw new AuthError(
+        "An account with this email already exists with a different sign-in method. Try email + password instead.",
+      );
+    }
+    throw new AuthError(friendlyError(code));
   }
 }
 

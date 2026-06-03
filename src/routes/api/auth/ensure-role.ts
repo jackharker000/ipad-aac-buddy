@@ -9,15 +9,28 @@ import {
 } from "@/lib/firebase/admin";
 
 /**
- * Promotes the FIRST account in the project to admin (custom claim
- * `admin: true`). Verifies the caller's Firebase ID token, then — if this is
- * the only account that exists — sets the admin claim on them. Idempotent and
- * safe to call on every sign-in: once any account is admin, the first-user
- * check no longer applies.
+ * Promotes a user to admin (custom claim `admin: true`) on sign-in.
  *
- * Requires the service account (FIREBASE_SERVICE_ACCOUNT_B64). If it isn't
- * configured, returns is_admin:false so the app still works (no admin yet).
+ * Two paths in:
+ *   1. The caller's verified email is in PARLEY_ADMIN_EMAILS (comma-separated
+ *      env var) → always admin. The canonical way to grant admin without
+ *      shipping code.
+ *   2. The caller is the FIRST account in the project → admin (bootstrap).
+ *
+ * Idempotent: once the user has the admin claim it short-circuits and
+ * returns is_admin:true. Requires the service account
+ * (FIREBASE_SERVICE_ACCOUNT_B64); without it, returns is_admin:false.
  */
+
+function adminEmailAllowList(): Set<string> {
+  const raw = process.env.PARLEY_ADMIN_EMAILS ?? "jackharker000@gmail.com";
+  return new Set(
+    raw
+      .split(",")
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
 
 export const Route = createFileRoute("/api/auth/ensure-role")({
   server: {
@@ -38,9 +51,11 @@ export const Route = createFileRoute("/api/auth/ensure-role")({
         if (!idToken) return json({ error: "Missing idToken" }, 400);
 
         let uid: string;
+        let email: string | null = null;
         try {
           const decoded = await verifyIdToken(idToken);
           uid = decoded.uid;
+          email = typeof decoded.claims.email === "string" ? decoded.claims.email : null;
           if (decoded.claims.admin === true) {
             return json({ is_admin: true }, 200);
           }
@@ -48,6 +63,22 @@ export const Route = createFileRoute("/api/auth/ensure-role")({
           return json({ error: "Invalid token" }, 401);
         }
 
+        // Allow-list path: an admin email always becomes admin.
+        const allowed = adminEmailAllowList();
+        if (email && allowed.has(email.toLowerCase())) {
+          try {
+            await setAdminClaim(uid);
+            return json({ is_admin: true }, 200);
+          } catch (err) {
+            console.error(
+              "[api/auth/ensure-role] allow-list promotion failed:",
+              err instanceof Error ? err.message : "unknown",
+            );
+            return json({ is_admin: false }, 200);
+          }
+        }
+
+        // Bootstrap path: the very first account in the project becomes admin.
         try {
           const count = await countUsersAtMost(1);
           if (count <= 1) {
