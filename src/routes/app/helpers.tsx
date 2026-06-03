@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { DraftHelper } from "@/components/DraftHelper";
 import { cn } from "@/lib/cn";
 
-export const Route = createFileRoute("/helpers")({
+export const Route = createFileRoute("/app/helpers")({
   component: HelpersPage,
   head: () => ({
     meta: [
@@ -51,7 +51,7 @@ function HelpersPage() {
     <div className="mx-auto w-full max-w-3xl px-4 py-6">
       <div className="mb-4 flex items-center gap-3">
         <Link
-          to="/"
+          to="/app"
           aria-label="Back to home"
           className="flex size-10 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
         >

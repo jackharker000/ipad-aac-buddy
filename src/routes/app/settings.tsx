@@ -7,7 +7,7 @@ import { LocationsTab } from "@/components/settings/LocationsTab";
 import { VoiceModelsTab } from "@/components/settings/VoiceModelsTab";
 import { SystemTab } from "@/components/settings/SystemTab";
 
-export const Route = createFileRoute("/settings")({
+export const Route = createFileRoute("/app/settings")({
   component: SettingsPage,
 });
 

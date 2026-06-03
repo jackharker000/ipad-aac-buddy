@@ -27,7 +27,7 @@ import { OnlineDiarizer, type DiarAssignment, type DiarCluster } from "@/lib/aud
 import { rms } from "@/lib/audio/utils";
 import { cn } from "@/lib/cn";
 
-export const Route = createFileRoute("/spike/speaker-id")({
+export const Route = createFileRoute("/app/spike/speaker-id")({
   component: SpeakerIdSpike,
 });
 

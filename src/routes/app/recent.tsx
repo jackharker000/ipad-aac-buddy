@@ -17,7 +17,7 @@ import {
   type Place,
 } from "@/lib/db";
 
-export const Route = createFileRoute("/recent")({
+export const Route = createFileRoute("/app/recent")({
   component: RecentPage,
 });
 

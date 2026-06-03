@@ -14,7 +14,7 @@ import { EventForm } from "@/components/events/EventForm";
 import { EventPrepButton } from "@/components/events/EventPrepButton";
 import { cn } from "@/lib/cn";
 
-export const Route = createFileRoute("/events")({
+export const Route = createFileRoute("/app/events")({
   component: EventsPage,
 });
 

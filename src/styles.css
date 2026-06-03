@@ -45,13 +45,18 @@
 
   --paper: oklch(0.985 0.008 90);
   --paper-warm: oklch(0.97 0.012 80);
-  --ink: oklch(0.21 0.03 230);
-  --ink-soft: oklch(0.45 0.03 230);
+  --ink: #1E2A32;
+  --ink-soft: #46555F;
   --hairline: oklch(0.88 0.012 230);
   --amber: oklch(0.82 0.13 75);
-  --teal: oklch(0.48 0.11 200);
+  --teal: #0E7C73;
+  --teal-dark: #0A5A53;
   --sage: oklch(0.7 0.07 150);
-  --coral: oklch(0.7 0.13 30);
+  --coral: #E8745B;
+  --coral-soft: #FBE4DC;
+  --sand: #FBF7F0;
+  --sand-2: #F3ECE0;
+  --line: #E3D9C9;
 
   --background: var(--paper);
   --foreground: var(--ink);

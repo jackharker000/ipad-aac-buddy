@@ -15,7 +15,7 @@ import { VoiceSampleRecorder } from "@/components/VoiceSampleRecorder";
 import { ProfileProposalsSection } from "@/components/people/ProfileProposalsSection";
 import { cn } from "@/lib/cn";
 
-export const Route = createFileRoute("/people")({
+export const Route = createFileRoute("/app/people")({
   component: PeoplePage,
 });
 

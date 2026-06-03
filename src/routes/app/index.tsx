@@ -42,7 +42,7 @@ import { speakText, stopAllPlayback } from "@/lib/audio/speak-text";
 import { getLastSegment, playLastSegment } from "@/lib/audio/last-segment-store";
 import { drainPendingJobs } from "@/lib/jobs/drain";
 
-export const Route = createFileRoute("/")({
+export const Route = createFileRoute("/app/")({
   component: HomePage,
 });
 
@@ -436,7 +436,7 @@ function Cockpit() {
           )}
           {!settings.jamesVoiceId && (
             <Link
-              to="/settings"
+              to="/app/settings"
               className="rounded-md bg-muted px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted/80"
             >
               No James voice set — using default. Open settings →
@@ -982,7 +982,7 @@ function RosterPicker({
     return (
       <div className="rounded-2xl border border-dashed border-border bg-muted/30 p-4 text-sm text-muted-foreground">
         No enrolled people yet. Add some on the{" "}
-        <Link to="/people" className="underline">
+        <Link to="/app/people" className="underline">
           People
         </Link>{" "}
         page so the speaker-ID matcher has someone to compare against.

@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   HeadContent,
@@ -11,9 +10,6 @@ import {
 import { Toaster } from "sonner";
 
 import appCss from "@/styles.css?url";
-import { ParleyLogo } from "@/components/ParleyLogo";
-import { cn } from "@/lib/cn";
-import { drainPendingJobs } from "@/lib/jobs/drain";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -25,13 +21,13 @@ export const Route = createRootRouteWithContext<{
         name: "viewport",
         content: "width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1",
       },
-      { title: "Parley" },
+      { title: "Parley — A voice for every conversation" },
       {
         name: "description",
         content:
-          "Parley — a calm, iPad-first AAC reply copilot. Listens, suggests, remembers. Built for James.",
+          "Parley is an iPad AAC copilot for people who can't speak easily. It listens to the room, understands who's talking, and offers tap-to-speak replies in your own voice.",
       },
-      { name: "theme-color", content: "#222428" },
+      { name: "theme-color", content: "#0E7C73" },
       { name: "apple-mobile-web-app-capable", content: "yes" },
       { name: "mobile-web-app-capable", content: "yes" },
       { name: "apple-mobile-web-app-title", content: "Parley" },
@@ -64,67 +60,11 @@ function RootShell({ children }: { children: React.ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
-
-  // Tier-2 jobs (summarise / re-diarize / enrich) that were queued by a
-  // prior `LiveConversation.stop()` and never finished — typically because
-  // the user closed the tab before the LLM call returned. Single-flight on
-  // the drainer side, so mounting multiple routes won't fan out.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    void drainPendingJobs();
-  }, []);
-
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="flex min-h-full flex-col bg-background text-foreground">
-        <TopNav />
-        <main className="flex-1">
-          <Outlet />
-        </main>
-      </div>
+      <Outlet />
       <Toaster richColors position="top-center" />
     </QueryClientProvider>
-  );
-}
-
-const NAV: Array<{ to: string; label: string }> = [
-  { to: "/", label: "Live" },
-  { to: "/people", label: "People" },
-  { to: "/events", label: "Events" },
-  { to: "/recent", label: "Recent" },
-  { to: "/helpers", label: "Helpers" },
-  { to: "/settings", label: "Settings" },
-];
-
-function TopNav() {
-  return (
-    <header className="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur">
-      <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-4 py-3">
-        <Link to="/" className="flex items-center gap-2">
-          <ParleyLogo className="h-8 w-8" />
-          <span className="text-lg font-semibold tracking-tight">Parley</span>
-        </Link>
-        <nav className="ml-auto flex flex-wrap items-center gap-1">
-          {NAV.map((item) => (
-            <Link
-              key={item.to}
-              to={item.to}
-              activeOptions={{ exact: item.to === "/" }}
-              className={cn(
-                "rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
-              )}
-              activeProps={{
-                className: cn(
-                  "rounded-md px-3 py-1.5 text-sm font-medium bg-muted text-foreground",
-                ),
-              }}
-            >
-              {item.label}
-            </Link>
-          ))}
-        </nav>
-      </div>
-    </header>
   );
 }
 

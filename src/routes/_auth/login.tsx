@@ -1,0 +1,104 @@
+import { useState } from "react";
+import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
+import { z } from "zod";
+
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+
+const LoginSearch = z.object({
+  redirect: z.string().optional(),
+});
+
+export const Route = createFileRoute("/_auth/login")({
+  validateSearch: LoginSearch,
+  component: LoginPage,
+});
+
+function LoginPage() {
+  const router = useRouter();
+  const search = Route.useSearch();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError(null);
+    setLoading(true);
+    try {
+      const supabase = getSupabaseBrowserClient();
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (signInError) {
+        setError(signInError.message);
+        return;
+      }
+      // Re-read the session on the server so the protected route's beforeLoad sees it.
+      await router.invalidate();
+      const target = search.redirect ?? "/app";
+      router.navigate({ to: target });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="rounded-2xl border border-[var(--line)] bg-white p-8 shadow-sm">
+      <h1 className="text-2xl font-semibold tracking-tight">Log in</h1>
+      <p className="mt-2 text-sm text-[var(--ink-soft)]">
+        Welcome back. Enter your email and password to continue.
+      </p>
+
+      <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
+        <div className="space-y-2">
+          <Label htmlFor="email">Email</Label>
+          <Input
+            id="email"
+            type="email"
+            autoComplete="email"
+            required
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            disabled={loading}
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="password">Password</Label>
+          <Input
+            id="password"
+            type="password"
+            autoComplete="current-password"
+            required
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            disabled={loading}
+          />
+        </div>
+
+        {error ? <p className="text-sm text-[var(--coral)] mt-2">{error}</p> : null}
+
+        <Button
+          type="submit"
+          disabled={loading}
+          className="h-11 w-full rounded-full bg-[var(--teal)] text-white hover:bg-[var(--teal-dark)]"
+        >
+          {loading ? "Logging in…" : "Log in"}
+        </Button>
+      </form>
+
+      <p className="mt-6 text-center text-sm text-[var(--ink-soft)]">
+        Don&apos;t have an account?{" "}
+        <Link to="/signup" className="font-medium text-[var(--teal)] hover:underline">
+          Create one.
+        </Link>
+      </p>
+    </div>
+  );
+}
