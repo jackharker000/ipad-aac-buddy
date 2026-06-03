@@ -500,9 +500,10 @@ export const DEFAULT_JAMES_PROFILE: JamesProfile = {
 // --------------------------------------------------------------------------
 
 /**
- * A login account stored on this device. Passwords are never stored in the
- * clear — only a PBKDF2 hash + per-account salt (see src/lib/auth-local.ts).
- * The first account created on a device is made admin automatically.
+ * Vestigial. Authentication moved to Firebase Auth (see src/lib/auth.ts), so
+ * this on-device account table is no longer read or written. It's kept (rather
+ * than dropped) to avoid a destructive Dexie migration on any device that
+ * already created the v4 store. Safe to remove in a future schema cleanup.
  */
 export type Account = {
   id: string;

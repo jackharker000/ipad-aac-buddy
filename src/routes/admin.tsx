@@ -8,7 +8,7 @@ import {
 
 import { ParleyLogo } from "@/components/ParleyLogo";
 import { cn } from "@/lib/cn";
-import { signOut, useLocalSession } from "@/lib/auth-local";
+import { signOut, useSession } from "@/lib/auth";
 
 export const Route = createFileRoute("/admin")({
   component: AdminLayout,
@@ -22,7 +22,7 @@ const NAV: Array<{ to: string; label: string; exact?: boolean }> = [
 
 function AdminLayout() {
   const router = useRouter();
-  const { user, loading } = useLocalSession();
+  const { user, loading } = useSession();
 
   useEffect(() => {
     if (loading) return;
@@ -44,8 +44,8 @@ function AdminLayout() {
     );
   }
 
-  function handleSignOut() {
-    signOut();
+  async function handleSignOut() {
+    await signOut();
     router.navigate({ to: "/login" });
   }
 

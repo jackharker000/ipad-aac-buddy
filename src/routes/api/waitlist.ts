@@ -2,15 +2,16 @@ import { createFileRoute } from "@tanstack/react-router";
 import { z } from "zod";
 
 import { corsPreflight, requireClientToken, withCors } from "@/lib/api-cors";
+import { addWaitlistEntry, isAdminConfigured } from "@/lib/firebase/admin";
 
 /**
- * Waitlist intake endpoint. Validates a name/email/about triple and ACKs it.
+ * Waitlist intake endpoint. Validates a name/email/about triple and persists
+ * it to Firestore via the Firebase Admin SDK (server-only credential).
  *
- * There is no third-party backend in this build (auth + app data are all
- * on-device), so there is nowhere server-side to persist a public visitor's
- * submission. We validate, log a minimal non-PII line, and return success so
- * the form completes. Wiring this to a real store (email forward, a managed
- * DB, etc.) is a separate, future piece of work — see docs/setup.md.
+ * When the service account isn't configured (e.g. local dev without
+ * FIREBASE_SERVICE_ACCOUNT_B64) there's nowhere server-side to write to, so we
+ * fall back to validating + acknowledging without persisting, and log a
+ * minimal non-PII line. The form still completes either way. See docs/setup.md.
  */
 
 const BodySchema = z.object({
@@ -39,11 +40,30 @@ export const Route = createFileRoute("/api/waitlist")({
           return jsonResponse({ ok: false, error: "Invalid body" }, 400);
         }
 
-        // No backend store in this build — acknowledge without persisting.
-        // Log only the email domain so the owner can see interest without
-        // capturing PII in server logs.
-        const domain = parsed.data.email.split("@")[1] ?? "unknown";
-        console.info(`[api/waitlist] received signup (domain: ${domain})`);
+        const { name, email, about } = parsed.data;
+
+        // No service account configured (e.g. local dev) — acknowledge without
+        // persisting. Log only the email domain so the owner can see interest
+        // without capturing PII in server logs.
+        if (!isAdminConfigured()) {
+          const domain = email.split("@")[1] ?? "unknown";
+          console.info(`[api/waitlist] received signup (domain: ${domain})`);
+          console.info(
+            "[api/waitlist] FIREBASE_SERVICE_ACCOUNT_B64 not set — submission was not persisted",
+          );
+          return jsonResponse({ ok: true }, 200);
+        }
+
+        // Persist to Firestore via the REST API (service-account token).
+        try {
+          await addWaitlistEntry({ name, email, about });
+        } catch (err) {
+          // Log only the error message — never the request body / PII.
+          console.error(
+            `[api/waitlist] failed to persist signup: ${(err as Error).message}`,
+          );
+          return jsonResponse({ ok: false, error: "Couldn't save your request" }, 500);
+        }
 
         return jsonResponse({ ok: true }, 200);
       },

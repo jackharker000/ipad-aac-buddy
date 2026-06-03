@@ -40,6 +40,9 @@ import { Route as ApiSttElevenlabsRouteImport } from './routes/api/stt/elevenlab
 import { Route as ApiLlmOpenaiRouteImport } from './routes/api/llm/openai'
 import { Route as ApiLlmAnthropicRouteImport } from './routes/api/llm/anthropic'
 import { Route as ApiEmbedOpenaiRouteImport } from './routes/api/embed/openai'
+import { Route as ApiAuthEnsureRoleRouteImport } from './routes/api/auth/ensure-role'
+import { Route as ApiAdminUsersRouteImport } from './routes/api/admin/users'
+import { Route as ApiAdminUserRouteImport } from './routes/api/admin/user'
 import { Route as AdminUsersUserIdRouteImport } from './routes/admin/users.$userId'
 
 const AppRoute = AppRouteImport.update({
@@ -195,6 +198,21 @@ const ApiEmbedOpenaiRoute = ApiEmbedOpenaiRouteImport.update({
   path: '/api/embed/openai',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAuthEnsureRoleRoute = ApiAuthEnsureRoleRouteImport.update({
+  id: '/api/auth/ensure-role',
+  path: '/api/auth/ensure-role',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminUsersRoute = ApiAdminUsersRouteImport.update({
+  id: '/api/admin/users',
+  path: '/api/admin/users',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminUserRoute = ApiAdminUserRouteImport.update({
+  id: '/api/admin/user',
+  path: '/api/admin/user',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminUsersUserIdRoute = AdminUsersUserIdRouteImport.update({
   id: '/$userId',
   path: '/$userId',
@@ -223,6 +241,9 @@ export interface FileRoutesByFullPath {
   '/admin/': typeof AdminIndexRoute
   '/app/': typeof AppIndexRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
+  '/api/admin/user': typeof ApiAdminUserRoute
+  '/api/admin/users': typeof ApiAdminUsersRoute
+  '/api/auth/ensure-role': typeof ApiAuthEnsureRoleRoute
   '/api/embed/openai': typeof ApiEmbedOpenaiRoute
   '/api/llm/anthropic': typeof ApiLlmAnthropicRoute
   '/api/llm/openai': typeof ApiLlmOpenaiRoute
@@ -253,6 +274,9 @@ export interface FileRoutesByTo {
   '/admin': typeof AdminIndexRoute
   '/app': typeof AppIndexRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
+  '/api/admin/user': typeof ApiAdminUserRoute
+  '/api/admin/users': typeof ApiAdminUsersRoute
+  '/api/auth/ensure-role': typeof ApiAuthEnsureRoleRoute
   '/api/embed/openai': typeof ApiEmbedOpenaiRoute
   '/api/llm/anthropic': typeof ApiLlmAnthropicRoute
   '/api/llm/openai': typeof ApiLlmOpenaiRoute
@@ -288,6 +312,9 @@ export interface FileRoutesById {
   '/admin/': typeof AdminIndexRoute
   '/app/': typeof AppIndexRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
+  '/api/admin/user': typeof ApiAdminUserRoute
+  '/api/admin/users': typeof ApiAdminUsersRoute
+  '/api/auth/ensure-role': typeof ApiAuthEnsureRoleRoute
   '/api/embed/openai': typeof ApiEmbedOpenaiRoute
   '/api/llm/anthropic': typeof ApiLlmAnthropicRoute
   '/api/llm/openai': typeof ApiLlmOpenaiRoute
@@ -322,6 +349,9 @@ export interface FileRouteTypes {
     | '/admin/'
     | '/app/'
     | '/admin/users/$userId'
+    | '/api/admin/user'
+    | '/api/admin/users'
+    | '/api/auth/ensure-role'
     | '/api/embed/openai'
     | '/api/llm/anthropic'
     | '/api/llm/openai'
@@ -352,6 +382,9 @@ export interface FileRouteTypes {
     | '/admin'
     | '/app'
     | '/admin/users/$userId'
+    | '/api/admin/user'
+    | '/api/admin/users'
+    | '/api/auth/ensure-role'
     | '/api/embed/openai'
     | '/api/llm/anthropic'
     | '/api/llm/openai'
@@ -386,6 +419,9 @@ export interface FileRouteTypes {
     | '/admin/'
     | '/app/'
     | '/admin/users/$userId'
+    | '/api/admin/user'
+    | '/api/admin/users'
+    | '/api/auth/ensure-role'
     | '/api/embed/openai'
     | '/api/llm/anthropic'
     | '/api/llm/openai'
@@ -403,6 +439,9 @@ export interface RootRouteChildren {
   AdminRoute: typeof AdminRouteWithChildren
   AppRoute: typeof AppRouteWithChildren
   ApiWaitlistRoute: typeof ApiWaitlistRoute
+  ApiAdminUserRoute: typeof ApiAdminUserRoute
+  ApiAdminUsersRoute: typeof ApiAdminUsersRoute
+  ApiAuthEnsureRoleRoute: typeof ApiAuthEnsureRoleRoute
   ApiEmbedOpenaiRoute: typeof ApiEmbedOpenaiRoute
   ApiLlmAnthropicRoute: typeof ApiLlmAnthropicRoute
   ApiLlmOpenaiRoute: typeof ApiLlmOpenaiRoute
@@ -632,6 +671,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiEmbedOpenaiRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/auth/ensure-role': {
+      id: '/api/auth/ensure-role'
+      path: '/api/auth/ensure-role'
+      fullPath: '/api/auth/ensure-role'
+      preLoaderRoute: typeof ApiAuthEnsureRoleRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/users': {
+      id: '/api/admin/users'
+      path: '/api/admin/users'
+      fullPath: '/api/admin/users'
+      preLoaderRoute: typeof ApiAdminUsersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/user': {
+      id: '/api/admin/user'
+      path: '/api/admin/user'
+      fullPath: '/api/admin/user'
+      preLoaderRoute: typeof ApiAdminUserRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/users/$userId': {
       id: '/admin/users/$userId'
       path: '/$userId'
@@ -730,6 +790,9 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRoute: AdminRouteWithChildren,
   AppRoute: AppRouteWithChildren,
   ApiWaitlistRoute: ApiWaitlistRoute,
+  ApiAdminUserRoute: ApiAdminUserRoute,
+  ApiAdminUsersRoute: ApiAdminUsersRoute,
+  ApiAuthEnsureRoleRoute: ApiAuthEnsureRoleRoute,
   ApiEmbedOpenaiRoute: ApiEmbedOpenaiRoute,
   ApiLlmAnthropicRoute: ApiLlmAnthropicRoute,
   ApiLlmOpenaiRoute: ApiLlmOpenaiRoute,

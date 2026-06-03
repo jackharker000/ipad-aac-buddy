@@ -1,18 +1,47 @@
+import { useEffect, useState } from "react";
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { useLiveQuery } from "dexie-react-hooks";
 
 import { Button } from "@/components/ui/button";
-import { getAccounts } from "@/lib/admin";
-import type { AdminAccount } from "@/lib/admin";
+import { AdminApiError, fetchUsers } from "@/lib/admin";
+import type { AdminUserRecord } from "@/lib/admin";
 
 export const Route = createFileRoute("/admin/users")({
   component: AdminUsersPage,
 });
 
 function AdminUsersPage() {
-  const accounts = useLiveQuery(() => getAccounts());
+  const [users, setUsers] = useState<AdminUserRecord[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<AdminApiError | null>(null);
 
-  if (accounts === undefined) {
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    fetchUsers()
+      .then((data) => {
+        if (!cancelled) {
+          setUsers(data);
+          setError(null);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(
+            err instanceof AdminApiError
+              ? err
+              : new AdminApiError(0, "Couldn't load users."),
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (loading) {
     return (
       <div className="mx-auto max-w-6xl px-5 py-8">
         <h1 className="text-3xl font-semibold tracking-tight">Users</h1>
@@ -21,24 +50,43 @@ function AdminUsersPage() {
     );
   }
 
+  if (error) {
+    return (
+      <div className="mx-auto max-w-6xl px-5 py-8">
+        <h1 className="text-3xl font-semibold tracking-tight">Users</h1>
+        <ErrorCard error={error} />
+      </div>
+    );
+  }
+
+  const list = users ?? [];
+
   return (
     <div className="mx-auto max-w-6xl px-5 py-8">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <h1 className="text-3xl font-semibold tracking-tight">Users</h1>
         <p className="text-sm text-[var(--ink-soft)]">
-          {accounts.length === 0
-            ? "No accounts to show"
-            : `${accounts.length.toLocaleString()} on this device`}
+          {list.length === 0
+            ? "No users to show"
+            : `${list.length.toLocaleString()} total`}
         </p>
       </div>
 
       <div className="mt-6 rounded-2xl border border-[var(--line)] bg-white p-3">
-        {accounts.length === 0 ? (
-          <EmptyState />
-        ) : (
-          <AccountsTable accounts={accounts} />
-        )}
+        {list.length === 0 ? <EmptyState /> : <UsersTable users={list} />}
       </div>
+    </div>
+  );
+}
+
+function ErrorCard({ error }: { error: AdminApiError }) {
+  const is503 = error.status === 503;
+  return (
+    <div className="mt-6 rounded-2xl border border-[var(--line)] bg-white p-6">
+      <h2 className="text-base font-semibold">
+        {is503 ? "Admin features aren't configured yet" : "Couldn't load users"}
+      </h2>
+      <p className="mt-2 text-sm text-[var(--ink-soft)]">{error.message}</p>
     </div>
   );
 }
@@ -46,7 +94,7 @@ function AdminUsersPage() {
 function EmptyState() {
   return (
     <div className="py-12 text-center">
-      <p className="text-sm font-medium">No accounts on this device yet.</p>
+      <p className="text-sm font-medium">No users yet.</p>
     </div>
   );
 }
@@ -59,27 +107,31 @@ function AdminBadge() {
   );
 }
 
-function AccountsTable({ accounts }: { accounts: AdminAccount[] }) {
+function UsersTable({ users }: { users: AdminUserRecord[] }) {
   return (
     <table className="w-full border-separate border-spacing-0 text-sm">
       <thead>
         <tr>
           <Th>Email</Th>
+          <Th>Provider</Th>
           <Th>Created</Th>
           <Th>Last seen</Th>
           <Th>Admin</Th>
+          <Th>Disabled</Th>
           <Th>Actions</Th>
         </tr>
       </thead>
       <tbody>
-        {accounts.map((a) => (
-          <tr key={a.id}>
-            <Td>{a.email}</Td>
-            <Td>{fmtDate(a.createdAt)}</Td>
-            <Td>{fmtDate(a.lastSignInAt)}</Td>
-            <Td>{a.is_admin ? <AdminBadge /> : null}</Td>
+        {users.map((u) => (
+          <tr key={u.uid}>
+            <Td>{u.email ?? "—"}</Td>
+            <Td>{u.provider ?? "—"}</Td>
+            <Td>{fmtDate(u.createdAt)}</Td>
+            <Td>{fmtDate(u.lastSignInAt)}</Td>
+            <Td>{u.is_admin ? <AdminBadge /> : null}</Td>
+            <Td>{u.disabled ? "Yes" : "No"}</Td>
             <Td>
-              <Link to="/admin/users/$userId" params={{ userId: a.id }}>
+              <Link to="/admin/users/$userId" params={{ userId: u.uid }}>
                 <Button variant="outline" size="sm">
                   View
                 </Button>
@@ -104,9 +156,9 @@ function Td({ children }: { children: React.ReactNode }) {
   return <td className="px-3 py-2 border-b border-[var(--line)] align-top">{children}</td>;
 }
 
-function fmtDate(ts: number | null | undefined): string {
-  if (ts == null) return "—";
-  const d = new Date(ts);
+function fmtDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }

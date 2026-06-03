@@ -4,7 +4,7 @@ import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { AuthError, signUp } from "@/lib/auth-local";
+import { AuthError, signUp } from "@/lib/auth";
 
 export const Route = createFileRoute("/_auth/signup")({
   component: SignupPage,

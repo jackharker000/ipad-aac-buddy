@@ -18,8 +18,20 @@ function PrivacyPage() {
           Voice recognition stays on the device
         </h2>
         <p className="text-base leading-relaxed text-[var(--ink-soft)]">
-          The model that recognises voices runs on your iPad, not in the cloud. Voice samples and
-          voiceprints stay in local storage on your device.
+          The model that recognises voices runs on your iPad, not in the cloud. The voice samples
+          and voiceprints it learns from stay in local storage on your device.
+        </p>
+      </section>
+
+      <section className="mt-12 flex flex-col gap-5">
+        <h2 className="text-xl font-semibold tracking-tight md:text-2xl">
+          Signing in and joining the waitlist
+        </h2>
+        <p className="text-base leading-relaxed text-[var(--ink-soft)]">
+          Account sign-in is handled by Google Firebase — you create an account with an email and
+          password, and Firebase stores those credentials. If you join the waitlist, the details you
+          share in that form are saved in our project&apos;s Firebase too. That&apos;s the only
+          place your name and email live with us.
         </p>
       </section>
 
@@ -29,18 +41,21 @@ function PrivacyPage() {
         </h2>
         <p className="text-base leading-relaxed text-[var(--ink-soft)]">
           Suggestion generation, transcript-to-text and your cloned voice need to call AI services
-          over the internet — that&apos;s how those services work. API keys stay on our server, not
-          on your iPad. Nothing about your conversations is sold or used for advertising, by us or
-          our providers.
+          over the internet — that&apos;s how those services work. The keys for those services stay
+          on our server, not on your iPad. Nothing about your conversations is sold or used for
+          advertising, by us or our providers.
         </p>
       </section>
 
       <section className="mt-12 flex flex-col gap-5">
-        <h2 className="text-xl font-semibold tracking-tight md:text-2xl">You&apos;re in control</h2>
+        <h2 className="text-xl font-semibold tracking-tight md:text-2xl">
+          Where your conversations live
+        </h2>
         <p className="text-base leading-relaxed text-[var(--ink-soft)]">
-          Your conversations live on your iPad. You can export them as an encrypted file, or wipe
-          everything with one button in Settings. Sign out and the on-device data stays where it is,
-          behind your account.
+          Today, your conversation history lives on your iPad. We&apos;re building optional cloud
+          sync so you can keep your data across devices — when that&apos;s switched on, that history
+          will be stored in our project&apos;s Firebase (Google). Either way, you can export your
+          device data, or wipe everything with one button in Settings.
         </p>
       </section>
 

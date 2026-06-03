@@ -306,12 +306,11 @@ function HomePage() {
         <div className="mx-auto w-full max-w-6xl px-5 py-20 md:py-24">
           <div className="max-w-3xl">
             <h2 className="text-3xl font-semibold tracking-tight text-white md:text-4xl">
-              Your voice stays on your device.
+              Speaker recognition runs on your iPad.
             </h2>
             <p className="mt-5 text-lg leading-relaxed text-white/85">
-              Speaker recognition happens on the iPad, not in the cloud. Your
-              conversations live in local storage you control — and you can
-              export or wipe everything any time.
+              Speaker recognition runs on your iPad, not in the cloud. You
+              control your data and can export or wipe it any time.
             </p>
             <Link
               to="/privacy"
