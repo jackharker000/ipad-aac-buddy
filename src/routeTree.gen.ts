@@ -8,369 +8,405 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { Route as rootRouteImport } from './routes/__root'
-import { Route as AppRouteImport } from './routes/app'
-import { Route as AdminRouteImport } from './routes/admin'
-import { Route as MarketingRouteImport } from './routes/_marketing'
-import { Route as AuthRouteImport } from './routes/_auth'
-import { Route as AppIndexRouteImport } from './routes/app/index'
-import { Route as AdminIndexRouteImport } from './routes/admin/index'
-import { Route as MarketingIndexRouteImport } from './routes/_marketing/index'
-import { Route as AuthCallbackRouteImport } from './routes/auth.callback'
-import { Route as AppSettingsRouteImport } from './routes/app/settings'
-import { Route as AppRecentRouteImport } from './routes/app/recent'
-import { Route as AppPeopleRouteImport } from './routes/app/people'
-import { Route as AppHelpersRouteImport } from './routes/app/helpers'
-import { Route as AppEventsRouteImport } from './routes/app/events'
-import { Route as ApiWaitlistRouteImport } from './routes/api/waitlist'
-import { Route as MarketingStoryRouteImport } from './routes/_marketing/story'
-import { Route as MarketingPrivacyRouteImport } from './routes/_marketing/privacy'
-import { Route as MarketingHowItWorksRouteImport } from './routes/_marketing/how-it-works'
-import { Route as MarketingGetStartedRouteImport } from './routes/_marketing/get-started'
-import { Route as MarketingFeaturesRouteImport } from './routes/_marketing/features'
-import { Route as AuthSignupRouteImport } from './routes/_auth/signup'
-import { Route as AuthLoginRouteImport } from './routes/_auth/login'
-import { Route as AppSpikeSpeakerIdRouteImport } from './routes/app/spike.speaker-id'
-import { Route as ApiTtsVoicesRouteImport } from './routes/api/tts/voices'
-import { Route as ApiTtsElevenlabsRouteImport } from './routes/api/tts/elevenlabs'
-import { Route as ApiTtsCartesiaRouteImport } from './routes/api/tts/cartesia'
-import { Route as ApiSttScribeTokenRouteImport } from './routes/api/stt/scribe-token'
-import { Route as ApiSttElevenlabsRouteImport } from './routes/api/stt/elevenlabs'
-import { Route as ApiLlmOpenaiRouteImport } from './routes/api/llm/openai'
-import { Route as ApiLlmAnthropicRouteImport } from './routes/api/llm/anthropic'
-import { Route as ApiEmbedOpenaiRouteImport } from './routes/api/embed/openai'
+import { Route as rootRouteImport } from "./routes/__root"
+import { Route as AppRouteImport } from "./routes/app"
+import { Route as AdminRouteImport } from "./routes/admin"
+import { Route as MarketingRouteImport } from "./routes/_marketing"
+import { Route as AuthRouteImport } from "./routes/_auth"
+import { Route as AppIndexRouteImport } from "./routes/app/index"
+import { Route as AdminIndexRouteImport } from "./routes/admin/index"
+import { Route as MarketingIndexRouteImport } from "./routes/_marketing/index"
+import { Route as AuthCallbackRouteImport } from "./routes/auth.callback"
+import { Route as AppSettingsRouteImport } from "./routes/app/settings"
+import { Route as AppRecentRouteImport } from "./routes/app/recent"
+import { Route as AppPeopleRouteImport } from "./routes/app/people"
+import { Route as AppHelpersRouteImport } from "./routes/app/helpers"
+import { Route as AppEventsRouteImport } from "./routes/app/events"
+import { Route as ApiWaitlistRouteImport } from "./routes/api/waitlist"
+import { Route as AdminUsersRouteImport } from "./routes/admin/users"
+import { Route as AdminUsageRouteImport } from "./routes/admin/usage"
+import { Route as MarketingStoryRouteImport } from "./routes/_marketing/story"
+import { Route as MarketingPrivacyRouteImport } from "./routes/_marketing/privacy"
+import { Route as MarketingHowItWorksRouteImport } from "./routes/_marketing/how-it-works"
+import { Route as MarketingGetStartedRouteImport } from "./routes/_marketing/get-started"
+import { Route as MarketingFeaturesRouteImport } from "./routes/_marketing/features"
+import { Route as AuthSignupRouteImport } from "./routes/_auth/signup"
+import { Route as AuthLoginRouteImport } from "./routes/_auth/login"
+import { Route as AppSpikeSpeakerIdRouteImport } from "./routes/app/spike.speaker-id"
+import { Route as ApiTtsVoicesRouteImport } from "./routes/api/tts/voices"
+import { Route as ApiTtsElevenlabsRouteImport } from "./routes/api/tts/elevenlabs"
+import { Route as ApiTtsCartesiaRouteImport } from "./routes/api/tts/cartesia"
+import { Route as ApiSttScribeTokenRouteImport } from "./routes/api/stt/scribe-token"
+import { Route as ApiSttElevenlabsRouteImport } from "./routes/api/stt/elevenlabs"
+import { Route as ApiLlmOpenaiRouteImport } from "./routes/api/llm/openai"
+import { Route as ApiLlmAnthropicRouteImport } from "./routes/api/llm/anthropic"
+import { Route as ApiEmbedOpenaiRouteImport } from "./routes/api/embed/openai"
+import { Route as AdminUsersUserIdRouteImport } from "./routes/admin/users.$userId"
 
 const AppRoute = AppRouteImport.update({
-  id: '/app',
-  path: '/app',
+  id: "/app",
+  path: "/app",
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminRoute = AdminRouteImport.update({
-  id: '/admin',
-  path: '/admin',
+  id: "/admin",
+  path: "/admin",
   getParentRoute: () => rootRouteImport,
 } as any)
 const MarketingRoute = MarketingRouteImport.update({
-  id: '/_marketing',
+  id: "/_marketing",
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthRoute = AuthRouteImport.update({
-  id: '/_auth',
+  id: "/_auth",
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppIndexRoute = AppIndexRouteImport.update({
-  id: '/',
-  path: '/',
+  id: "/",
+  path: "/",
   getParentRoute: () => AppRoute,
 } as any)
 const AdminIndexRoute = AdminIndexRouteImport.update({
-  id: '/',
-  path: '/',
+  id: "/",
+  path: "/",
   getParentRoute: () => AdminRoute,
 } as any)
 const MarketingIndexRoute = MarketingIndexRouteImport.update({
-  id: '/',
-  path: '/',
+  id: "/",
+  path: "/",
   getParentRoute: () => MarketingRoute,
 } as any)
 const AuthCallbackRoute = AuthCallbackRouteImport.update({
-  id: '/auth/callback',
-  path: '/auth/callback',
+  id: "/auth/callback",
+  path: "/auth/callback",
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppSettingsRoute = AppSettingsRouteImport.update({
-  id: '/settings',
-  path: '/settings',
+  id: "/settings",
+  path: "/settings",
   getParentRoute: () => AppRoute,
 } as any)
 const AppRecentRoute = AppRecentRouteImport.update({
-  id: '/recent',
-  path: '/recent',
+  id: "/recent",
+  path: "/recent",
   getParentRoute: () => AppRoute,
 } as any)
 const AppPeopleRoute = AppPeopleRouteImport.update({
-  id: '/people',
-  path: '/people',
+  id: "/people",
+  path: "/people",
   getParentRoute: () => AppRoute,
 } as any)
 const AppHelpersRoute = AppHelpersRouteImport.update({
-  id: '/helpers',
-  path: '/helpers',
+  id: "/helpers",
+  path: "/helpers",
   getParentRoute: () => AppRoute,
 } as any)
 const AppEventsRoute = AppEventsRouteImport.update({
-  id: '/events',
-  path: '/events',
+  id: "/events",
+  path: "/events",
   getParentRoute: () => AppRoute,
 } as any)
 const ApiWaitlistRoute = ApiWaitlistRouteImport.update({
-  id: '/api/waitlist',
-  path: '/api/waitlist',
+  id: "/api/waitlist",
+  path: "/api/waitlist",
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminUsersRoute = AdminUsersRouteImport.update({
+  id: "/users",
+  path: "/users",
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminUsageRoute = AdminUsageRouteImport.update({
+  id: "/usage",
+  path: "/usage",
+  getParentRoute: () => AdminRoute,
+} as any)
 const MarketingStoryRoute = MarketingStoryRouteImport.update({
-  id: '/story',
-  path: '/story',
+  id: "/story",
+  path: "/story",
   getParentRoute: () => MarketingRoute,
 } as any)
 const MarketingPrivacyRoute = MarketingPrivacyRouteImport.update({
-  id: '/privacy',
-  path: '/privacy',
+  id: "/privacy",
+  path: "/privacy",
   getParentRoute: () => MarketingRoute,
 } as any)
 const MarketingHowItWorksRoute = MarketingHowItWorksRouteImport.update({
-  id: '/how-it-works',
-  path: '/how-it-works',
+  id: "/how-it-works",
+  path: "/how-it-works",
   getParentRoute: () => MarketingRoute,
 } as any)
 const MarketingGetStartedRoute = MarketingGetStartedRouteImport.update({
-  id: '/get-started',
-  path: '/get-started',
+  id: "/get-started",
+  path: "/get-started",
   getParentRoute: () => MarketingRoute,
 } as any)
 const MarketingFeaturesRoute = MarketingFeaturesRouteImport.update({
-  id: '/features',
-  path: '/features',
+  id: "/features",
+  path: "/features",
   getParentRoute: () => MarketingRoute,
 } as any)
 const AuthSignupRoute = AuthSignupRouteImport.update({
-  id: '/signup',
-  path: '/signup',
+  id: "/signup",
+  path: "/signup",
   getParentRoute: () => AuthRoute,
 } as any)
 const AuthLoginRoute = AuthLoginRouteImport.update({
-  id: '/login',
-  path: '/login',
+  id: "/login",
+  path: "/login",
   getParentRoute: () => AuthRoute,
 } as any)
 const AppSpikeSpeakerIdRoute = AppSpikeSpeakerIdRouteImport.update({
-  id: '/spike/speaker-id',
-  path: '/spike/speaker-id',
+  id: "/spike/speaker-id",
+  path: "/spike/speaker-id",
   getParentRoute: () => AppRoute,
 } as any)
 const ApiTtsVoicesRoute = ApiTtsVoicesRouteImport.update({
-  id: '/api/tts/voices',
-  path: '/api/tts/voices',
+  id: "/api/tts/voices",
+  path: "/api/tts/voices",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiTtsElevenlabsRoute = ApiTtsElevenlabsRouteImport.update({
-  id: '/api/tts/elevenlabs',
-  path: '/api/tts/elevenlabs',
+  id: "/api/tts/elevenlabs",
+  path: "/api/tts/elevenlabs",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiTtsCartesiaRoute = ApiTtsCartesiaRouteImport.update({
-  id: '/api/tts/cartesia',
-  path: '/api/tts/cartesia',
+  id: "/api/tts/cartesia",
+  path: "/api/tts/cartesia",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiSttScribeTokenRoute = ApiSttScribeTokenRouteImport.update({
-  id: '/api/stt/scribe-token',
-  path: '/api/stt/scribe-token',
+  id: "/api/stt/scribe-token",
+  path: "/api/stt/scribe-token",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiSttElevenlabsRoute = ApiSttElevenlabsRouteImport.update({
-  id: '/api/stt/elevenlabs',
-  path: '/api/stt/elevenlabs',
+  id: "/api/stt/elevenlabs",
+  path: "/api/stt/elevenlabs",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiLlmOpenaiRoute = ApiLlmOpenaiRouteImport.update({
-  id: '/api/llm/openai',
-  path: '/api/llm/openai',
+  id: "/api/llm/openai",
+  path: "/api/llm/openai",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiLlmAnthropicRoute = ApiLlmAnthropicRouteImport.update({
-  id: '/api/llm/anthropic',
-  path: '/api/llm/anthropic',
+  id: "/api/llm/anthropic",
+  path: "/api/llm/anthropic",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiEmbedOpenaiRoute = ApiEmbedOpenaiRouteImport.update({
-  id: '/api/embed/openai',
-  path: '/api/embed/openai',
+  id: "/api/embed/openai",
+  path: "/api/embed/openai",
   getParentRoute: () => rootRouteImport,
+} as any)
+const AdminUsersUserIdRoute = AdminUsersUserIdRouteImport.update({
+  id: "/$userId",
+  path: "/$userId",
+  getParentRoute: () => AdminUsersRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof MarketingIndexRoute
-  '/admin': typeof AdminRouteWithChildren
-  '/app': typeof AppRouteWithChildren
-  '/login': typeof AuthLoginRoute
-  '/signup': typeof AuthSignupRoute
-  '/features': typeof MarketingFeaturesRoute
-  '/get-started': typeof MarketingGetStartedRoute
-  '/how-it-works': typeof MarketingHowItWorksRoute
-  '/privacy': typeof MarketingPrivacyRoute
-  '/story': typeof MarketingStoryRoute
-  '/api/waitlist': typeof ApiWaitlistRoute
-  '/app/events': typeof AppEventsRoute
-  '/app/helpers': typeof AppHelpersRoute
-  '/app/people': typeof AppPeopleRoute
-  '/app/recent': typeof AppRecentRoute
-  '/app/settings': typeof AppSettingsRoute
-  '/auth/callback': typeof AuthCallbackRoute
-  '/admin/': typeof AdminIndexRoute
-  '/app/': typeof AppIndexRoute
-  '/api/embed/openai': typeof ApiEmbedOpenaiRoute
-  '/api/llm/anthropic': typeof ApiLlmAnthropicRoute
-  '/api/llm/openai': typeof ApiLlmOpenaiRoute
-  '/api/stt/elevenlabs': typeof ApiSttElevenlabsRoute
-  '/api/stt/scribe-token': typeof ApiSttScribeTokenRoute
-  '/api/tts/cartesia': typeof ApiTtsCartesiaRoute
-  '/api/tts/elevenlabs': typeof ApiTtsElevenlabsRoute
-  '/api/tts/voices': typeof ApiTtsVoicesRoute
-  '/app/spike/speaker-id': typeof AppSpikeSpeakerIdRoute
+  "/": typeof MarketingIndexRoute
+  "/admin": typeof AdminRouteWithChildren
+  "/app": typeof AppRouteWithChildren
+  "/login": typeof AuthLoginRoute
+  "/signup": typeof AuthSignupRoute
+  "/features": typeof MarketingFeaturesRoute
+  "/get-started": typeof MarketingGetStartedRoute
+  "/how-it-works": typeof MarketingHowItWorksRoute
+  "/privacy": typeof MarketingPrivacyRoute
+  "/story": typeof MarketingStoryRoute
+  "/admin/usage": typeof AdminUsageRoute
+  "/admin/users": typeof AdminUsersRouteWithChildren
+  "/api/waitlist": typeof ApiWaitlistRoute
+  "/app/events": typeof AppEventsRoute
+  "/app/helpers": typeof AppHelpersRoute
+  "/app/people": typeof AppPeopleRoute
+  "/app/recent": typeof AppRecentRoute
+  "/app/settings": typeof AppSettingsRoute
+  "/auth/callback": typeof AuthCallbackRoute
+  "/admin/": typeof AdminIndexRoute
+  "/app/": typeof AppIndexRoute
+  "/admin/users/$userId": typeof AdminUsersUserIdRoute
+  "/api/embed/openai": typeof ApiEmbedOpenaiRoute
+  "/api/llm/anthropic": typeof ApiLlmAnthropicRoute
+  "/api/llm/openai": typeof ApiLlmOpenaiRoute
+  "/api/stt/elevenlabs": typeof ApiSttElevenlabsRoute
+  "/api/stt/scribe-token": typeof ApiSttScribeTokenRoute
+  "/api/tts/cartesia": typeof ApiTtsCartesiaRoute
+  "/api/tts/elevenlabs": typeof ApiTtsElevenlabsRoute
+  "/api/tts/voices": typeof ApiTtsVoicesRoute
+  "/app/spike/speaker-id": typeof AppSpikeSpeakerIdRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof MarketingIndexRoute
-  '/login': typeof AuthLoginRoute
-  '/signup': typeof AuthSignupRoute
-  '/features': typeof MarketingFeaturesRoute
-  '/get-started': typeof MarketingGetStartedRoute
-  '/how-it-works': typeof MarketingHowItWorksRoute
-  '/privacy': typeof MarketingPrivacyRoute
-  '/story': typeof MarketingStoryRoute
-  '/api/waitlist': typeof ApiWaitlistRoute
-  '/app/events': typeof AppEventsRoute
-  '/app/helpers': typeof AppHelpersRoute
-  '/app/people': typeof AppPeopleRoute
-  '/app/recent': typeof AppRecentRoute
-  '/app/settings': typeof AppSettingsRoute
-  '/auth/callback': typeof AuthCallbackRoute
-  '/admin': typeof AdminIndexRoute
-  '/app': typeof AppIndexRoute
-  '/api/embed/openai': typeof ApiEmbedOpenaiRoute
-  '/api/llm/anthropic': typeof ApiLlmAnthropicRoute
-  '/api/llm/openai': typeof ApiLlmOpenaiRoute
-  '/api/stt/elevenlabs': typeof ApiSttElevenlabsRoute
-  '/api/stt/scribe-token': typeof ApiSttScribeTokenRoute
-  '/api/tts/cartesia': typeof ApiTtsCartesiaRoute
-  '/api/tts/elevenlabs': typeof ApiTtsElevenlabsRoute
-  '/api/tts/voices': typeof ApiTtsVoicesRoute
-  '/app/spike/speaker-id': typeof AppSpikeSpeakerIdRoute
+  "/": typeof MarketingIndexRoute
+  "/login": typeof AuthLoginRoute
+  "/signup": typeof AuthSignupRoute
+  "/features": typeof MarketingFeaturesRoute
+  "/get-started": typeof MarketingGetStartedRoute
+  "/how-it-works": typeof MarketingHowItWorksRoute
+  "/privacy": typeof MarketingPrivacyRoute
+  "/story": typeof MarketingStoryRoute
+  "/admin/usage": typeof AdminUsageRoute
+  "/admin/users": typeof AdminUsersRouteWithChildren
+  "/api/waitlist": typeof ApiWaitlistRoute
+  "/app/events": typeof AppEventsRoute
+  "/app/helpers": typeof AppHelpersRoute
+  "/app/people": typeof AppPeopleRoute
+  "/app/recent": typeof AppRecentRoute
+  "/app/settings": typeof AppSettingsRoute
+  "/auth/callback": typeof AuthCallbackRoute
+  "/admin": typeof AdminIndexRoute
+  "/app": typeof AppIndexRoute
+  "/admin/users/$userId": typeof AdminUsersUserIdRoute
+  "/api/embed/openai": typeof ApiEmbedOpenaiRoute
+  "/api/llm/anthropic": typeof ApiLlmAnthropicRoute
+  "/api/llm/openai": typeof ApiLlmOpenaiRoute
+  "/api/stt/elevenlabs": typeof ApiSttElevenlabsRoute
+  "/api/stt/scribe-token": typeof ApiSttScribeTokenRoute
+  "/api/tts/cartesia": typeof ApiTtsCartesiaRoute
+  "/api/tts/elevenlabs": typeof ApiTtsElevenlabsRoute
+  "/api/tts/voices": typeof ApiTtsVoicesRoute
+  "/app/spike/speaker-id": typeof AppSpikeSpeakerIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/_auth': typeof AuthRouteWithChildren
-  '/_marketing': typeof MarketingRouteWithChildren
-  '/admin': typeof AdminRouteWithChildren
-  '/app': typeof AppRouteWithChildren
-  '/_auth/login': typeof AuthLoginRoute
-  '/_auth/signup': typeof AuthSignupRoute
-  '/_marketing/features': typeof MarketingFeaturesRoute
-  '/_marketing/get-started': typeof MarketingGetStartedRoute
-  '/_marketing/how-it-works': typeof MarketingHowItWorksRoute
-  '/_marketing/privacy': typeof MarketingPrivacyRoute
-  '/_marketing/story': typeof MarketingStoryRoute
-  '/api/waitlist': typeof ApiWaitlistRoute
-  '/app/events': typeof AppEventsRoute
-  '/app/helpers': typeof AppHelpersRoute
-  '/app/people': typeof AppPeopleRoute
-  '/app/recent': typeof AppRecentRoute
-  '/app/settings': typeof AppSettingsRoute
-  '/auth/callback': typeof AuthCallbackRoute
-  '/_marketing/': typeof MarketingIndexRoute
-  '/admin/': typeof AdminIndexRoute
-  '/app/': typeof AppIndexRoute
-  '/api/embed/openai': typeof ApiEmbedOpenaiRoute
-  '/api/llm/anthropic': typeof ApiLlmAnthropicRoute
-  '/api/llm/openai': typeof ApiLlmOpenaiRoute
-  '/api/stt/elevenlabs': typeof ApiSttElevenlabsRoute
-  '/api/stt/scribe-token': typeof ApiSttScribeTokenRoute
-  '/api/tts/cartesia': typeof ApiTtsCartesiaRoute
-  '/api/tts/elevenlabs': typeof ApiTtsElevenlabsRoute
-  '/api/tts/voices': typeof ApiTtsVoicesRoute
-  '/app/spike/speaker-id': typeof AppSpikeSpeakerIdRoute
+  "/_auth": typeof AuthRouteWithChildren
+  "/_marketing": typeof MarketingRouteWithChildren
+  "/admin": typeof AdminRouteWithChildren
+  "/app": typeof AppRouteWithChildren
+  "/_auth/login": typeof AuthLoginRoute
+  "/_auth/signup": typeof AuthSignupRoute
+  "/_marketing/features": typeof MarketingFeaturesRoute
+  "/_marketing/get-started": typeof MarketingGetStartedRoute
+  "/_marketing/how-it-works": typeof MarketingHowItWorksRoute
+  "/_marketing/privacy": typeof MarketingPrivacyRoute
+  "/_marketing/story": typeof MarketingStoryRoute
+  "/admin/usage": typeof AdminUsageRoute
+  "/admin/users": typeof AdminUsersRouteWithChildren
+  "/api/waitlist": typeof ApiWaitlistRoute
+  "/app/events": typeof AppEventsRoute
+  "/app/helpers": typeof AppHelpersRoute
+  "/app/people": typeof AppPeopleRoute
+  "/app/recent": typeof AppRecentRoute
+  "/app/settings": typeof AppSettingsRoute
+  "/auth/callback": typeof AuthCallbackRoute
+  "/_marketing/": typeof MarketingIndexRoute
+  "/admin/": typeof AdminIndexRoute
+  "/app/": typeof AppIndexRoute
+  "/admin/users/$userId": typeof AdminUsersUserIdRoute
+  "/api/embed/openai": typeof ApiEmbedOpenaiRoute
+  "/api/llm/anthropic": typeof ApiLlmAnthropicRoute
+  "/api/llm/openai": typeof ApiLlmOpenaiRoute
+  "/api/stt/elevenlabs": typeof ApiSttElevenlabsRoute
+  "/api/stt/scribe-token": typeof ApiSttScribeTokenRoute
+  "/api/tts/cartesia": typeof ApiTtsCartesiaRoute
+  "/api/tts/elevenlabs": typeof ApiTtsElevenlabsRoute
+  "/api/tts/voices": typeof ApiTtsVoicesRoute
+  "/app/spike/speaker-id": typeof AppSpikeSpeakerIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
-    | '/'
-    | '/admin'
-    | '/app'
-    | '/login'
-    | '/signup'
-    | '/features'
-    | '/get-started'
-    | '/how-it-works'
-    | '/privacy'
-    | '/story'
-    | '/api/waitlist'
-    | '/app/events'
-    | '/app/helpers'
-    | '/app/people'
-    | '/app/recent'
-    | '/app/settings'
-    | '/auth/callback'
-    | '/admin/'
-    | '/app/'
-    | '/api/embed/openai'
-    | '/api/llm/anthropic'
-    | '/api/llm/openai'
-    | '/api/stt/elevenlabs'
-    | '/api/stt/scribe-token'
-    | '/api/tts/cartesia'
-    | '/api/tts/elevenlabs'
-    | '/api/tts/voices'
-    | '/app/spike/speaker-id'
+    | "/"
+    | "/admin"
+    | "/app"
+    | "/login"
+    | "/signup"
+    | "/features"
+    | "/get-started"
+    | "/how-it-works"
+    | "/privacy"
+    | "/story"
+    | "/admin/usage"
+    | "/admin/users"
+    | "/api/waitlist"
+    | "/app/events"
+    | "/app/helpers"
+    | "/app/people"
+    | "/app/recent"
+    | "/app/settings"
+    | "/auth/callback"
+    | "/admin/"
+    | "/app/"
+    | "/admin/users/$userId"
+    | "/api/embed/openai"
+    | "/api/llm/anthropic"
+    | "/api/llm/openai"
+    | "/api/stt/elevenlabs"
+    | "/api/stt/scribe-token"
+    | "/api/tts/cartesia"
+    | "/api/tts/elevenlabs"
+    | "/api/tts/voices"
+    | "/app/spike/speaker-id"
   fileRoutesByTo: FileRoutesByTo
   to:
-    | '/'
-    | '/login'
-    | '/signup'
-    | '/features'
-    | '/get-started'
-    | '/how-it-works'
-    | '/privacy'
-    | '/story'
-    | '/api/waitlist'
-    | '/app/events'
-    | '/app/helpers'
-    | '/app/people'
-    | '/app/recent'
-    | '/app/settings'
-    | '/auth/callback'
-    | '/admin'
-    | '/app'
-    | '/api/embed/openai'
-    | '/api/llm/anthropic'
-    | '/api/llm/openai'
-    | '/api/stt/elevenlabs'
-    | '/api/stt/scribe-token'
-    | '/api/tts/cartesia'
-    | '/api/tts/elevenlabs'
-    | '/api/tts/voices'
-    | '/app/spike/speaker-id'
+    | "/"
+    | "/login"
+    | "/signup"
+    | "/features"
+    | "/get-started"
+    | "/how-it-works"
+    | "/privacy"
+    | "/story"
+    | "/admin/usage"
+    | "/admin/users"
+    | "/api/waitlist"
+    | "/app/events"
+    | "/app/helpers"
+    | "/app/people"
+    | "/app/recent"
+    | "/app/settings"
+    | "/auth/callback"
+    | "/admin"
+    | "/app"
+    | "/admin/users/$userId"
+    | "/api/embed/openai"
+    | "/api/llm/anthropic"
+    | "/api/llm/openai"
+    | "/api/stt/elevenlabs"
+    | "/api/stt/scribe-token"
+    | "/api/tts/cartesia"
+    | "/api/tts/elevenlabs"
+    | "/api/tts/voices"
+    | "/app/spike/speaker-id"
   id:
-    | '__root__'
-    | '/_auth'
-    | '/_marketing'
-    | '/admin'
-    | '/app'
-    | '/_auth/login'
-    | '/_auth/signup'
-    | '/_marketing/features'
-    | '/_marketing/get-started'
-    | '/_marketing/how-it-works'
-    | '/_marketing/privacy'
-    | '/_marketing/story'
-    | '/api/waitlist'
-    | '/app/events'
-    | '/app/helpers'
-    | '/app/people'
-    | '/app/recent'
-    | '/app/settings'
-    | '/auth/callback'
-    | '/_marketing/'
-    | '/admin/'
-    | '/app/'
-    | '/api/embed/openai'
-    | '/api/llm/anthropic'
-    | '/api/llm/openai'
-    | '/api/stt/elevenlabs'
-    | '/api/stt/scribe-token'
-    | '/api/tts/cartesia'
-    | '/api/tts/elevenlabs'
-    | '/api/tts/voices'
-    | '/app/spike/speaker-id'
+    | "__root__"
+    | "/_auth"
+    | "/_marketing"
+    | "/admin"
+    | "/app"
+    | "/_auth/login"
+    | "/_auth/signup"
+    | "/_marketing/features"
+    | "/_marketing/get-started"
+    | "/_marketing/how-it-works"
+    | "/_marketing/privacy"
+    | "/_marketing/story"
+    | "/admin/usage"
+    | "/admin/users"
+    | "/api/waitlist"
+    | "/app/events"
+    | "/app/helpers"
+    | "/app/people"
+    | "/app/recent"
+    | "/app/settings"
+    | "/auth/callback"
+    | "/_marketing/"
+    | "/admin/"
+    | "/app/"
+    | "/admin/users/$userId"
+    | "/api/embed/openai"
+    | "/api/llm/anthropic"
+    | "/api/llm/openai"
+    | "/api/stt/elevenlabs"
+    | "/api/stt/scribe-token"
+    | "/api/tts/cartesia"
+    | "/api/tts/elevenlabs"
+    | "/api/tts/voices"
+    | "/app/spike/speaker-id"
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -390,217 +426,238 @@ export interface RootRouteChildren {
   ApiTtsVoicesRoute: typeof ApiTtsVoicesRoute
 }
 
-declare module '@tanstack/react-router' {
+declare module "@tanstack/react-router" {
   interface FileRoutesByPath {
-    '/app': {
-      id: '/app'
-      path: '/app'
-      fullPath: '/app'
+    "/app": {
+      id: "/app"
+      path: "/app"
+      fullPath: "/app"
       preLoaderRoute: typeof AppRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin': {
-      id: '/admin'
-      path: '/admin'
-      fullPath: '/admin'
+    "/admin": {
+      id: "/admin"
+      path: "/admin"
+      fullPath: "/admin"
       preLoaderRoute: typeof AdminRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_marketing': {
-      id: '/_marketing'
-      path: ''
-      fullPath: '/'
+    "/_marketing": {
+      id: "/_marketing"
+      path: ""
+      fullPath: "/"
       preLoaderRoute: typeof MarketingRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_auth': {
-      id: '/_auth'
-      path: ''
-      fullPath: '/'
+    "/_auth": {
+      id: "/_auth"
+      path: ""
+      fullPath: "/"
       preLoaderRoute: typeof AuthRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/app/': {
-      id: '/app/'
-      path: '/'
-      fullPath: '/app/'
+    "/app/": {
+      id: "/app/"
+      path: "/"
+      fullPath: "/app/"
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
-    '/admin/': {
-      id: '/admin/'
-      path: '/'
-      fullPath: '/admin/'
+    "/admin/": {
+      id: "/admin/"
+      path: "/"
+      fullPath: "/admin/"
       preLoaderRoute: typeof AdminIndexRouteImport
       parentRoute: typeof AdminRoute
     }
-    '/_marketing/': {
-      id: '/_marketing/'
-      path: '/'
-      fullPath: '/'
+    "/_marketing/": {
+      id: "/_marketing/"
+      path: "/"
+      fullPath: "/"
       preLoaderRoute: typeof MarketingIndexRouteImport
       parentRoute: typeof MarketingRoute
     }
-    '/auth/callback': {
-      id: '/auth/callback'
-      path: '/auth/callback'
-      fullPath: '/auth/callback'
+    "/auth/callback": {
+      id: "/auth/callback"
+      path: "/auth/callback"
+      fullPath: "/auth/callback"
       preLoaderRoute: typeof AuthCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/app/settings': {
-      id: '/app/settings'
-      path: '/settings'
-      fullPath: '/app/settings'
+    "/app/settings": {
+      id: "/app/settings"
+      path: "/settings"
+      fullPath: "/app/settings"
       preLoaderRoute: typeof AppSettingsRouteImport
       parentRoute: typeof AppRoute
     }
-    '/app/recent': {
-      id: '/app/recent'
-      path: '/recent'
-      fullPath: '/app/recent'
+    "/app/recent": {
+      id: "/app/recent"
+      path: "/recent"
+      fullPath: "/app/recent"
       preLoaderRoute: typeof AppRecentRouteImport
       parentRoute: typeof AppRoute
     }
-    '/app/people': {
-      id: '/app/people'
-      path: '/people'
-      fullPath: '/app/people'
+    "/app/people": {
+      id: "/app/people"
+      path: "/people"
+      fullPath: "/app/people"
       preLoaderRoute: typeof AppPeopleRouteImport
       parentRoute: typeof AppRoute
     }
-    '/app/helpers': {
-      id: '/app/helpers'
-      path: '/helpers'
-      fullPath: '/app/helpers'
+    "/app/helpers": {
+      id: "/app/helpers"
+      path: "/helpers"
+      fullPath: "/app/helpers"
       preLoaderRoute: typeof AppHelpersRouteImport
       parentRoute: typeof AppRoute
     }
-    '/app/events': {
-      id: '/app/events'
-      path: '/events'
-      fullPath: '/app/events'
+    "/app/events": {
+      id: "/app/events"
+      path: "/events"
+      fullPath: "/app/events"
       preLoaderRoute: typeof AppEventsRouteImport
       parentRoute: typeof AppRoute
     }
-    '/api/waitlist': {
-      id: '/api/waitlist'
-      path: '/api/waitlist'
-      fullPath: '/api/waitlist'
+    "/api/waitlist": {
+      id: "/api/waitlist"
+      path: "/api/waitlist"
+      fullPath: "/api/waitlist"
       preLoaderRoute: typeof ApiWaitlistRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_marketing/story': {
-      id: '/_marketing/story'
-      path: '/story'
-      fullPath: '/story'
+    "/admin/users": {
+      id: "/admin/users"
+      path: "/users"
+      fullPath: "/admin/users"
+      preLoaderRoute: typeof AdminUsersRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    "/admin/usage": {
+      id: "/admin/usage"
+      path: "/usage"
+      fullPath: "/admin/usage"
+      preLoaderRoute: typeof AdminUsageRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    "/_marketing/story": {
+      id: "/_marketing/story"
+      path: "/story"
+      fullPath: "/story"
       preLoaderRoute: typeof MarketingStoryRouteImport
       parentRoute: typeof MarketingRoute
     }
-    '/_marketing/privacy': {
-      id: '/_marketing/privacy'
-      path: '/privacy'
-      fullPath: '/privacy'
+    "/_marketing/privacy": {
+      id: "/_marketing/privacy"
+      path: "/privacy"
+      fullPath: "/privacy"
       preLoaderRoute: typeof MarketingPrivacyRouteImport
       parentRoute: typeof MarketingRoute
     }
-    '/_marketing/how-it-works': {
-      id: '/_marketing/how-it-works'
-      path: '/how-it-works'
-      fullPath: '/how-it-works'
+    "/_marketing/how-it-works": {
+      id: "/_marketing/how-it-works"
+      path: "/how-it-works"
+      fullPath: "/how-it-works"
       preLoaderRoute: typeof MarketingHowItWorksRouteImport
       parentRoute: typeof MarketingRoute
     }
-    '/_marketing/get-started': {
-      id: '/_marketing/get-started'
-      path: '/get-started'
-      fullPath: '/get-started'
+    "/_marketing/get-started": {
+      id: "/_marketing/get-started"
+      path: "/get-started"
+      fullPath: "/get-started"
       preLoaderRoute: typeof MarketingGetStartedRouteImport
       parentRoute: typeof MarketingRoute
     }
-    '/_marketing/features': {
-      id: '/_marketing/features'
-      path: '/features'
-      fullPath: '/features'
+    "/_marketing/features": {
+      id: "/_marketing/features"
+      path: "/features"
+      fullPath: "/features"
       preLoaderRoute: typeof MarketingFeaturesRouteImport
       parentRoute: typeof MarketingRoute
     }
-    '/_auth/signup': {
-      id: '/_auth/signup'
-      path: '/signup'
-      fullPath: '/signup'
+    "/_auth/signup": {
+      id: "/_auth/signup"
+      path: "/signup"
+      fullPath: "/signup"
       preLoaderRoute: typeof AuthSignupRouteImport
       parentRoute: typeof AuthRoute
     }
-    '/_auth/login': {
-      id: '/_auth/login'
-      path: '/login'
-      fullPath: '/login'
+    "/_auth/login": {
+      id: "/_auth/login"
+      path: "/login"
+      fullPath: "/login"
       preLoaderRoute: typeof AuthLoginRouteImport
       parentRoute: typeof AuthRoute
     }
-    '/app/spike/speaker-id': {
-      id: '/app/spike/speaker-id'
-      path: '/spike/speaker-id'
-      fullPath: '/app/spike/speaker-id'
+    "/app/spike/speaker-id": {
+      id: "/app/spike/speaker-id"
+      path: "/spike/speaker-id"
+      fullPath: "/app/spike/speaker-id"
       preLoaderRoute: typeof AppSpikeSpeakerIdRouteImport
       parentRoute: typeof AppRoute
     }
-    '/api/tts/voices': {
-      id: '/api/tts/voices'
-      path: '/api/tts/voices'
-      fullPath: '/api/tts/voices'
+    "/api/tts/voices": {
+      id: "/api/tts/voices"
+      path: "/api/tts/voices"
+      fullPath: "/api/tts/voices"
       preLoaderRoute: typeof ApiTtsVoicesRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/tts/elevenlabs': {
-      id: '/api/tts/elevenlabs'
-      path: '/api/tts/elevenlabs'
-      fullPath: '/api/tts/elevenlabs'
+    "/api/tts/elevenlabs": {
+      id: "/api/tts/elevenlabs"
+      path: "/api/tts/elevenlabs"
+      fullPath: "/api/tts/elevenlabs"
       preLoaderRoute: typeof ApiTtsElevenlabsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/tts/cartesia': {
-      id: '/api/tts/cartesia'
-      path: '/api/tts/cartesia'
-      fullPath: '/api/tts/cartesia'
+    "/api/tts/cartesia": {
+      id: "/api/tts/cartesia"
+      path: "/api/tts/cartesia"
+      fullPath: "/api/tts/cartesia"
       preLoaderRoute: typeof ApiTtsCartesiaRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/stt/scribe-token': {
-      id: '/api/stt/scribe-token'
-      path: '/api/stt/scribe-token'
-      fullPath: '/api/stt/scribe-token'
+    "/api/stt/scribe-token": {
+      id: "/api/stt/scribe-token"
+      path: "/api/stt/scribe-token"
+      fullPath: "/api/stt/scribe-token"
       preLoaderRoute: typeof ApiSttScribeTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/stt/elevenlabs': {
-      id: '/api/stt/elevenlabs'
-      path: '/api/stt/elevenlabs'
-      fullPath: '/api/stt/elevenlabs'
+    "/api/stt/elevenlabs": {
+      id: "/api/stt/elevenlabs"
+      path: "/api/stt/elevenlabs"
+      fullPath: "/api/stt/elevenlabs"
       preLoaderRoute: typeof ApiSttElevenlabsRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/llm/openai': {
-      id: '/api/llm/openai'
-      path: '/api/llm/openai'
-      fullPath: '/api/llm/openai'
+    "/api/llm/openai": {
+      id: "/api/llm/openai"
+      path: "/api/llm/openai"
+      fullPath: "/api/llm/openai"
       preLoaderRoute: typeof ApiLlmOpenaiRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/llm/anthropic': {
-      id: '/api/llm/anthropic'
-      path: '/api/llm/anthropic'
-      fullPath: '/api/llm/anthropic'
+    "/api/llm/anthropic": {
+      id: "/api/llm/anthropic"
+      path: "/api/llm/anthropic"
+      fullPath: "/api/llm/anthropic"
       preLoaderRoute: typeof ApiLlmAnthropicRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/embed/openai': {
-      id: '/api/embed/openai'
-      path: '/api/embed/openai'
-      fullPath: '/api/embed/openai'
+    "/api/embed/openai": {
+      id: "/api/embed/openai"
+      path: "/api/embed/openai"
+      fullPath: "/api/embed/openai"
       preLoaderRoute: typeof ApiEmbedOpenaiRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    "/admin/users/$userId": {
+      id: "/admin/users/$userId"
+      path: "/$userId"
+      fullPath: "/admin/users/$userId"
+      preLoaderRoute: typeof AdminUsersUserIdRouteImport
+      parentRoute: typeof AdminUsersRoute
     }
   }
 }
@@ -639,11 +696,27 @@ const MarketingRouteWithChildren = MarketingRoute._addFileChildren(
   MarketingRouteChildren,
 )
 
+interface AdminUsersRouteChildren {
+  AdminUsersUserIdRoute: typeof AdminUsersUserIdRoute
+}
+
+const AdminUsersRouteChildren: AdminUsersRouteChildren = {
+  AdminUsersUserIdRoute: AdminUsersUserIdRoute,
+}
+
+const AdminUsersRouteWithChildren = AdminUsersRoute._addFileChildren(
+  AdminUsersRouteChildren,
+)
+
 interface AdminRouteChildren {
+  AdminUsageRoute: typeof AdminUsageRoute
+  AdminUsersRoute: typeof AdminUsersRouteWithChildren
   AdminIndexRoute: typeof AdminIndexRoute
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
+  AdminUsageRoute: AdminUsageRoute,
+  AdminUsersRoute: AdminUsersRouteWithChildren,
   AdminIndexRoute: AdminIndexRoute,
 }
 
@@ -690,13 +763,3 @@ const rootRouteChildren: RootRouteChildren = {
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
   ._addFileTypes<FileRouteTypes>()
-
-import type { getRouter } from './router.tsx'
-import type { startInstance } from './start.ts'
-declare module '@tanstack/react-start' {
-  interface Register {
-    ssr: true
-    router: Awaited<ReturnType<typeof getRouter>>
-    config: Awaited<ReturnType<typeof startInstance.getOptions>>
-  }
-}
