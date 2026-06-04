@@ -51,9 +51,11 @@ import { Route as ApiAdminUserDataRouteImport } from './routes/api/admin/user-da
 import { Route as ApiAdminUserActionRouteImport } from './routes/api/admin/user-action'
 import { Route as ApiAdminUserRouteImport } from './routes/api/admin/user'
 import { Route as ApiAdminUsageRouteImport } from './routes/api/admin/usage'
+import { Route as ApiAdminConversationRouteImport } from './routes/api/admin/conversation'
 import { Route as ApiAdminAudioUrlRouteImport } from './routes/api/admin/audio-url'
 import { Route as ApiAdminActivityRouteImport } from './routes/api/admin/activity'
 import { Route as AdminUsersUserIdRouteImport } from './routes/admin/users.$userId'
+import { Route as AdminUsersUserIdConversationsConversationIdRouteImport } from './routes/admin/users.$userId.conversations.$conversationId'
 
 const AppRoute = AppRouteImport.update({
   id: '/app',
@@ -263,6 +265,11 @@ const ApiAdminUsageRoute = ApiAdminUsageRouteImport.update({
   path: '/api/admin/usage',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAdminConversationRoute = ApiAdminConversationRouteImport.update({
+  id: '/api/admin/conversation',
+  path: '/api/admin/conversation',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAdminAudioUrlRoute = ApiAdminAudioUrlRouteImport.update({
   id: '/api/admin/audio-url',
   path: '/api/admin/audio-url',
@@ -278,6 +285,12 @@ const AdminUsersUserIdRoute = AdminUsersUserIdRouteImport.update({
   path: '/$userId',
   getParentRoute: () => AdminUsersRoute,
 } as any)
+const AdminUsersUserIdConversationsConversationIdRoute =
+  AdminUsersUserIdConversationsConversationIdRouteImport.update({
+    id: '/conversations/$conversationId',
+    path: '/conversations/$conversationId',
+    getParentRoute: () => AdminUsersUserIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof MarketingIndexRoute
@@ -302,9 +315,10 @@ export interface FileRoutesByFullPath {
   '/app/settings': typeof AppSettingsRoute
   '/admin/': typeof AdminIndexRoute
   '/app/': typeof AppIndexRoute
-  '/admin/users/$userId': typeof AdminUsersUserIdRoute
+  '/admin/users/$userId': typeof AdminUsersUserIdRouteWithChildren
   '/api/admin/activity': typeof ApiAdminActivityRoute
   '/api/admin/audio-url': typeof ApiAdminAudioUrlRoute
+  '/api/admin/conversation': typeof ApiAdminConversationRoute
   '/api/admin/usage': typeof ApiAdminUsageRoute
   '/api/admin/user': typeof ApiAdminUserRoute
   '/api/admin/user-action': typeof ApiAdminUserActionRoute
@@ -323,6 +337,7 @@ export interface FileRoutesByFullPath {
   '/api/tts/elevenlabs': typeof ApiTtsElevenlabsRoute
   '/api/tts/voices': typeof ApiTtsVoicesRoute
   '/app/spike/speaker-id': typeof AppSpikeSpeakerIdRoute
+  '/admin/users/$userId/conversations/$conversationId': typeof AdminUsersUserIdConversationsConversationIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof MarketingIndexRoute
@@ -345,9 +360,10 @@ export interface FileRoutesByTo {
   '/app/settings': typeof AppSettingsRoute
   '/admin': typeof AdminIndexRoute
   '/app': typeof AppIndexRoute
-  '/admin/users/$userId': typeof AdminUsersUserIdRoute
+  '/admin/users/$userId': typeof AdminUsersUserIdRouteWithChildren
   '/api/admin/activity': typeof ApiAdminActivityRoute
   '/api/admin/audio-url': typeof ApiAdminAudioUrlRoute
+  '/api/admin/conversation': typeof ApiAdminConversationRoute
   '/api/admin/usage': typeof ApiAdminUsageRoute
   '/api/admin/user': typeof ApiAdminUserRoute
   '/api/admin/user-action': typeof ApiAdminUserActionRoute
@@ -366,6 +382,7 @@ export interface FileRoutesByTo {
   '/api/tts/elevenlabs': typeof ApiTtsElevenlabsRoute
   '/api/tts/voices': typeof ApiTtsVoicesRoute
   '/app/spike/speaker-id': typeof AppSpikeSpeakerIdRoute
+  '/admin/users/$userId/conversations/$conversationId': typeof AdminUsersUserIdConversationsConversationIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -393,9 +410,10 @@ export interface FileRoutesById {
   '/_marketing/': typeof MarketingIndexRoute
   '/admin/': typeof AdminIndexRoute
   '/app/': typeof AppIndexRoute
-  '/admin/users/$userId': typeof AdminUsersUserIdRoute
+  '/admin/users/$userId': typeof AdminUsersUserIdRouteWithChildren
   '/api/admin/activity': typeof ApiAdminActivityRoute
   '/api/admin/audio-url': typeof ApiAdminAudioUrlRoute
+  '/api/admin/conversation': typeof ApiAdminConversationRoute
   '/api/admin/usage': typeof ApiAdminUsageRoute
   '/api/admin/user': typeof ApiAdminUserRoute
   '/api/admin/user-action': typeof ApiAdminUserActionRoute
@@ -414,6 +432,7 @@ export interface FileRoutesById {
   '/api/tts/elevenlabs': typeof ApiTtsElevenlabsRoute
   '/api/tts/voices': typeof ApiTtsVoicesRoute
   '/app/spike/speaker-id': typeof AppSpikeSpeakerIdRoute
+  '/admin/users/$userId/conversations/$conversationId': typeof AdminUsersUserIdConversationsConversationIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -443,6 +462,7 @@ export interface FileRouteTypes {
     | '/admin/users/$userId'
     | '/api/admin/activity'
     | '/api/admin/audio-url'
+    | '/api/admin/conversation'
     | '/api/admin/usage'
     | '/api/admin/user'
     | '/api/admin/user-action'
@@ -461,6 +481,7 @@ export interface FileRouteTypes {
     | '/api/tts/elevenlabs'
     | '/api/tts/voices'
     | '/app/spike/speaker-id'
+    | '/admin/users/$userId/conversations/$conversationId'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -486,6 +507,7 @@ export interface FileRouteTypes {
     | '/admin/users/$userId'
     | '/api/admin/activity'
     | '/api/admin/audio-url'
+    | '/api/admin/conversation'
     | '/api/admin/usage'
     | '/api/admin/user'
     | '/api/admin/user-action'
@@ -504,6 +526,7 @@ export interface FileRouteTypes {
     | '/api/tts/elevenlabs'
     | '/api/tts/voices'
     | '/app/spike/speaker-id'
+    | '/admin/users/$userId/conversations/$conversationId'
   id:
     | '__root__'
     | '/_auth'
@@ -533,6 +556,7 @@ export interface FileRouteTypes {
     | '/admin/users/$userId'
     | '/api/admin/activity'
     | '/api/admin/audio-url'
+    | '/api/admin/conversation'
     | '/api/admin/usage'
     | '/api/admin/user'
     | '/api/admin/user-action'
@@ -551,6 +575,7 @@ export interface FileRouteTypes {
     | '/api/tts/elevenlabs'
     | '/api/tts/voices'
     | '/app/spike/speaker-id'
+    | '/admin/users/$userId/conversations/$conversationId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -561,6 +586,7 @@ export interface RootRouteChildren {
   ApiWaitlistRoute: typeof ApiWaitlistRoute
   ApiAdminActivityRoute: typeof ApiAdminActivityRoute
   ApiAdminAudioUrlRoute: typeof ApiAdminAudioUrlRoute
+  ApiAdminConversationRoute: typeof ApiAdminConversationRoute
   ApiAdminUsageRoute: typeof ApiAdminUsageRoute
   ApiAdminUserRoute: typeof ApiAdminUserRoute
   ApiAdminUserActionRoute: typeof ApiAdminUserActionRoute
@@ -876,6 +902,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminUsageRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/conversation': {
+      id: '/api/admin/conversation'
+      path: '/api/admin/conversation'
+      fullPath: '/api/admin/conversation'
+      preLoaderRoute: typeof ApiAdminConversationRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/admin/audio-url': {
       id: '/api/admin/audio-url'
       path: '/api/admin/audio-url'
@@ -896,6 +929,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin/users/$userId'
       preLoaderRoute: typeof AdminUsersUserIdRouteImport
       parentRoute: typeof AdminUsersRoute
+    }
+    '/admin/users/$userId/conversations/$conversationId': {
+      id: '/admin/users/$userId/conversations/$conversationId'
+      path: '/conversations/$conversationId'
+      fullPath: '/admin/users/$userId/conversations/$conversationId'
+      preLoaderRoute: typeof AdminUsersUserIdConversationsConversationIdRouteImport
+      parentRoute: typeof AdminUsersUserIdRoute
     }
   }
 }
@@ -934,12 +974,24 @@ const MarketingRouteWithChildren = MarketingRoute._addFileChildren(
   MarketingRouteChildren,
 )
 
+interface AdminUsersUserIdRouteChildren {
+  AdminUsersUserIdConversationsConversationIdRoute: typeof AdminUsersUserIdConversationsConversationIdRoute
+}
+
+const AdminUsersUserIdRouteChildren: AdminUsersUserIdRouteChildren = {
+  AdminUsersUserIdConversationsConversationIdRoute:
+    AdminUsersUserIdConversationsConversationIdRoute,
+}
+
+const AdminUsersUserIdRouteWithChildren =
+  AdminUsersUserIdRoute._addFileChildren(AdminUsersUserIdRouteChildren)
+
 interface AdminUsersRouteChildren {
-  AdminUsersUserIdRoute: typeof AdminUsersUserIdRoute
+  AdminUsersUserIdRoute: typeof AdminUsersUserIdRouteWithChildren
 }
 
 const AdminUsersRouteChildren: AdminUsersRouteChildren = {
-  AdminUsersUserIdRoute: AdminUsersUserIdRoute,
+  AdminUsersUserIdRoute: AdminUsersUserIdRouteWithChildren,
 }
 
 const AdminUsersRouteWithChildren = AdminUsersRoute._addFileChildren(
@@ -994,6 +1046,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiWaitlistRoute: ApiWaitlistRoute,
   ApiAdminActivityRoute: ApiAdminActivityRoute,
   ApiAdminAudioUrlRoute: ApiAdminAudioUrlRoute,
+  ApiAdminConversationRoute: ApiAdminConversationRoute,
   ApiAdminUsageRoute: ApiAdminUsageRoute,
   ApiAdminUserRoute: ApiAdminUserRoute,
   ApiAdminUserActionRoute: ApiAdminUserActionRoute,

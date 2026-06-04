@@ -187,6 +187,42 @@ export async function fetchUserData(
   return body.rows;
 }
 
+// --------------------------------------------------------------------------
+// Single-conversation bundle (from /api/admin/conversation)
+// --------------------------------------------------------------------------
+
+export type AdminConversationBundle = {
+  conversation: Record<string, unknown>;
+  segments: Array<Record<string, unknown>>;
+  suggestions: Array<Record<string, unknown>>;
+  contributions: Array<Record<string, unknown>>;
+  people: Array<Record<string, unknown>>;
+};
+
+const conversationCache = new Map<string, { value: AdminConversationBundle; at: number }>();
+
+/**
+ * Fetch every Firestore row tied to a single conversation under a user,
+ * plus the user's people list (for personId → name resolution). Cached 30s
+ * per `(uid, conversationId)` so back-navigation is instant.
+ */
+export async function fetchAdminConversation(
+  uid: string,
+  conversationId: string,
+  opts?: { force?: boolean },
+): Promise<AdminConversationBundle> {
+  const key = `${uid}::${conversationId}`;
+  const cached = conversationCache.get(key);
+  if (!opts?.force && cached && Date.now() - cached.at < CACHE_TTL_MS) {
+    return cached.value;
+  }
+  const res = await authedFetch("/api/admin/conversation", { uid, conversationId });
+  if (!res.ok) return parseError(res);
+  const body = (await res.json()) as AdminConversationBundle;
+  conversationCache.set(key, { value: body, at: Date.now() });
+  return body;
+}
+
 /**
  * Fetch per-table document counts for a user. Powers the chip badges on the
  * admin user-detail Synced data section.

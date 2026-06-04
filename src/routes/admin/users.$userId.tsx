@@ -551,7 +551,7 @@ function SyncedTableView({
     return <ContributionsTable rows={rows} peopleById={peopleById} />;
   }
   if (tableKey === "conversations") {
-    return <ConversationsTable rows={rows} />;
+    return <ConversationsTable rows={rows} uid={uid} />;
   }
   if (tableKey === "voiceprints") {
     return <VoiceprintsTable rows={rows} peopleById={peopleById} />;
@@ -582,7 +582,13 @@ function SyncedTableView({
 // Per-table renderers — keep them compact and forgiving (Firestore is loose).
 // --------------------------------------------------------------------------
 
-function ConversationsTable({ rows }: { rows: Array<Record<string, unknown>> }) {
+function ConversationsTable({
+  rows,
+  uid,
+}: {
+  rows: Array<Record<string, unknown>>;
+  uid: string;
+}) {
   return (
     <table className="w-full border-separate border-spacing-0 text-sm">
       <thead>
@@ -591,21 +597,55 @@ function ConversationsTable({ rows }: { rows: Array<Record<string, unknown>> }) 
           <Th>Title</Th>
           <Th>Place</Th>
           <Th>ID</Th>
+          <Th>{""}</Th>
         </tr>
       </thead>
       <tbody>
         {rows.map((r, i) => (
-          <tr key={readString(r.id) ?? i}>
-            <Td>{fmtMaybeDate(r.createdAt ?? r.startedAt)}</Td>
-            <Td>{readString(r.title) ?? <Muted>—</Muted>}</Td>
-            <Td>{readString(r.placeId) ?? <Muted>—</Muted>}</Td>
-            <Td className="font-mono text-xs text-[var(--ink-soft)]">
-              {readString(r.id) ?? <Muted>—</Muted>}
-            </Td>
-          </tr>
+          <ConversationRow key={readString(r.id) ?? `row-${i}`} row={r} uid={uid} />
         ))}
       </tbody>
     </table>
+  );
+}
+
+function ConversationRow({ row, uid }: { row: Record<string, unknown>; uid: string }) {
+  const id = readString(row.id);
+  const summary = readString(row.summary);
+  return (
+    <>
+      <tr className="hover:bg-[var(--sand-2)]/40">
+        <Td>{fmtMaybeDate(row.createdAt ?? row.startedAt)}</Td>
+        <Td>{readString(row.title) ?? <Muted>—</Muted>}</Td>
+        <Td>{readString(row.placeId) ?? <Muted>—</Muted>}</Td>
+        <Td className="font-mono text-xs text-[var(--ink-soft)]">
+          {id ?? <Muted>—</Muted>}
+        </Td>
+        <Td>
+          {id ? (
+            <Link
+              to="/admin/users/$userId/conversations/$conversationId"
+              params={{ userId: uid, conversationId: id }}
+              className="text-xs font-medium text-[var(--teal-dark)] hover:underline"
+            >
+              View →
+            </Link>
+          ) : (
+            <Muted>—</Muted>
+          )}
+        </Td>
+      </tr>
+      {summary ? (
+        <tr>
+          <td
+            colSpan={5}
+            className="border-b border-[var(--line)] bg-[var(--sand)]/30 px-3 py-1.5 text-xs italic text-[var(--ink-soft)]"
+          >
+            <span className="line-clamp-1">{summary}</span>
+          </td>
+        </tr>
+      ) : null}
+    </>
   );
 }
 
