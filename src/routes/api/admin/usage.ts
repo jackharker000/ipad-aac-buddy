@@ -69,6 +69,7 @@ type UserBucket = {
 
 type KindBucket = { kind: string; events: number; millicents: number };
 type ProviderBucket = { provider: string; events: number; millicents: number };
+type DayBucket = { date: string; events: number; millicents: number };
 
 type Aggregate = {
   totals: {
@@ -82,10 +83,20 @@ type Aggregate = {
   byUser: UserBucket[];
   byKind: KindBucket[];
   byProvider: ProviderBucket[];
+  byDay: DayBucket[];
   days: number;
   rangeFrom: string;
   rangeTo: string;
+  /**
+   * Distinct uids whose `usage_events.createdAt` falls in the last
+   * `ACTIVE_NOW_MINUTES` minutes. Populated only when `days <= 1` — the
+   * Overview's "Active now" widget shares the daily fetch instead of paying
+   * for a second round-trip. Wider windows skip this scan.
+   */
+  activeRecent?: { uids: string[]; minutes: number };
 };
+
+const ACTIVE_NOW_MINUTES = 15;
 
 type UsageEventRow = {
   uid: string | null;
@@ -96,6 +107,7 @@ type UsageEventRow = {
   characters: number;
   audioBytes: number;
   millicents: number;
+  createdAt: string | null;
 };
 
 function emptyAggregate(days: number, from: string, to: string): Aggregate {
@@ -111,10 +123,42 @@ function emptyAggregate(days: number, from: string, to: string): Aggregate {
     byUser: [],
     byKind: [],
     byProvider: [],
+    byDay: buildEmptyByDay(from, to),
     days,
     rangeFrom: from,
     rangeTo: to,
   };
+}
+
+/** UTC day key (YYYY-MM-DD) for a Date. */
+function dayKey(d: Date): string {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Build a continuous YYYY-MM-DD day list spanning [fromIso, toIso] (UTC). Used
+ * to back-fill zero-spend days so the sparkline renders as a continuous series
+ * even when usage events are sparse.
+ */
+function buildEmptyByDay(fromIso: string, toIso: string): DayBucket[] {
+  const from = new Date(fromIso);
+  const to = new Date(toIso);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return [];
+  const startMs = Date.UTC(
+    from.getUTCFullYear(),
+    from.getUTCMonth(),
+    from.getUTCDate(),
+  );
+  const endMs = Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), to.getUTCDate());
+  const dayMs = 24 * 60 * 60 * 1000;
+  const out: DayBucket[] = [];
+  for (let t = startMs; t <= endMs; t += dayMs) {
+    out.push({ date: dayKey(new Date(t)), events: 0, millicents: 0 });
+  }
+  return out;
 }
 
 async function loadUsage(days: number): Promise<Aggregate> {
@@ -124,7 +168,13 @@ async function loadUsage(days: number): Promise<Aggregate> {
   const rangeTo = now.toISOString();
 
   const events = await queryUsageEvents(rangeFrom);
-  if (events.length === 0) return emptyAggregate(days, rangeFrom, rangeTo);
+  if (events.length === 0) {
+    const empty = emptyAggregate(days, rangeFrom, rangeTo);
+    if (days <= 1) {
+      empty.activeRecent = { uids: [], minutes: ACTIVE_NOW_MINUTES };
+    }
+    return empty;
+  }
 
   const totals = {
     events: 0,
@@ -137,6 +187,13 @@ async function loadUsage(days: number): Promise<Aggregate> {
   const userMap = new Map<string, UserBucket>();
   const kindMap = new Map<string, KindBucket>();
   const providerMap = new Map<string, ProviderBucket>();
+
+  // Seed every day in the window with a zero entry so the sparkline draws a
+  // continuous series even when most days are empty.
+  const dayMap = new Map<string, DayBucket>();
+  for (const seed of buildEmptyByDay(rangeFrom, rangeTo)) {
+    dayMap.set(seed.date, seed);
+  }
 
   for (const ev of events) {
     totals.events += 1;
@@ -173,13 +230,51 @@ async function loadUsage(days: number): Promise<Aggregate> {
     pb.events += 1;
     pb.millicents += ev.millicents;
     providerMap.set(ev.provider, pb);
+
+    if (ev.createdAt) {
+      const d = new Date(ev.createdAt);
+      if (!Number.isNaN(d.getTime())) {
+        const key = dayKey(d);
+        const existing = dayMap.get(key) ?? { date: key, events: 0, millicents: 0 };
+        existing.events += 1;
+        existing.millicents += ev.millicents;
+        dayMap.set(key, existing);
+      }
+    }
   }
 
   const byUser = Array.from(userMap.values()).sort((a, b) => b.millicents - a.millicents);
   const byKind = Array.from(kindMap.values()).sort((a, b) => b.millicents - a.millicents);
   const byProvider = Array.from(providerMap.values()).sort((a, b) => b.millicents - a.millicents);
+  const byDay = Array.from(dayMap.values()).sort((a, b) => a.date.localeCompare(b.date));
 
-  return { totals, byUser, byKind, byProvider, days, rangeFrom, rangeTo };
+  // Active-now widget on Overview. Only computed for short windows so wider
+  // dashboards (7d / 30d / 90d) don't pay for the per-event time check.
+  let activeRecent: Aggregate["activeRecent"];
+  if (days <= 1) {
+    const cutoff = Date.now() - ACTIVE_NOW_MINUTES * 60 * 1000;
+    const uids = new Set<string>();
+    for (const ev of events) {
+      if (!ev.uid || !ev.createdAt) continue;
+      const t = new Date(ev.createdAt).getTime();
+      if (Number.isFinite(t) && t >= cutoff) {
+        uids.add(ev.uid);
+      }
+    }
+    activeRecent = { uids: Array.from(uids), minutes: ACTIVE_NOW_MINUTES };
+  }
+
+  return {
+    totals,
+    byUser,
+    byKind,
+    byProvider,
+    byDay,
+    days,
+    rangeFrom,
+    rangeTo,
+    ...(activeRecent ? { activeRecent } : {}),
+  };
 }
 
 // --------------------------------------------------------------------------
@@ -248,6 +343,7 @@ async function queryUsageEvents(sinceIso: string): Promise<UsageEventRow[]> {
       characters: readInt(fields.characters),
       audioBytes: readInt(fields.audioBytes),
       millicents: readInt(fields.millicents),
+      createdAt: readTimestamp(fields.createdAt),
     });
   }
   return out;
@@ -256,6 +352,12 @@ async function queryUsageEvents(sinceIso: string): Promise<UsageEventRow[]> {
 function readString(v: FirestoreValue | undefined): string | null {
   if (!v) return null;
   if (typeof v.stringValue === "string") return v.stringValue;
+  return null;
+}
+
+function readTimestamp(v: FirestoreValue | undefined): string | null {
+  if (!v) return null;
+  if (typeof v.timestampValue === "string") return v.timestampValue;
   return null;
 }
 

@@ -22,6 +22,7 @@ import { Route as AppPeopleRouteImport } from './routes/app/people'
 import { Route as AppHelpersRouteImport } from './routes/app/helpers'
 import { Route as AppEventsRouteImport } from './routes/app/events'
 import { Route as ApiWaitlistRouteImport } from './routes/api/waitlist'
+import { Route as AdminWaitlistRouteImport } from './routes/admin/waitlist'
 import { Route as AdminUsersRouteImport } from './routes/admin/users'
 import { Route as AdminUsageRouteImport } from './routes/admin/usage'
 import { Route as MarketingStoryRouteImport } from './routes/_marketing/story'
@@ -41,8 +42,12 @@ import { Route as ApiLlmOpenaiRouteImport } from './routes/api/llm/openai'
 import { Route as ApiLlmAnthropicRouteImport } from './routes/api/llm/anthropic'
 import { Route as ApiEmbedOpenaiRouteImport } from './routes/api/embed/openai'
 import { Route as ApiAuthEnsureRoleRouteImport } from './routes/api/auth/ensure-role'
+import { Route as ApiAdminWaitlistActionRouteImport } from './routes/api/admin/waitlist-action'
+import { Route as ApiAdminWaitlistRouteImport } from './routes/api/admin/waitlist'
 import { Route as ApiAdminUsersRouteImport } from './routes/api/admin/users'
+import { Route as ApiAdminUserDataCountsRouteImport } from './routes/api/admin/user-data-counts'
 import { Route as ApiAdminUserDataRouteImport } from './routes/api/admin/user-data'
+import { Route as ApiAdminUserActionRouteImport } from './routes/api/admin/user-action'
 import { Route as ApiAdminUserRouteImport } from './routes/api/admin/user'
 import { Route as ApiAdminUsageRouteImport } from './routes/api/admin/usage'
 import { Route as ApiAdminAudioUrlRouteImport } from './routes/api/admin/audio-url'
@@ -110,6 +115,11 @@ const ApiWaitlistRoute = ApiWaitlistRouteImport.update({
   id: '/api/waitlist',
   path: '/api/waitlist',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AdminWaitlistRoute = AdminWaitlistRouteImport.update({
+  id: '/waitlist',
+  path: '/waitlist',
+  getParentRoute: () => AdminRoute,
 } as any)
 const AdminUsersRoute = AdminUsersRouteImport.update({
   id: '/users',
@@ -206,14 +216,34 @@ const ApiAuthEnsureRoleRoute = ApiAuthEnsureRoleRouteImport.update({
   path: '/api/auth/ensure-role',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAdminWaitlistActionRoute = ApiAdminWaitlistActionRouteImport.update({
+  id: '/api/admin/waitlist-action',
+  path: '/api/admin/waitlist-action',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminWaitlistRoute = ApiAdminWaitlistRouteImport.update({
+  id: '/api/admin/waitlist',
+  path: '/api/admin/waitlist',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAdminUsersRoute = ApiAdminUsersRouteImport.update({
   id: '/api/admin/users',
   path: '/api/admin/users',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAdminUserDataCountsRoute = ApiAdminUserDataCountsRouteImport.update({
+  id: '/api/admin/user-data-counts',
+  path: '/api/admin/user-data-counts',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAdminUserDataRoute = ApiAdminUserDataRouteImport.update({
   id: '/api/admin/user-data',
   path: '/api/admin/user-data',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminUserActionRoute = ApiAdminUserActionRouteImport.update({
+  id: '/api/admin/user-action',
+  path: '/api/admin/user-action',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAdminUserRoute = ApiAdminUserRouteImport.update({
@@ -250,6 +280,7 @@ export interface FileRoutesByFullPath {
   '/story': typeof MarketingStoryRoute
   '/admin/usage': typeof AdminUsageRoute
   '/admin/users': typeof AdminUsersRouteWithChildren
+  '/admin/waitlist': typeof AdminWaitlistRoute
   '/api/waitlist': typeof ApiWaitlistRoute
   '/app/events': typeof AppEventsRoute
   '/app/helpers': typeof AppHelpersRoute
@@ -262,8 +293,12 @@ export interface FileRoutesByFullPath {
   '/api/admin/audio-url': typeof ApiAdminAudioUrlRoute
   '/api/admin/usage': typeof ApiAdminUsageRoute
   '/api/admin/user': typeof ApiAdminUserRoute
+  '/api/admin/user-action': typeof ApiAdminUserActionRoute
   '/api/admin/user-data': typeof ApiAdminUserDataRoute
+  '/api/admin/user-data-counts': typeof ApiAdminUserDataCountsRoute
   '/api/admin/users': typeof ApiAdminUsersRoute
+  '/api/admin/waitlist': typeof ApiAdminWaitlistRoute
+  '/api/admin/waitlist-action': typeof ApiAdminWaitlistActionRoute
   '/api/auth/ensure-role': typeof ApiAuthEnsureRoleRoute
   '/api/embed/openai': typeof ApiEmbedOpenaiRoute
   '/api/llm/anthropic': typeof ApiLlmAnthropicRoute
@@ -286,6 +321,7 @@ export interface FileRoutesByTo {
   '/story': typeof MarketingStoryRoute
   '/admin/usage': typeof AdminUsageRoute
   '/admin/users': typeof AdminUsersRouteWithChildren
+  '/admin/waitlist': typeof AdminWaitlistRoute
   '/api/waitlist': typeof ApiWaitlistRoute
   '/app/events': typeof AppEventsRoute
   '/app/helpers': typeof AppHelpersRoute
@@ -298,8 +334,12 @@ export interface FileRoutesByTo {
   '/api/admin/audio-url': typeof ApiAdminAudioUrlRoute
   '/api/admin/usage': typeof ApiAdminUsageRoute
   '/api/admin/user': typeof ApiAdminUserRoute
+  '/api/admin/user-action': typeof ApiAdminUserActionRoute
   '/api/admin/user-data': typeof ApiAdminUserDataRoute
+  '/api/admin/user-data-counts': typeof ApiAdminUserDataCountsRoute
   '/api/admin/users': typeof ApiAdminUsersRoute
+  '/api/admin/waitlist': typeof ApiAdminWaitlistRoute
+  '/api/admin/waitlist-action': typeof ApiAdminWaitlistActionRoute
   '/api/auth/ensure-role': typeof ApiAuthEnsureRoleRoute
   '/api/embed/openai': typeof ApiEmbedOpenaiRoute
   '/api/llm/anthropic': typeof ApiLlmAnthropicRoute
@@ -326,6 +366,7 @@ export interface FileRoutesById {
   '/_marketing/story': typeof MarketingStoryRoute
   '/admin/usage': typeof AdminUsageRoute
   '/admin/users': typeof AdminUsersRouteWithChildren
+  '/admin/waitlist': typeof AdminWaitlistRoute
   '/api/waitlist': typeof ApiWaitlistRoute
   '/app/events': typeof AppEventsRoute
   '/app/helpers': typeof AppHelpersRoute
@@ -339,8 +380,12 @@ export interface FileRoutesById {
   '/api/admin/audio-url': typeof ApiAdminAudioUrlRoute
   '/api/admin/usage': typeof ApiAdminUsageRoute
   '/api/admin/user': typeof ApiAdminUserRoute
+  '/api/admin/user-action': typeof ApiAdminUserActionRoute
   '/api/admin/user-data': typeof ApiAdminUserDataRoute
+  '/api/admin/user-data-counts': typeof ApiAdminUserDataCountsRoute
   '/api/admin/users': typeof ApiAdminUsersRoute
+  '/api/admin/waitlist': typeof ApiAdminWaitlistRoute
+  '/api/admin/waitlist-action': typeof ApiAdminWaitlistActionRoute
   '/api/auth/ensure-role': typeof ApiAuthEnsureRoleRoute
   '/api/embed/openai': typeof ApiEmbedOpenaiRoute
   '/api/llm/anthropic': typeof ApiLlmAnthropicRoute
@@ -367,6 +412,7 @@ export interface FileRouteTypes {
     | '/story'
     | '/admin/usage'
     | '/admin/users'
+    | '/admin/waitlist'
     | '/api/waitlist'
     | '/app/events'
     | '/app/helpers'
@@ -379,8 +425,12 @@ export interface FileRouteTypes {
     | '/api/admin/audio-url'
     | '/api/admin/usage'
     | '/api/admin/user'
+    | '/api/admin/user-action'
     | '/api/admin/user-data'
+    | '/api/admin/user-data-counts'
     | '/api/admin/users'
+    | '/api/admin/waitlist'
+    | '/api/admin/waitlist-action'
     | '/api/auth/ensure-role'
     | '/api/embed/openai'
     | '/api/llm/anthropic'
@@ -403,6 +453,7 @@ export interface FileRouteTypes {
     | '/story'
     | '/admin/usage'
     | '/admin/users'
+    | '/admin/waitlist'
     | '/api/waitlist'
     | '/app/events'
     | '/app/helpers'
@@ -415,8 +466,12 @@ export interface FileRouteTypes {
     | '/api/admin/audio-url'
     | '/api/admin/usage'
     | '/api/admin/user'
+    | '/api/admin/user-action'
     | '/api/admin/user-data'
+    | '/api/admin/user-data-counts'
     | '/api/admin/users'
+    | '/api/admin/waitlist'
+    | '/api/admin/waitlist-action'
     | '/api/auth/ensure-role'
     | '/api/embed/openai'
     | '/api/llm/anthropic'
@@ -442,6 +497,7 @@ export interface FileRouteTypes {
     | '/_marketing/story'
     | '/admin/usage'
     | '/admin/users'
+    | '/admin/waitlist'
     | '/api/waitlist'
     | '/app/events'
     | '/app/helpers'
@@ -455,8 +511,12 @@ export interface FileRouteTypes {
     | '/api/admin/audio-url'
     | '/api/admin/usage'
     | '/api/admin/user'
+    | '/api/admin/user-action'
     | '/api/admin/user-data'
+    | '/api/admin/user-data-counts'
     | '/api/admin/users'
+    | '/api/admin/waitlist'
+    | '/api/admin/waitlist-action'
     | '/api/auth/ensure-role'
     | '/api/embed/openai'
     | '/api/llm/anthropic'
@@ -478,8 +538,12 @@ export interface RootRouteChildren {
   ApiAdminAudioUrlRoute: typeof ApiAdminAudioUrlRoute
   ApiAdminUsageRoute: typeof ApiAdminUsageRoute
   ApiAdminUserRoute: typeof ApiAdminUserRoute
+  ApiAdminUserActionRoute: typeof ApiAdminUserActionRoute
   ApiAdminUserDataRoute: typeof ApiAdminUserDataRoute
+  ApiAdminUserDataCountsRoute: typeof ApiAdminUserDataCountsRoute
   ApiAdminUsersRoute: typeof ApiAdminUsersRoute
+  ApiAdminWaitlistRoute: typeof ApiAdminWaitlistRoute
+  ApiAdminWaitlistActionRoute: typeof ApiAdminWaitlistActionRoute
   ApiAuthEnsureRoleRoute: typeof ApiAuthEnsureRoleRoute
   ApiEmbedOpenaiRoute: typeof ApiEmbedOpenaiRoute
   ApiLlmAnthropicRoute: typeof ApiLlmAnthropicRoute
@@ -583,6 +647,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/api/waitlist'
       preLoaderRoute: typeof ApiWaitlistRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/admin/waitlist': {
+      id: '/admin/waitlist'
+      path: '/waitlist'
+      fullPath: '/admin/waitlist'
+      preLoaderRoute: typeof AdminWaitlistRouteImport
+      parentRoute: typeof AdminRoute
     }
     '/admin/users': {
       id: '/admin/users'
@@ -717,6 +788,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAuthEnsureRoleRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/waitlist-action': {
+      id: '/api/admin/waitlist-action'
+      path: '/api/admin/waitlist-action'
+      fullPath: '/api/admin/waitlist-action'
+      preLoaderRoute: typeof ApiAdminWaitlistActionRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/waitlist': {
+      id: '/api/admin/waitlist'
+      path: '/api/admin/waitlist'
+      fullPath: '/api/admin/waitlist'
+      preLoaderRoute: typeof ApiAdminWaitlistRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/admin/users': {
       id: '/api/admin/users'
       path: '/api/admin/users'
@@ -724,11 +809,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminUsersRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/user-data-counts': {
+      id: '/api/admin/user-data-counts'
+      path: '/api/admin/user-data-counts'
+      fullPath: '/api/admin/user-data-counts'
+      preLoaderRoute: typeof ApiAdminUserDataCountsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/admin/user-data': {
       id: '/api/admin/user-data'
       path: '/api/admin/user-data'
       fullPath: '/api/admin/user-data'
       preLoaderRoute: typeof ApiAdminUserDataRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/user-action': {
+      id: '/api/admin/user-action'
+      path: '/api/admin/user-action'
+      fullPath: '/api/admin/user-action'
+      preLoaderRoute: typeof ApiAdminUserActionRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/admin/user': {
@@ -811,12 +910,14 @@ const AdminUsersRouteWithChildren = AdminUsersRoute._addFileChildren(
 interface AdminRouteChildren {
   AdminUsageRoute: typeof AdminUsageRoute
   AdminUsersRoute: typeof AdminUsersRouteWithChildren
+  AdminWaitlistRoute: typeof AdminWaitlistRoute
   AdminIndexRoute: typeof AdminIndexRoute
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
   AdminUsageRoute: AdminUsageRoute,
   AdminUsersRoute: AdminUsersRouteWithChildren,
+  AdminWaitlistRoute: AdminWaitlistRoute,
   AdminIndexRoute: AdminIndexRoute,
 }
 
@@ -853,8 +954,12 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAdminAudioUrlRoute: ApiAdminAudioUrlRoute,
   ApiAdminUsageRoute: ApiAdminUsageRoute,
   ApiAdminUserRoute: ApiAdminUserRoute,
+  ApiAdminUserActionRoute: ApiAdminUserActionRoute,
   ApiAdminUserDataRoute: ApiAdminUserDataRoute,
+  ApiAdminUserDataCountsRoute: ApiAdminUserDataCountsRoute,
   ApiAdminUsersRoute: ApiAdminUsersRoute,
+  ApiAdminWaitlistRoute: ApiAdminWaitlistRoute,
+  ApiAdminWaitlistActionRoute: ApiAdminWaitlistActionRoute,
   ApiAuthEnsureRoleRoute: ApiAuthEnsureRoleRoute,
   ApiEmbedOpenaiRoute: ApiEmbedOpenaiRoute,
   ApiLlmAnthropicRoute: ApiLlmAnthropicRoute,

@@ -1,16 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, createFileRoute } from "@tanstack/react-router";
+import { toast } from "sonner";
 
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { Button } from "@/components/ui/button";
 import {
   AdminApiError,
   fetchUsage,
   fetchUser,
   fetchUserData,
+  fetchUserDataCounts,
+  performUserAction,
   playAudioFromAdminUrl,
+  relativeTime,
   stopAdminAudio,
 } from "@/lib/admin";
-import type { AdminUserRecord, UsageUserBucket } from "@/lib/admin";
+import type {
+  AdminUserAction,
+  AdminUserRecord,
+  UsageUserBucket,
+} from "@/lib/admin";
 
 export const Route = createFileRoute("/admin/users/$userId")({
   component: AdminUserDetailPage,
@@ -22,10 +31,15 @@ function AdminUserDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<AdminApiError | null>(null);
 
+  // Bumped after destructive Danger-zone actions complete to force a fresh
+  // /api/admin/user fetch and re-render the card with the new state.
+  const [refreshKey, setRefreshKey] = useState(0);
+  const refreshUser = () => setRefreshKey((k) => k + 1);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetchUser(userId)
+    fetchUser(userId, refreshKey > 0 ? { force: true } : undefined)
       .then((data) => {
         if (!cancelled) {
           setUser(data);
@@ -47,7 +61,7 @@ function AdminUserDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [userId]);
+  }, [userId, refreshKey]);
 
   // Stop any in-flight audio playback when navigating away from this page.
   useEffect(() => {
@@ -87,7 +101,7 @@ function AdminUserDetailPage() {
             <UsageCard uid={user.uid} />
           </div>
           <SyncedDataSection uid={user.uid} />
-          <DangerZone />
+          <DangerZone user={user} onChanged={refreshUser} />
         </>
       )}
     </div>
@@ -256,17 +270,47 @@ const SYNCED_TABS: SyncedTab[] = [
     label: "Voiceprint contributions",
     table: "voiceprintContributions",
   },
+  { key: "people", label: "People", table: "people" },
+  { key: "places", label: "Places", table: "places" },
+  { key: "events", label: "Events", table: "events" },
+  { key: "memories", label: "Memories", table: "memories" },
+  { key: "suggestionsLog", label: "Suggestions log", table: "suggestionsLog" },
 ];
 
 function SyncedDataSection({ uid }: { uid: string }) {
   const [activeKey, setActiveKey] = useState<string>(SYNCED_TABS[0].key);
   const active = SYNCED_TABS.find((t) => t.key === activeKey) ?? SYNCED_TABS[0];
 
-  // People rows for voiceprintContributions are looked up by personId, so we
-  // fetch them once when the contributions tab is active.
+  // Per-table document counts for the chip badges. Loaded once per user;
+  // the 30s cache in fetchUserDataCounts handles bounce-around navigation.
+  const [counts, setCounts] = useState<Record<string, number> | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setCounts(null);
+    fetchUserDataCounts(uid)
+      .then((c) => {
+        if (!cancelled) setCounts(c);
+      })
+      .catch(() => {
+        // best-effort — the chips render without a badge if the count fails.
+        if (!cancelled) setCounts({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [uid]);
+
+  // People rows are looked up by personId in several tabs (contributions,
+  // memories, suggestions), so fetch them once on first use.
   const [people, setPeople] = useState<Array<Record<string, unknown>> | null>(null);
   useEffect(() => {
-    if (activeKey !== "voiceprintContributions") return;
+    const needsPeople =
+      activeKey === "voiceprintContributions" ||
+      activeKey === "memories" ||
+      activeKey === "suggestionsLog" ||
+      activeKey === "voiceprints" ||
+      activeKey === "events";
+    if (!needsPeople) return;
     if (people !== null) return;
     let cancelled = false;
     fetchUserData(uid, "people", 500)
@@ -302,6 +346,7 @@ function SyncedDataSection({ uid }: { uid: string }) {
       <div className="mt-4 inline-flex flex-wrap gap-2 rounded-full border border-[var(--line)] bg-white p-1 text-sm">
         {SYNCED_TABS.map((t) => {
           const isActive = t.key === activeKey;
+          const n = counts?.[t.table];
           return (
             <button
               key={t.key}
@@ -310,11 +355,22 @@ function SyncedDataSection({ uid }: { uid: string }) {
               aria-pressed={isActive}
               className={
                 isActive
-                  ? "rounded-full bg-[var(--teal)] px-3 py-1 font-medium text-white"
-                  : "rounded-full px-3 py-1 font-medium text-[var(--ink-soft)] hover:text-foreground"
+                  ? "inline-flex items-center gap-1.5 rounded-full bg-[var(--teal)] px-3 py-1 font-medium text-white"
+                  : "inline-flex items-center gap-1.5 rounded-full px-3 py-1 font-medium text-[var(--ink-soft)] hover:text-foreground"
               }
             >
-              {t.label}
+              <span>{t.label}</span>
+              {typeof n === "number" ? (
+                <span
+                  className={
+                    isActive
+                      ? "rounded-full bg-white/20 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums"
+                      : "rounded-full bg-[var(--sand-2)] px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-[var(--ink-soft)]"
+                  }
+                >
+                  {n.toLocaleString()}
+                </span>
+              ) : null}
             </button>
           );
         })}
@@ -415,6 +471,21 @@ function SyncedTableView({
   }
   if (tableKey === "transcriptSegments") {
     return <SegmentsTable rows={rows} />;
+  }
+  if (tableKey === "people") {
+    return <PeopleTable rows={rows} />;
+  }
+  if (tableKey === "places") {
+    return <PlacesTable rows={rows} />;
+  }
+  if (tableKey === "events") {
+    return <EventsTable rows={rows} />;
+  }
+  if (tableKey === "memories") {
+    return <MemoriesTable rows={rows} peopleById={peopleById} />;
+  }
+  if (tableKey === "suggestionsLog") {
+    return <SuggestionsLogTable rows={rows} peopleById={peopleById} />;
   }
 
   return <GenericTable rows={rows} />;
@@ -523,33 +594,281 @@ function ContributionsTable({
   peopleById: Map<string, string>;
 }) {
   return (
+    <ul className="flex flex-col divide-y divide-[var(--line)]">
+      {rows.map((r, i) => {
+        const personId = readString(r.personId);
+        const personName = personId ? peopleById.get(personId) ?? null : null;
+        const audio = readAudioRef(r);
+        const source = readString(r.source);
+        const duration = readNumber(r.durationSec);
+        const previewText = readString(r.previewText);
+        const createdAt = readString(r.createdAt);
+        return (
+          <li key={readString(r.id) ?? i} className="px-2 py-3">
+            <div className="flex flex-wrap items-baseline gap-2">
+              <span className="font-medium text-[var(--ink)]">
+                {personName ?? personId ?? "Unknown person"}
+              </span>
+              {source ? <SourceBadge source={source} /> : null}
+            </div>
+            <div className="mt-0.5 text-xs text-[var(--ink-soft)]">
+              {duration != null ? `${duration.toFixed(1)}s · ` : null}
+              {audio ? `${fmtBytes(audio.sizeBytes)}` : "no audio"}
+              {createdAt ? ` · ${relativeTime(createdAt)}` : null}
+            </div>
+            {previewText ? (
+              <p className="mt-1.5 max-w-3xl truncate text-sm italic text-[var(--ink-soft)]">
+                “{previewText}”
+              </p>
+            ) : null}
+            <div className="mt-2">
+              {audio?.storagePath ? (
+                <ListenButton storagePath={audio.storagePath} durationSec={duration} />
+              ) : (
+                <Muted>No audio</Muted>
+              )}
+            </div>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/** Color-coded source badge — keeps enrolment vs conversation vs rediarize visually distinct. */
+function SourceBadge({ source }: { source: string }) {
+  const palette: Record<string, string> = {
+    enrollment: "bg-[#3b82f6]/10 text-[#1d4ed8]",
+    conversation: "bg-[var(--sand-2)] text-[var(--ink-soft)]",
+    rediarize: "bg-[var(--teal)]/10 text-[var(--teal-dark)]",
+  };
+  const cls = palette[source] ?? "bg-[var(--sand-2)] text-[var(--ink-soft)]";
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${cls}`}
+    >
+      {source}
+    </span>
+  );
+}
+
+function PeopleTable({ rows }: { rows: Array<Record<string, unknown>> }) {
+  return (
     <table className="w-full border-separate border-spacing-0 text-sm">
       <thead>
         <tr>
+          <Th>Name</Th>
+          <Th>Relationship</Th>
+          <Th>Status</Th>
+          <Th>Interests</Th>
           <Th>Created</Th>
-          <Th>Person</Th>
-          <Th>Source</Th>
-          <Th>Size</Th>
-          <Th>Listen</Th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r, i) => {
+          const interests = Array.isArray(r.interests) ? r.interests.length : null;
+          return (
+            <tr key={readString(r.id) ?? i}>
+              <Td>{readString(r.name) ?? <Muted>—</Muted>}</Td>
+              <Td>{readString(r.relationship) ?? <Muted>—</Muted>}</Td>
+              <Td>{readString(r.status) ?? <Muted>—</Muted>}</Td>
+              <Td>
+                {interests != null ? (
+                  `${interests} interest${interests === 1 ? "" : "s"}`
+                ) : (
+                  <Muted>—</Muted>
+                )}
+              </Td>
+              <Td>{fmtMaybeDate(r.createdAt)}</Td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+function PlacesTable({ rows }: { rows: Array<Record<string, unknown>> }) {
+  return (
+    <table className="w-full border-separate border-spacing-0 text-sm">
+      <thead>
+        <tr>
+          <Th>Name</Th>
+          <Th>Coordinates</Th>
+          <Th>People</Th>
+          <Th>Notes</Th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r, i) => {
+          const lat = readNumber(r.lat);
+          const lng = readNumber(r.lng);
+          const people = Array.isArray(r.personIds)
+            ? r.personIds.length
+            : Array.isArray(r.peopleIds)
+              ? r.peopleIds.length
+              : null;
+          return (
+            <tr key={readString(r.id) ?? i}>
+              <Td>{readString(r.name) ?? <Muted>—</Muted>}</Td>
+              <Td>
+                {lat != null && lng != null ? (
+                  <span className="font-mono text-xs">
+                    {lat.toFixed(4)}, {lng.toFixed(4)}
+                  </span>
+                ) : (
+                  <Muted>—</Muted>
+                )}
+              </Td>
+              <Td>
+                {people != null ? (
+                  `${people} associated`
+                ) : (
+                  <Muted>—</Muted>
+                )}
+              </Td>
+              <Td className="max-w-[28rem]">
+                <div className="line-clamp-2">
+                  {readString(r.notes) ?? <Muted>—</Muted>}
+                </div>
+              </Td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+function EventsTable({ rows }: { rows: Array<Record<string, unknown>> }) {
+  return (
+    <table className="w-full border-separate border-spacing-0 text-sm">
+      <thead>
+        <tr>
+          <Th>Name</Th>
+          <Th>When</Th>
+          <Th>Place</Th>
+          <Th>Attendees</Th>
+          <Th>Key info</Th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r, i) => {
+          const attendees = Array.isArray(r.attendeeIds)
+            ? r.attendeeIds.length
+            : Array.isArray(r.personIds)
+              ? r.personIds.length
+              : null;
+          return (
+            <tr key={readString(r.id) ?? i}>
+              <Td>{readString(r.name) ?? readString(r.title) ?? <Muted>—</Muted>}</Td>
+              <Td>{fmtMaybeDate(r.when ?? r.startsAt ?? r.startAt)}</Td>
+              <Td>{readString(r.placeId) ?? <Muted>—</Muted>}</Td>
+              <Td>{attendees != null ? attendees.toLocaleString() : <Muted>—</Muted>}</Td>
+              <Td className="max-w-[24rem]">
+                <div className="line-clamp-2">
+                  {readString(r.keyInfo) ?? <Muted>—</Muted>}
+                </div>
+              </Td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+function MemoriesTable({
+  rows,
+  peopleById,
+}: {
+  rows: Array<Record<string, unknown>>;
+  peopleById: Map<string, string>;
+}) {
+  return (
+    <table className="w-full border-separate border-spacing-0 text-sm">
+      <thead>
+        <tr>
+          <Th>Date</Th>
+          <Th>Memory</Th>
+          <Th>Tag</Th>
         </tr>
       </thead>
       <tbody>
         {rows.map((r, i) => {
           const personId = readString(r.personId);
-          const personName = personId ? peopleById.get(personId) ?? null : null;
-          const audio = readAudioRef(r);
+          const placeId = readString(r.placeId);
+          const tag = personId
+            ? peopleById.get(personId) ?? personId
+            : placeId ?? null;
           return (
             <tr key={readString(r.id) ?? i}>
-              <Td>{fmtMaybeDate(r.createdAt)}</Td>
-              <Td>{personName ?? personId ?? <Muted>—</Muted>}</Td>
-              <Td>{readString(r.source) ?? <Muted>—</Muted>}</Td>
-              <Td>{audio ? fmtBytes(audio.sizeBytes) : <Muted>—</Muted>}</Td>
+              <Td>{fmtMaybeDate(r.createdAt ?? r.date)}</Td>
+              <Td className="max-w-[36rem]">
+                <div className="line-clamp-3">
+                  {readString(r.text) ?? <Muted>—</Muted>}
+                </div>
+              </Td>
               <Td>
-                {audio?.storagePath ? (
-                  <ListenButton storagePath={audio.storagePath} />
+                {tag ? (
+                  <span className="inline-flex items-center rounded-full bg-[var(--sand-2)] px-2 py-0.5 text-xs font-medium text-[var(--ink-soft)]">
+                    {tag}
+                  </span>
                 ) : (
                   <Muted>—</Muted>
                 )}
+              </Td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  );
+}
+
+function SuggestionsLogTable({
+  rows,
+  peopleById,
+}: {
+  rows: Array<Record<string, unknown>>;
+  peopleById: Map<string, string>;
+}) {
+  return (
+    <table className="w-full border-separate border-spacing-0 text-sm">
+      <thead>
+        <tr>
+          <Th>Date</Th>
+          <Th>Category</Th>
+          <Th>Text</Th>
+          <Th>Selected</Th>
+          <Th>Person</Th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((r, i) => {
+          const personId = readString(r.personId);
+          const selected =
+            typeof r.selected === "boolean" ? r.selected : Boolean(r.wasSelected);
+          return (
+            <tr key={readString(r.id) ?? i}>
+              <Td>{fmtMaybeDate(r.createdAt)}</Td>
+              <Td>{readString(r.category) ?? <Muted>—</Muted>}</Td>
+              <Td className="max-w-[28rem]">
+                <div className="line-clamp-2">
+                  {readString(r.text) ?? <Muted>—</Muted>}
+                </div>
+              </Td>
+              <Td>
+                {selected ? (
+                  <span className="inline-flex items-center rounded-full bg-[var(--teal)]/10 px-2 py-0.5 text-xs font-medium text-[var(--teal-dark)]">
+                    yes
+                  </span>
+                ) : (
+                  <Muted>—</Muted>
+                )}
+              </Td>
+              <Td>
+                {personId ? (peopleById.get(personId) ?? personId) : <Muted>—</Muted>}
               </Td>
             </tr>
           );
@@ -590,8 +909,18 @@ function GenericTable({ rows }: { rows: Array<Record<string, unknown>> }) {
 // Listen button — toggles a single shared <audio> element.
 // --------------------------------------------------------------------------
 
-function ListenButton({ storagePath }: { storagePath: string }) {
+function ListenButton({
+  storagePath,
+  durationSec,
+}: {
+  storagePath: string;
+  durationSec: number | null;
+}) {
   const [state, setState] = useState<"idle" | "loading" | "playing" | "error">("idle");
+  // Tracked from the shared HTMLAudioElement during playback so the label can
+  // show "Pause · 0:02/0:04" and the progress bar can fill.
+  const [position, setPosition] = useState(0);
+  const [duration, setDuration] = useState<number>(durationSec ?? 0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   // Make sure the audio element forgets us when we leave the row.
@@ -614,10 +943,25 @@ function ListenButton({ storagePath }: { storagePath: string }) {
       const audio = await playAudioFromAdminUrl(storagePath);
       audioRef.current = audio;
       setState("playing");
+      setPosition(audio.currentTime || 0);
+      if (Number.isFinite(audio.duration) && audio.duration > 0) {
+        setDuration(audio.duration);
+      }
+      const onTime = () => {
+        if (audioRef.current === audio) setPosition(audio.currentTime);
+      };
+      const onMeta = () => {
+        if (audioRef.current === audio && Number.isFinite(audio.duration)) {
+          setDuration(audio.duration);
+        }
+      };
+      audio.addEventListener("timeupdate", onTime);
+      audio.addEventListener("loadedmetadata", onMeta);
       audio.addEventListener("ended", () => {
         if (audioRef.current === audio) {
           audioRef.current = null;
           setState("idle");
+          setPosition(0);
         }
       });
       audio.addEventListener("pause", () => {
@@ -631,25 +975,48 @@ function ListenButton({ storagePath }: { storagePath: string }) {
     }
   }
 
-  const label =
+  const totalLabel = duration > 0 ? fmtClock(duration) : null;
+  const playingLabel =
     state === "playing"
-      ? "Pause"
+      ? `Pause · ${fmtClock(position)}${totalLabel ? `/${totalLabel}` : ""}`
       : state === "loading"
         ? "Loading…"
         : state === "error"
           ? "Try again"
-          : "Listen";
+          : `Listen${totalLabel ? ` · ${totalLabel}` : ""}`;
+
+  const progressPct =
+    duration > 0 ? Math.min(100, (position / duration) * 100) : 0;
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={state === "loading"}
-      className="inline-flex items-center rounded-md border border-[var(--line)] px-2 py-1 text-xs font-medium hover:bg-[var(--sand-2)] disabled:opacity-50"
-    >
-      {label}
-    </button>
+    <div className="flex flex-col gap-1">
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={state === "loading"}
+        className="inline-flex w-fit items-center rounded-md border border-[var(--line)] px-2 py-1 text-xs font-medium hover:bg-[var(--sand-2)] disabled:opacity-50"
+      >
+        {playingLabel}
+      </button>
+      <div
+        className="h-1 w-40 overflow-hidden rounded-full bg-[var(--sand-2)]"
+        aria-hidden="true"
+      >
+        <div
+          className="h-full bg-[var(--teal)] transition-[width] duration-100 ease-linear"
+          style={{ width: `${progressPct}%` }}
+        />
+      </div>
+    </div>
   );
+}
+
+function fmtClock(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return "0:00";
+  const total = Math.floor(seconds);
+  const mins = Math.floor(total / 60);
+  const secs = total % 60;
+  return `${mins}:${secs.toString().padStart(2, "0")}`;
 }
 
 // --------------------------------------------------------------------------
@@ -688,25 +1055,152 @@ function readAudioRef(row: Record<string, unknown>): {
   return null;
 }
 
-function DangerZone() {
+type DialogState =
+  | { kind: "closed" }
+  | { kind: "revoke-admin" }
+  | { kind: "disable" }
+  | { kind: "enable" }
+  | { kind: "delete-step1" } // type email
+  | { kind: "delete-step2" }; // type DELETE
+
+function DangerZone({
+  user,
+  onChanged,
+}: {
+  user: AdminUserRecord;
+  onChanged: () => void;
+}) {
+  const [dialog, setDialog] = useState<DialogState>({ kind: "closed" });
+  const [busy, setBusy] = useState(false);
+
+  // The email is the "type to confirm" string for both revoke-admin and the
+  // first delete step. Fall back to the uid if the account somehow has no
+  // email (shouldn't happen for Parley accounts, but defence in depth).
+  const confirmIdentity = user.email ?? user.uid;
+
+  async function run(action: AdminUserAction, successMessage: string) {
+    setBusy(true);
+    try {
+      const result = await performUserAction(user.uid, action);
+      toast.success(successMessage);
+      if (result.partial) {
+        toast.warning(
+          "Auth account deleted, but the Firestore/Storage wipe didn't fully complete. Check server logs.",
+        );
+      }
+      onChanged();
+    } catch (err) {
+      const message =
+        err instanceof AdminApiError ? err.message : "Action failed.";
+      toast.error(message);
+    } finally {
+      setBusy(false);
+      setDialog({ kind: "closed" });
+    }
+  }
+
   return (
     <div className="mt-10 rounded-2xl border border-[var(--line)] bg-white p-6">
       <h2 className="text-base font-semibold text-[var(--coral)]">Danger zone</h2>
       <p className="mt-1 text-sm text-[var(--ink-soft)]">
-        Destructive actions — not yet wired up. The buttons are visible so the affordance is
-        obvious, but they do nothing.
+        Destructive actions. Each requires an extra confirm step — typing the account email or
+        the word DELETE — so a stray tap can't wipe data.
       </p>
       <div className="mt-4 flex flex-wrap gap-3">
-        <Button variant="outline" disabled title="Not implemented">
-          Revoke admin
-        </Button>
-        <Button variant="outline" disabled title="Not implemented">
-          Disable account
-        </Button>
-        <Button variant="destructive" disabled title="Not implemented">
+        {user.is_admin ? (
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => setDialog({ kind: "revoke-admin" })}
+          >
+            Revoke admin
+          </Button>
+        ) : null}
+        {user.disabled ? (
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => setDialog({ kind: "enable" })}
+          >
+            Enable account
+          </Button>
+        ) : (
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => setDialog({ kind: "disable" })}
+          >
+            Disable account
+          </Button>
+        )}
+        <Button
+          variant="destructive"
+          disabled={busy}
+          onClick={() => setDialog({ kind: "delete-step1" })}
+        >
           Delete account
         </Button>
       </div>
+
+      {/* Revoke admin — typed email confirm */}
+      <ConfirmDialog
+        open={dialog.kind === "revoke-admin"}
+        onOpenChange={(o) => !o && setDialog({ kind: "closed" })}
+        title="Revoke admin?"
+        description={`Clears the admin custom claim from ${confirmIdentity}. They'll lose access to /admin on their next ID-token refresh.`}
+        confirmLabel="Revoke admin"
+        destructive
+        requireTypedText={confirmIdentity}
+        typedTextLabel={`Type "${confirmIdentity}" to confirm`}
+        onConfirm={() => run("revoke-admin", "Admin revoked.")}
+      />
+
+      {/* Disable account — simple confirm */}
+      <ConfirmDialog
+        open={dialog.kind === "disable"}
+        onOpenChange={(o) => !o && setDialog({ kind: "closed" })}
+        title="Disable this account?"
+        description={`${confirmIdentity} won't be able to sign in until the account is enabled again. Their data stays in Firestore + Storage.`}
+        confirmLabel="Disable account"
+        destructive
+        onConfirm={() => run("disable", "Account disabled.")}
+      />
+
+      {/* Enable account — simple, neutral confirm */}
+      <ConfirmDialog
+        open={dialog.kind === "enable"}
+        onOpenChange={(o) => !o && setDialog({ kind: "closed" })}
+        title="Re-enable this account?"
+        description={`${confirmIdentity} will be able to sign in again on their next attempt.`}
+        confirmLabel="Enable account"
+        onConfirm={() => run("enable", "Account enabled.")}
+      />
+
+      {/* Delete step 1 — type the email */}
+      <ConfirmDialog
+        open={dialog.kind === "delete-step1"}
+        onOpenChange={(o) => !o && setDialog({ kind: "closed" })}
+        title="Delete this account?"
+        description={`This permanently removes the Firebase Auth account for ${confirmIdentity} and best-effort wipes their Firestore + Storage data. There is no undo.`}
+        confirmLabel="Continue"
+        destructive
+        requireTypedText={confirmIdentity}
+        typedTextLabel={`Type "${confirmIdentity}" to continue`}
+        onConfirm={() => setDialog({ kind: "delete-step2" })}
+      />
+
+      {/* Delete step 2 — type DELETE */}
+      <ConfirmDialog
+        open={dialog.kind === "delete-step2"}
+        onOpenChange={(o) => !o && setDialog({ kind: "closed" })}
+        title="Final confirmation"
+        description={`Last chance. Type DELETE to wipe ${confirmIdentity} and their synced data.`}
+        confirmLabel="Delete account"
+        destructive
+        requireTypedText="DELETE"
+        typedTextLabel='Type "DELETE" (uppercase) to confirm'
+        onConfirm={() => run("delete", "Account deleted.")}
+      />
     </div>
   );
 }

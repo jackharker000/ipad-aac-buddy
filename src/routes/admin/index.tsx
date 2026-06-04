@@ -10,6 +10,7 @@ export const Route = createFileRoute("/admin/")({
 
 function AdminOverview() {
   const [users, setUsers] = useState<AdminUserRecord[] | null>(null);
+  const [usage1d, setUsage1d] = useState<UsageAggregate | null>(null);
   const [usage7d, setUsage7d] = useState<UsageAggregate | null>(null);
   const [usage30d, setUsage30d] = useState<UsageAggregate | null>(null);
   const [loading, setLoading] = useState(true);
@@ -18,10 +19,11 @@ function AdminOverview() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    Promise.all([fetchUsers(), fetchUsage(7), fetchUsage(30)])
-      .then(([list, u7, u30]) => {
+    Promise.all([fetchUsers(), fetchUsage(1), fetchUsage(7), fetchUsage(30)])
+      .then(([list, u1, u7, u30]) => {
         if (!cancelled) {
           setUsers(list);
+          setUsage1d(u1);
           setUsage7d(u7);
           setUsage30d(u30);
           setError(null);
@@ -42,6 +44,21 @@ function AdminOverview() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  // Live refresh for the "Active now" widget. Polls every 30s, force-bypassing
+  // the shared 30s cache so each tick actually hits the server. Cleans up on
+  // unmount; the cache TTL elsewhere prevents this from hammering Firestore
+  // when multiple admin tabs are open at once.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      fetchUsage(1, { force: true })
+        .then((u) => setUsage1d(u))
+        .catch(() => {
+          // Stay on the last good snapshot — better than blanking the widget.
+        });
+    }, 30_000);
+    return () => window.clearInterval(id);
   }, []);
 
   const banner = (
@@ -86,6 +103,14 @@ function AdminOverview() {
   const activeUsers7d =
     usage7d?.byUser.filter((b) => b.uid && b.events > 0).length ?? 0;
   const spend30dDollars = (usage30d?.totals.millicents ?? 0) / 100_000;
+  const activeRecent = usage1d?.activeRecent;
+  const activeNowUids = activeRecent?.uids ?? [];
+  const activeNowWindow = activeRecent?.minutes ?? 15;
+  const emailByUid = new Map<string, string | null>();
+  for (const u of list) emailByUid.set(u.uid, u.email);
+  const activeNowEmails = activeNowUids
+    .map((uid) => emailByUid.get(uid) ?? null)
+    .filter((email): email is string => Boolean(email));
 
   return (
     <div className="mx-auto max-w-screen-2xl px-5 py-5">
@@ -93,7 +118,7 @@ function AdminOverview() {
 
       {banner}
 
-      <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+      <div className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5">
         <StatCard label="Total users" value={list.length.toLocaleString()} />
         <StatCard label="Active users (7d)" value={activeUsers7d.toLocaleString()} />
         <StatCard label="Admins" value={admins.toLocaleString()} />
@@ -105,6 +130,11 @@ function AdminOverview() {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2,
           })}
+        />
+        <ActiveNowCard
+          uids={activeNowUids}
+          emails={activeNowEmails}
+          windowMinutes={activeNowWindow}
         />
       </div>
 
@@ -148,6 +178,51 @@ function StatCard({ label, value, note }: { label: string; value: string; note?:
       <div className="text-sm font-medium text-[var(--ink-soft)]">{label}</div>
       <div className="mt-2 text-3xl font-semibold tracking-tight">{value}</div>
       {note ? <p className="mt-2 text-xs italic text-[var(--ink-soft)]">{note}</p> : null}
+    </div>
+  );
+}
+
+/**
+ * Live "Active now" card. Refreshes every 30s on the page (see the polling
+ * effect in AdminOverview). When nobody is active in the window, falls back
+ * to a soft muted message so the card never reads as broken.
+ */
+function ActiveNowCard({
+  uids,
+  emails,
+  windowMinutes,
+}: {
+  uids: string[];
+  emails: string[];
+  windowMinutes: number;
+}) {
+  const count = uids.length;
+  return (
+    <div className="rounded-2xl border border-[var(--line)] bg-white p-6">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-medium text-[var(--ink-soft)]">Active now</div>
+        {count > 0 ? (
+          <span
+            title={`Active in the last ${windowMinutes} minutes`}
+            className="inline-block h-2 w-2 rounded-full bg-[var(--teal)]"
+          />
+        ) : null}
+      </div>
+      <div className="mt-2 text-3xl font-semibold tracking-tight">
+        {count.toLocaleString()}
+      </div>
+      {count === 0 ? (
+        <p className="mt-2 text-xs italic text-[var(--ink-soft)]">
+          Nobody right now.
+        </p>
+      ) : (
+        <p
+          className="mt-2 line-clamp-2 text-xs text-[var(--ink-soft)]"
+          title={emails.join("\n")}
+        >
+          {emails.length > 0 ? emails.join(", ") : `${count} unknown`}
+        </p>
+      )}
     </div>
   );
 }

@@ -510,6 +510,7 @@ function Cockpit() {
           jamesName={jamesProfile?.displayName ?? "Me"}
           rosterPeople={people.filter((p) => selectedPersonIds.includes(p.id))}
           onReassign={reassignSegment}
+          displayPreset={settings?.displayPreset ?? "11"}
         />
       </div>
 
@@ -722,16 +723,25 @@ function SuggestionCard({
 
 // --------------------------------------------------------------------------
 
+const TRANSCRIPT_MAX_HEIGHT_PX: Record<"mini" | "11" | "12.9" | "13", number> = {
+  mini: 220,
+  "11": 320,
+  "12.9": 460,
+  "13": 520,
+};
+
 function TranscriptColumn({
   transcript,
   jamesName,
   rosterPeople,
   onReassign,
+  displayPreset,
 }: {
   transcript: LiveTranscriptSegment[];
   jamesName: string;
   rosterPeople: Person[];
   onReassign: (segmentId: string, personId: string | null) => void;
+  displayPreset: "mini" | "11" | "12.9" | "13";
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const [reassigningId, setReassigningId] = useState<string | null>(null);
@@ -739,12 +749,18 @@ function TranscriptColumn({
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [transcript.length]);
 
+  const maxHeightPx = TRANSCRIPT_MAX_HEIGHT_PX[displayPreset];
+
   return (
     <div className="rounded-2xl border border-border bg-card">
       <div className="px-4 pt-3 text-xs font-medium uppercase tracking-wider text-muted-foreground">
         Transcript
       </div>
-      <div ref={scrollRef} className="max-h-[260px] overflow-y-auto p-4">
+      <div
+        ref={scrollRef}
+        className="overflow-y-auto p-4"
+        style={{ maxHeight: `${maxHeightPx}px` }}
+      >
         {transcript.length === 0 ? (
           <p className="text-sm text-muted-foreground">Live transcript appears here.</p>
         ) : (

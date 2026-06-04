@@ -30,8 +30,7 @@ function PrivacyPage() {
           in-app settings. Cached audio for the quick-phrase buttons syncs too.
         </p>
         <p className="text-base leading-relaxed text-[var(--ink-soft)]">
-          You can turn cloud sync off per account in Settings. With it off, the account still
-          works — your data just stays on that iPad.
+          You can turn cloud sync off per account in <strong className="font-semibold text-[var(--ink)]">Settings → System → Cloud sync</strong>. With it off, the account still works — your data just stays on that iPad.
         </p>
       </section>
 
@@ -75,9 +74,7 @@ function PrivacyPage() {
       <section className="mt-12 flex flex-col gap-5">
         <h2 className="text-xl font-semibold tracking-tight md:text-2xl">You&apos;re in control</h2>
         <p className="text-base leading-relaxed text-[var(--ink-soft)]">
-          Cloud sync can be switched off per account in Settings — the account still works, your
-          data just stays on the iPad. You can export your on-device data, and you can wipe
-          everything with one button in Settings.
+          Cloud sync can be switched off per account in <strong className="font-semibold text-[var(--ink)]">Settings → System → Cloud sync</strong> — the account still works, your data just stays on the iPad. You can export your on-device data, and you can wipe everything with one button under <strong className="font-semibold text-[var(--ink)]">Settings → System → Danger zone</strong>.
         </p>
       </section>
 

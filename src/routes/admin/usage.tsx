@@ -1,9 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { z } from "zod";
 
 import { AdminApiError, fetchUsage, fetchUsers } from "@/lib/admin";
-import type { AdminUserRecord, UsageAggregate, UsageUserBucket } from "@/lib/admin";
+import type {
+  AdminUserRecord,
+  UsageAggregate,
+  UsageDayBucket,
+  UsageUserBucket,
+} from "@/lib/admin";
 
 /**
  * Admin → Usage. Reads aggregated `usage_events` from `/api/admin/usage`
@@ -149,11 +154,25 @@ function AdminUsagePage() {
         <StatCard label="TTS characters" value={agg.totals.characters.toLocaleString()} />
       </div>
 
+      <Section title={`Spend over the last ${agg.days} days`}>
+        {agg.byDay && agg.byDay.length > 0 ? (
+          <SpendSparkline days={agg.byDay} />
+        ) : (
+          <EmptyRow message="No daily data in this window." />
+        )}
+      </Section>
+
       <Section title="By user">
         {agg.byUser.length === 0 ? (
           <EmptyRow message="No usage events in this window. New accounts won't show usage until they make their first AI call." />
         ) : (
-          <ByUserTable rows={agg.byUser} emailByUid={emailByUid} />
+          <ByUserTable
+            rows={agg.byUser}
+            emailByUid={emailByUid}
+            rangeFrom={agg.rangeFrom}
+            rangeTo={agg.rangeTo}
+            days={agg.days}
+          />
         )}
       </Section>
 
@@ -231,10 +250,23 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function ByUserTable({
   rows,
   emailByUid,
+  rangeFrom,
+  rangeTo,
+  days,
 }: {
   rows: UsageUserBucket[];
   emailByUid: Map<string, string | null>;
+  rangeFrom: string;
+  rangeTo: string;
+  days: number;
 }) {
+  // The forecast column extrapolates the window's spend onto a 30-day month.
+  // For a 30-day (or longer) window the projection is the same as the spend
+  // — meaningless extra column — so we hide it.
+  const showForecast = days < 30;
+  const elapsedDays = elapsedDaysIn(rangeFrom, rangeTo);
+  const forecastMultiplier = elapsedDays > 0 ? 30 / elapsedDays : 0;
+
   return (
     <table className="w-full border-separate border-spacing-0 text-sm">
       <thead>
@@ -244,6 +276,7 @@ function ByUserTable({
           <Th>Tokens in</Th>
           <Th>Tokens out</Th>
           <Th>Spend</Th>
+          {showForecast ? <Th>30d forecast</Th> : null}
         </tr>
       </thead>
       <tbody>
@@ -256,11 +289,194 @@ function ByUserTable({
             <Td>{r.tokensIn.toLocaleString()}</Td>
             <Td>{r.tokensOut.toLocaleString()}</Td>
             <Td>{fmtUsd(r.millicents)}</Td>
+            {showForecast ? (
+              <Td>
+                {forecastMultiplier > 0 ? (
+                  fmtUsd(Math.round(r.millicents * forecastMultiplier))
+                ) : (
+                  <span className="text-[var(--ink-soft)]">—</span>
+                )}
+              </Td>
+            ) : null}
           </tr>
         ))}
       </tbody>
     </table>
   );
+}
+
+/**
+ * Number of days covered by the response window, derived from rangeFrom/rangeTo.
+ * Used for the per-month forecast on the byUser table.
+ */
+function elapsedDaysIn(fromIso: string, toIso: string): number {
+  const from = new Date(fromIso);
+  const to = new Date(toIso);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime())) return 0;
+  return Math.max(1, (to.getTime() - from.getTime()) / (24 * 60 * 60 * 1000));
+}
+
+// --------------------------------------------------------------------------
+// Spend sparkline — inline SVG, no charting library.
+// --------------------------------------------------------------------------
+
+function SpendSparkline({ days }: { days: UsageDayBucket[] }) {
+  // Hover/focus state for the tooltip. The `pointer` index is the day the
+  // cursor is closest to in normalised x-space.
+  const [pointer, setPointer] = useState<number | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  // Fixed canvas geometry — width is responsive via viewBox; height is fixed
+  // to keep label spacing predictable across viewport sizes.
+  const width = 800;
+  const height = 96;
+  const padLeft = 8;
+  const padRight = 8;
+  const padTop = 8;
+  const padBottom = 22; // room for the date axis
+  const plotW = width - padLeft - padRight;
+  const plotH = height - padTop - padBottom;
+
+  const n = days.length;
+  const maxMc = Math.max(1, ...days.map((d) => d.millicents)); // floor=1 → no div-by-zero on all-zero days
+  const xOf = (i: number) => padLeft + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW);
+  const yOf = (mc: number) => padTop + ((maxMc - mc) / maxMc) * plotH;
+
+  const linePath = useMemo(() => {
+    if (n === 0) return "";
+    return days
+      .map((d, i) => `${i === 0 ? "M" : "L"}${xOf(i).toFixed(1)},${yOf(d.millicents).toFixed(1)}`)
+      .join(" ");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [days]);
+
+  // Horizontal grid lines at 0%, 50%, 100% of the data max.
+  const gridYs = [0, 0.5, 1].map((p) => padTop + p * plotH);
+
+  // First / middle / last labels for the date axis.
+  const labelIdxs = n <= 1 ? [0] : n === 2 ? [0, 1] : [0, Math.floor((n - 1) / 2), n - 1];
+
+  function onMove(e: React.PointerEvent<SVGSVGElement>) {
+    const svg = e.currentTarget;
+    const rect = svg.getBoundingClientRect();
+    const localX = ((e.clientX - rect.left) / rect.width) * width;
+    if (n === 0) return;
+    if (n === 1) {
+      setPointer(0);
+      return;
+    }
+    const ratio = Math.max(0, Math.min(1, (localX - padLeft) / plotW));
+    const idx = Math.round(ratio * (n - 1));
+    setPointer(idx);
+  }
+
+  function onLeave() {
+    setPointer(null);
+  }
+
+  const active = pointer != null ? days[pointer] : null;
+
+  return (
+    <div ref={containerRef} className="relative h-32 w-full px-1 py-1">
+      <svg
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
+        className="h-full w-full"
+        role="img"
+        aria-label="Daily spend over the window"
+        onPointerMove={onMove}
+        onPointerLeave={onLeave}
+        tabIndex={0}
+      >
+        {/* Dotted horizontal grid lines */}
+        {gridYs.map((y, i) => (
+          <line
+            key={i}
+            x1={padLeft}
+            x2={width - padRight}
+            y1={y}
+            y2={y}
+            stroke="var(--line)"
+            strokeDasharray="2 4"
+            strokeWidth={1}
+          />
+        ))}
+        {/* Date axis labels */}
+        {labelIdxs.map((idx) => {
+          const d = days[idx];
+          if (!d) return null;
+          const x = xOf(idx);
+          // Keep the first label left-anchored and the last right-anchored so
+          // they don't escape the SVG box.
+          const anchor = idx === 0 ? "start" : idx === n - 1 ? "end" : "middle";
+          return (
+            <text
+              key={`label-${idx}`}
+              x={x}
+              y={height - 6}
+              textAnchor={anchor}
+              className="fill-[var(--ink-soft)]"
+              style={{ fontSize: 11 }}
+            >
+              {fmtDayLabel(d.date)}
+            </text>
+          );
+        })}
+        {/* Spend line */}
+        <path
+          d={linePath}
+          fill="none"
+          stroke="var(--teal)"
+          strokeWidth={2}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+        {/* Hovered point indicator */}
+        {active && pointer != null ? (
+          <g>
+            <line
+              x1={xOf(pointer)}
+              x2={xOf(pointer)}
+              y1={padTop}
+              y2={padTop + plotH}
+              stroke="var(--teal-dark)"
+              strokeWidth={1}
+              strokeDasharray="2 2"
+            />
+            <circle
+              cx={xOf(pointer)}
+              cy={yOf(active.millicents)}
+              r={3.5}
+              fill="var(--teal-dark)"
+            />
+          </g>
+        ) : null}
+      </svg>
+
+      {/* Tooltip — positioned in CSS over the hovered x-position */}
+      {active && pointer != null ? (
+        <div
+          className="pointer-events-none absolute -top-1 rounded-md border border-[var(--line)] bg-white px-2 py-1 text-xs shadow-sm"
+          style={{
+            left: `calc(${((xOf(pointer) / width) * 100).toFixed(2)}% + 8px)`,
+            transform: "translateX(-50%)",
+          }}
+        >
+          <div className="font-medium text-[var(--ink)]">{fmtDayLabel(active.date)}</div>
+          <div className="text-[var(--ink-soft)]">{fmtUsd(active.millicents)}</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Short locale date for the sparkline tooltip + axis ("Jun 4"). */
+function fmtDayLabel(yyyymmdd: string): string {
+  // Parse as UTC midnight so the local-time render doesn't shift the day.
+  const [y, m, d] = yyyymmdd.split("-").map(Number);
+  if (!y || !m || !d) return yyyymmdd;
+  const date = new Date(Date.UTC(y, m - 1, d));
+  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 function UserCell({

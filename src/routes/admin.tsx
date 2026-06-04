@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   Link,
   Outlet,
@@ -6,6 +6,7 @@ import {
   useRouter,
 } from "@tanstack/react-router";
 
+import { CommandPalette } from "@/components/admin/CommandPalette";
 import { ParleyLogo } from "@/components/ParleyLogo";
 import { cn } from "@/lib/cn";
 import { signOut, useSession } from "@/lib/auth";
@@ -17,12 +18,14 @@ export const Route = createFileRoute("/admin")({
 const NAV: Array<{ to: string; label: string; exact?: boolean }> = [
   { to: "/admin", label: "Overview", exact: true },
   { to: "/admin/users", label: "Users" },
+  { to: "/admin/waitlist", label: "Waitlist" },
   { to: "/admin/usage", label: "Usage" },
 ];
 
 function AdminLayout() {
   const router = useRouter();
   const { user, loading } = useSession();
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => {
     if (loading) return;
@@ -35,6 +38,19 @@ function AdminLayout() {
       router.navigate({ to: "/app" });
     }
   }, [loading, user, router]);
+
+  // Global Cmd-K / Ctrl-K opens the user-search palette. Bound on the admin
+  // layout so every /admin/* page picks it up automatically.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "k" || e.key === "K")) {
+        e.preventDefault();
+        setPaletteOpen((prev) => !prev);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   if (loading || !user || !user.is_admin) {
     return (
@@ -84,6 +100,14 @@ function AdminLayout() {
               >
                 Back to app
               </Link>
+              <button
+                type="button"
+                onClick={() => setPaletteOpen(true)}
+                title="Search users (⌘K)"
+                className="inline-flex items-center gap-1 rounded-md border border-[var(--line)] bg-[var(--sand-2)] px-2 py-1 text-xs font-mono text-[var(--ink-soft)] hover:bg-[var(--sand)] hover:text-foreground"
+              >
+                ⌘K
+              </button>
               <span className="hidden text-xs text-muted-foreground sm:inline">
                 {user.email}
               </span>
@@ -100,6 +124,7 @@ function AdminLayout() {
       <main className="flex-1">
         <Outlet />
       </main>
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
     </div>
   );
 }

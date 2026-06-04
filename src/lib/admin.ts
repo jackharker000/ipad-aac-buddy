@@ -72,6 +72,8 @@ async function parseError(res: Response): Promise<never> {
 const CACHE_TTL_MS = 30_000;
 let usersCache: { value: AdminUserRecord[]; at: number } | null = null;
 const usageCache = new Map<number, { value: UsageAggregate; at: number }>();
+const userCache = new Map<string, { value: AdminUserRecord | null; at: number }>();
+const userDataCountsCache = new Map<string, { value: Record<string, number>; at: number }>();
 
 /** Fetch every Parley account (newest first). Throws AdminApiError on failure. */
 export async function fetchUsers(opts?: { force?: boolean }): Promise<AdminUserRecord[]> {
@@ -86,11 +88,22 @@ export async function fetchUsers(opts?: { force?: boolean }): Promise<AdminUserR
 }
 
 /** Fetch a single account by uid. Returns null if it doesn't exist (404). */
-export async function fetchUser(uid: string): Promise<AdminUserRecord | null> {
+export async function fetchUser(
+  uid: string,
+  opts?: { force?: boolean },
+): Promise<AdminUserRecord | null> {
+  const cached = userCache.get(uid);
+  if (!opts?.force && cached && Date.now() - cached.at < CACHE_TTL_MS) {
+    return cached.value;
+  }
   const res = await authedFetch("/api/admin/user", { uid });
-  if (res.status === 404) return null;
+  if (res.status === 404) {
+    userCache.set(uid, { value: null, at: Date.now() });
+    return null;
+  }
   if (!res.ok) return parseError(res);
   const body = (await res.json()) as { user: AdminUserRecord };
+  userCache.set(uid, { value: body.user, at: Date.now() });
   return body.user;
 }
 
@@ -110,6 +123,7 @@ export type UsageUserBucket = {
 
 export type UsageKindBucket = { kind: string; events: number; millicents: number };
 export type UsageProviderBucket = { provider: string; events: number; millicents: number };
+export type UsageDayBucket = { date: string; events: number; millicents: number };
 
 export type UsageAggregate = {
   totals: {
@@ -123,9 +137,16 @@ export type UsageAggregate = {
   byUser: UsageUserBucket[];
   byKind: UsageKindBucket[];
   byProvider: UsageProviderBucket[];
+  byDay: UsageDayBucket[];
   days: number;
   rangeFrom: string;
   rangeTo: string;
+  /**
+   * Distinct uids active in the last 15 minutes. Populated by the server only
+   * when `days <= 1` (Overview's "Active now" widget) so the rest of the
+   * pages don't pay for the extra scan.
+   */
+  activeRecent?: { uids: string[]; minutes: number };
 };
 
 /** Fetch aggregated usage_events for the last `days` days. */
@@ -162,6 +183,50 @@ export async function fetchUserData(
   if (!res.ok) return parseError(res);
   const body = (await res.json()) as { rows: Array<Record<string, unknown>> };
   return body.rows;
+}
+
+/**
+ * Fetch per-table document counts for a user. Powers the chip badges on the
+ * admin user-detail Synced data section.
+ */
+export async function fetchUserDataCounts(
+  uid: string,
+  opts?: { force?: boolean },
+): Promise<Record<string, number>> {
+  const cached = userDataCountsCache.get(uid);
+  if (!opts?.force && cached && Date.now() - cached.at < CACHE_TTL_MS) {
+    return cached.value;
+  }
+  const res = await authedFetch("/api/admin/user-data-counts", { uid });
+  if (!res.ok) return parseError(res);
+  const body = (await res.json()) as { counts: Record<string, number> };
+  userDataCountsCache.set(uid, { value: body.counts, at: Date.now() });
+  return body.counts;
+}
+
+// --------------------------------------------------------------------------
+// Destructive account actions (from /api/admin/user-action)
+// --------------------------------------------------------------------------
+
+export type AdminUserAction = "revoke-admin" | "disable" | "enable" | "delete";
+
+/**
+ * Run a destructive account action. Returns `{ partial: true }` when a
+ * `delete` succeeded against Firebase Auth but the Firestore/Storage wipe
+ * didn't fully complete. Throws AdminApiError on failure.
+ */
+export async function performUserAction(
+  uid: string,
+  action: AdminUserAction,
+): Promise<{ partial: boolean }> {
+  const res = await authedFetch("/api/admin/user-action", { uid, action });
+  if (!res.ok) return parseError(res);
+  const body = (await res.json()) as { ok: true; partial?: boolean };
+  // Invalidate the caches that could surface the now-stale user/aggregates.
+  userCache.delete(uid);
+  usersCache = null;
+  userDataCountsCache.delete(uid);
+  return { partial: Boolean(body.partial) };
 }
 
 // --------------------------------------------------------------------------
@@ -207,6 +272,43 @@ export function stopAdminAudio(): void {
     }
     currentAudio = null;
   }
+}
+
+// --------------------------------------------------------------------------
+// Waitlist (from /api/admin/waitlist + /api/admin/waitlist-action)
+// --------------------------------------------------------------------------
+
+export type WaitlistEntry = {
+  id: string;
+  name: string;
+  email: string;
+  about: string;
+  createdAt: string | null;
+  status: string | null;
+  onboardedAt: string | null;
+};
+
+export type WaitlistAction = "onboarded" | "archive" | "delete";
+
+let waitlistCache: { value: WaitlistEntry[]; at: number } | null = null;
+
+/** Fetch waitlist entries newest-first. Throws AdminApiError on failure. */
+export async function fetchWaitlist(opts?: { force?: boolean }): Promise<WaitlistEntry[]> {
+  if (!opts?.force && waitlistCache && Date.now() - waitlistCache.at < CACHE_TTL_MS) {
+    return waitlistCache.value;
+  }
+  const res = await authedFetch("/api/admin/waitlist");
+  if (!res.ok) return parseError(res);
+  const body = (await res.json()) as { entries: WaitlistEntry[] };
+  waitlistCache = { value: body.entries, at: Date.now() };
+  return body.entries;
+}
+
+/** Update or delete a single waitlist entry. Invalidates the local cache. */
+export async function markWaitlistEntry(id: string, action: WaitlistAction): Promise<void> {
+  const res = await authedFetch("/api/admin/waitlist-action", { id, action });
+  if (!res.ok) return parseError(res);
+  waitlistCache = null;
 }
 
 // --------------------------------------------------------------------------

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
 
 import { cn } from "@/lib/cn";
@@ -10,6 +11,10 @@ import { cn } from "@/lib/cn";
  * Controlled — caller owns `open` so the consumer can keep the trigger that
  * opened it as a normal button (avoiding the Radix Trigger sandwich for
  * cases where the action button lives elsewhere in the row).
+ *
+ * Optional `requireTypedText` gates the confirm button until the user types
+ * the exact phrase (case-sensitive). Used for destructive admin actions where
+ * one click feels too easy — e.g. typing the account's email before delete.
  */
 export function ConfirmDialog({
   open,
@@ -20,6 +25,8 @@ export function ConfirmDialog({
   cancelLabel = "Cancel",
   destructive = false,
   onConfirm,
+  requireTypedText,
+  typedTextLabel,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -29,7 +36,19 @@ export function ConfirmDialog({
   cancelLabel?: string;
   destructive?: boolean;
   onConfirm: () => void | Promise<void>;
+  requireTypedText?: string;
+  typedTextLabel?: string;
 }) {
+  const [typed, setTyped] = useState("");
+
+  // Reset the typed input whenever the dialog re-opens so a fresh prompt
+  // doesn't inherit the previous keystrokes.
+  useEffect(() => {
+    if (open) setTyped("");
+  }, [open]);
+
+  const typedOk = !requireTypedText || typed === requireTypedText;
+
   return (
     <AlertDialog.Root open={open} onOpenChange={onOpenChange}>
       <AlertDialog.Portal>
@@ -57,6 +76,25 @@ export function ConfirmDialog({
               {description}
             </AlertDialog.Description>
           )}
+          {requireTypedText ? (
+            <label className="mt-4 block">
+              <span className="text-xs font-medium text-[var(--ink-soft)]">
+                {typedTextLabel ?? `Type "${requireTypedText}" to confirm`}
+              </span>
+              <input
+                type="text"
+                value={typed}
+                onChange={(e) => setTyped(e.target.value)}
+                autoFocus
+                autoComplete="off"
+                spellCheck={false}
+                className={cn(
+                  "mt-1 flex h-11 w-full rounded-md border border-[var(--line)] bg-white px-3 py-2 text-base text-[var(--ink)]",
+                  "placeholder:text-[var(--ink-soft)] shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--teal)]",
+                )}
+              />
+            </label>
+          ) : null}
           <div className="mt-6 flex flex-wrap justify-end gap-2">
             <AlertDialog.Cancel
               className={cn(
@@ -67,7 +105,12 @@ export function ConfirmDialog({
               {cancelLabel}
             </AlertDialog.Cancel>
             <AlertDialog.Action
+              disabled={!typedOk}
               onClick={(event) => {
+                if (!typedOk) {
+                  event.preventDefault();
+                  return;
+                }
                 // Let Radix close the dialog as normal, but run the consumer's
                 // confirm handler regardless of whether it's async — Radix
                 // already calls preventDefault if we want to keep it open,
@@ -78,6 +121,7 @@ export function ConfirmDialog({
               className={cn(
                 "inline-flex min-h-[40px] items-center justify-center rounded-lg px-4 text-sm font-semibold",
                 "focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-offset-2",
+                "disabled:cursor-not-allowed disabled:opacity-50",
                 destructive
                   ? "bg-[var(--coral)] text-white hover:opacity-90 focus-visible:ring-[var(--coral)]"
                   : "bg-[var(--ink)] text-white hover:opacity-90 focus-visible:ring-[var(--accent)]",
