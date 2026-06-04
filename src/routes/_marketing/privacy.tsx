@@ -13,25 +13,50 @@ function PrivacyPage() {
         today.
       </p>
 
-      <section className="mt-16 flex flex-col gap-5">
+      <section className="mt-12 flex flex-col gap-5">
         <h2 className="text-xl font-semibold tracking-tight md:text-2xl">
-          Voice recognition stays on the device
+          What stays on your iPad
         </h2>
         <p className="text-base leading-relaxed text-[var(--ink-soft)]">
-          The model that recognises voices runs on your iPad, not in the cloud. The voice samples
-          and voiceprints it learns from stay in local storage on your device.
+          The speech recognition that picks out who&apos;s talking runs on the iPad itself. The
+          model never moves to the cloud, and neither does the live microphone audio Parley listens
+          to in the moment of a conversation — the audio stream and the matching computation stay
+          on the device.
         </p>
       </section>
 
       <section className="mt-12 flex flex-col gap-5">
         <h2 className="text-xl font-semibold tracking-tight md:text-2xl">
-          Signing in and joining the waitlist
+          What syncs to the cloud
         </h2>
         <p className="text-base leading-relaxed text-[var(--ink-soft)]">
-          Account sign-in is handled by Google Firebase — you create an account with an email and
-          password, and Firebase stores those credentials. If you join the waitlist, the details you
-          share in that form are saved in our project&apos;s Firebase too. That&apos;s the only
-          place your name and email live with us.
+          Account sign-in and the waitlist run on Google Firebase under our project. By default,
+          the data you build up while using Parley also syncs there as you use the app — so it can
+          travel with you across devices and so we can help when something breaks.
+        </p>
+        <p className="text-base leading-relaxed text-[var(--ink-soft)]">
+          Specifically, the things that sync are: conversation transcripts and turn-by-turn
+          history, the voiceprints Parley has learned and the short voice samples used to enrol
+          them, your profile and writing-style notes, your saved people, places and events, helper
+          drafts, remembered facts and follow-ups, the suggestions Parley has shown you, and your
+          in-app settings. Cached audio for the quick-phrase buttons syncs too.
+        </p>
+        <p className="text-base leading-relaxed text-[var(--ink-soft)]">
+          You can turn cloud sync off per account in Settings. With it off, the account still
+          works — your data just stays on that iPad.
+        </p>
+      </section>
+
+      <section className="mt-12 flex flex-col gap-5">
+        <h2 className="text-xl font-semibold tracking-tight md:text-2xl">
+          Who can see your data
+        </h2>
+        <p className="text-base leading-relaxed text-[var(--ink-soft)]">
+          We&apos;ll be straight with you: the operator of Parley — currently the developer who
+          runs this project, reachable at the email at the bottom of this page — has admin access
+          to our Firebase project and can read everything that syncs to it. That access is used to
+          keep the app working for you and to make it better. We don&apos;t sell your data, and we
+          don&apos;t share it with third parties for their own purposes.
         </p>
       </section>
 
@@ -48,14 +73,11 @@ function PrivacyPage() {
       </section>
 
       <section className="mt-12 flex flex-col gap-5">
-        <h2 className="text-xl font-semibold tracking-tight md:text-2xl">
-          Where your conversations live
-        </h2>
+        <h2 className="text-xl font-semibold tracking-tight md:text-2xl">You&apos;re in control</h2>
         <p className="text-base leading-relaxed text-[var(--ink-soft)]">
-          Today, your conversation history lives on your iPad. We&apos;re building optional cloud
-          sync so you can keep your data across devices — when that&apos;s switched on, that history
-          will be stored in our project&apos;s Firebase (Google). Either way, you can export your
-          device data, or wipe everything with one button in Settings.
+          Cloud sync can be switched off per account in Settings — the account still works, your
+          data just stays on the iPad. You can export your on-device data, and you can wipe
+          everything with one button in Settings.
         </p>
       </section>
 

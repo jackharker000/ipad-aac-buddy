@@ -55,6 +55,23 @@ export function getProjectId(): string {
   return serviceAccount().project_id;
 }
 
+/**
+ * Service-account credentials needed for signing Storage download URLs.
+ * Exposed only to admin server routes — never reachable from client code.
+ */
+export function getServiceAccountCredentials(): { clientEmail: string; privateKey: string } {
+  const sa = serviceAccount();
+  return { clientEmail: sa.client_email, privateKey: sa.private_key };
+}
+
+/**
+ * Default Firebase Storage bucket for this project. Matches the
+ * `<projectId>.firebasestorage.app` host the Firebase web SDK uses.
+ */
+export function getStorageBucket(): string {
+  return `${getProjectId()}.firebasestorage.app`;
+}
+
 // --------------------------------------------------------------------------
 // OAuth2 access token (service-account JWT bearer grant), cached ~55 min
 // --------------------------------------------------------------------------
@@ -69,7 +86,7 @@ function b64url(input: Buffer | string): string {
 
 let tokenCache: { token: string; expiresAt: number } | null = null;
 
-async function getAccessToken(): Promise<string> {
+export async function getAccessToken(): Promise<string> {
   if (tokenCache && tokenCache.expiresAt > Date.now() + 60_000) {
     return tokenCache.token;
   }

@@ -14,6 +14,8 @@ import {
   suggestedBackupFilename,
 } from "@/lib/backup";
 import { cn } from "@/lib/cn";
+import { useCloudSync } from "@/lib/sync/use-cloud-sync";
+import { isFirebaseConfigured } from "@/lib/firebase/client";
 
 /**
  * System tab. Display preset, speaker-ID tuning, GPS toggle, dead-phrase
@@ -39,6 +41,7 @@ export function SystemTab() {
     <div className="space-y-6">
       <DisplayPresetCard />
       <SpeakerIdCard />
+      <CloudSyncCard />
       <GpsCard />
       <DeadPhraseCard />
       <StyleProfileCard />
@@ -237,6 +240,94 @@ function GpsCard() {
       </CardContent>
     </Card>
   );
+}
+
+// --------------------------------------------------------------------------
+
+function CloudSyncCard() {
+  const settings = useSettings();
+  const enabled = settings.cloudSyncEnabled !== false; // undefined = on
+  const { running, pendingCount, lastFlushAt, lastError } = useCloudSync();
+  const configured = isFirebaseConfigured();
+
+  const setEnabled = (v: boolean) => void persistSettings({ cloudSyncEnabled: v });
+
+  // Human-friendly relative time for the last-flush row.
+  const lastFlushLabel = formatRelativeTime(lastFlushAt);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Cloud sync</CardTitle>
+        <CardDescription>
+          {configured
+            ? "Write-behind sync of your conversations, people, places, events, and learning data to your Firebase account. Audio for voiceprints and cached phrases uploads to Storage. Runs in the background — the cockpit stays local-first and never blocks on the network. Only data created or updated after sync turns on is synced; no backfill."
+            : "Firebase isn't configured on this build, so sync can't run yet. Add the VITE_FIREBASE_* keys to your env to enable it."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-medium text-foreground">Sync this account to the cloud</p>
+            <p className="text-xs text-muted-foreground">
+              On by default. Turn off to keep everything strictly on this device.
+            </p>
+          </div>
+          <Switch checked={enabled} onCheckedChange={setEnabled} disabled={!configured} />
+        </div>
+
+        <div className="space-y-2 rounded-md border border-border bg-muted/40 p-3 text-xs">
+          <StatusRow
+            label="Engine"
+            value={running ? "Running" : enabled ? "Idle" : "Disabled"}
+            tone={running ? "ok" : enabled ? "neutral" : "muted"}
+          />
+          <StatusRow
+            label="Pending writes"
+            value={pendingCount === 0 ? "0 (caught up)" : String(pendingCount)}
+            tone={pendingCount === 0 ? "ok" : "neutral"}
+          />
+          <StatusRow label="Last flush" value={lastFlushLabel} tone="muted" />
+          {lastError && <StatusRow label="Last error" value={lastError} tone="error" />}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function StatusRow({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone: "ok" | "neutral" | "muted" | "error";
+}) {
+  const toneClass =
+    tone === "ok"
+      ? "text-emerald-700"
+      : tone === "error"
+        ? "text-destructive"
+        : tone === "muted"
+          ? "text-muted-foreground"
+          : "text-foreground";
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={cn("font-mono tabular-nums", toneClass)}>{value}</span>
+    </div>
+  );
+}
+
+function formatRelativeTime(ts: number | null): string {
+  if (ts == null) return "Never";
+  const delta = Date.now() - ts;
+  if (delta < 5_000) return "just now";
+  if (delta < 60_000) return `${Math.round(delta / 1000)}s ago`;
+  if (delta < 3_600_000) return `${Math.round(delta / 60_000)}m ago`;
+  if (delta < 86_400_000) return `${Math.round(delta / 3_600_000)}h ago`;
+  return new Date(ts).toLocaleString();
 }
 
 // --------------------------------------------------------------------------

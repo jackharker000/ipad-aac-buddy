@@ -10,6 +10,7 @@ import { ParleyLogo } from "@/components/ParleyLogo";
 import { cn } from "@/lib/cn";
 import { drainPendingJobs } from "@/lib/jobs/drain";
 import { signOut, useSession } from "@/lib/auth";
+import { useCloudSync } from "@/lib/sync/use-cloud-sync";
 
 export const Route = createFileRoute("/app")({
   component: AppLayout,
@@ -27,6 +28,12 @@ const NAV: Array<{ to: string; label: string; exact?: boolean }> = [
 function AppLayout() {
   const router = useRouter();
   const { user, loading } = useSession();
+
+  // Mount the write-behind cloud-sync engine. Starts when the user is
+  // signed in and `cloudSyncEnabled` is on (default ON for new
+  // accounts); tears down on sign-out or when the user toggles it off
+  // in Settings. Status is consumed by the Cloud sync panel.
+  useCloudSync();
 
   useEffect(() => {
     if (!loading && !user) {

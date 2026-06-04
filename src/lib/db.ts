@@ -471,6 +471,37 @@ export type SettingsRecord = {
   /** Cross-session dead-phrase suppression thresholds (System tab). */
   deadPhraseShownTimes?: number;
   deadPhraseWindowDays?: number;
+  /**
+   * Write-behind cloud sync to Firestore/Storage. Default ON for new
+   * accounts — `cloudSyncEnabled === undefined` is treated as true by the
+   * engine so we don't have to backfill a column on existing rows. Toggle
+   * lives on the System tab.
+   */
+  cloudSyncEnabled?: boolean;
+};
+
+/**
+ * Write-behind cloud-sync outbox. One row per pending (table, rowId)
+ * upsert; the flush loop reads these in batches, fetches the live Dexie
+ * row, transforms it, sends it to Firestore (+ Storage for blobs), and
+ * deletes the outbox row on success. We never block a cockpit write on
+ * this — outbox enqueue is the only thing that runs in the Dexie hook.
+ *
+ * The cursor row (id === "cursor") is a special record stored in this
+ * same table with `startedAt` set to the engine-start time. It's not a
+ * pending upsert; the flush loop skips it by id. Keeping it in this
+ * table avoids a second one-row store and a separate version bump.
+ */
+export type SyncOutboxRow = {
+  id: string; // nanoid for queued upserts; literal "cursor" for the cutoff row
+  table: string;
+  rowId: string;
+  op: "upsert";
+  queuedAt: number;
+  retries: number;
+  audioUploaded: boolean;
+  /** Only set on the id="cursor" row. Engine-start time; rows with `updatedAt < startedAt` are never synced. */
+  startedAt?: number;
 };
 
 export const DEFAULT_SETTINGS: SettingsRecord = {
@@ -557,6 +588,8 @@ export class ParleyDB extends Dexie {
   profileProposals!: EntityTable<ProfileProposal, "id">;
   personLexicon!: EntityTable<PersonLexiconEntry, "id">;
 
+  syncOutbox!: EntityTable<SyncOutboxRow, "id">;
+
   constructor() {
     super("parley");
     this.version(1).stores({
@@ -619,6 +652,17 @@ export class ParleyDB extends Dexie {
     // session live entirely on the device.
     this.version(4).stores({
       accounts: "id, &emailKey, is_admin, createdAt",
+    });
+
+    // v5: write-behind cloud-sync outbox. The engine appends to this on
+    // every Dexie write via creating/updating hooks, then a background
+    // flush loop drains it to Firestore (+ Storage for blob fields).
+    // Indexed on (table, rowId) so the deduper can find the existing
+    // outbox row for the same target and replace it (most-recent-write-
+    // wins). The id="cursor" row holds the engine-start timestamp;
+    // anything older than that is never synced (new-only by design).
+    this.version(5).stores({
+      syncOutbox: "id, table, rowId, queuedAt",
     });
   }
 }

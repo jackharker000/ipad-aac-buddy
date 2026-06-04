@@ -42,8 +42,10 @@ import { Route as ApiLlmAnthropicRouteImport } from './routes/api/llm/anthropic'
 import { Route as ApiEmbedOpenaiRouteImport } from './routes/api/embed/openai'
 import { Route as ApiAuthEnsureRoleRouteImport } from './routes/api/auth/ensure-role'
 import { Route as ApiAdminUsersRouteImport } from './routes/api/admin/users'
+import { Route as ApiAdminUserDataRouteImport } from './routes/api/admin/user-data'
 import { Route as ApiAdminUserRouteImport } from './routes/api/admin/user'
 import { Route as ApiAdminUsageRouteImport } from './routes/api/admin/usage'
+import { Route as ApiAdminAudioUrlRouteImport } from './routes/api/admin/audio-url'
 import { Route as AdminUsersUserIdRouteImport } from './routes/admin/users.$userId'
 
 const AppRoute = AppRouteImport.update({
@@ -209,6 +211,11 @@ const ApiAdminUsersRoute = ApiAdminUsersRouteImport.update({
   path: '/api/admin/users',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiAdminUserDataRoute = ApiAdminUserDataRouteImport.update({
+  id: '/api/admin/user-data',
+  path: '/api/admin/user-data',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAdminUserRoute = ApiAdminUserRouteImport.update({
   id: '/api/admin/user',
   path: '/api/admin/user',
@@ -217,6 +224,11 @@ const ApiAdminUserRoute = ApiAdminUserRouteImport.update({
 const ApiAdminUsageRoute = ApiAdminUsageRouteImport.update({
   id: '/api/admin/usage',
   path: '/api/admin/usage',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAdminAudioUrlRoute = ApiAdminAudioUrlRouteImport.update({
+  id: '/api/admin/audio-url',
+  path: '/api/admin/audio-url',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminUsersUserIdRoute = AdminUsersUserIdRouteImport.update({
@@ -247,8 +259,10 @@ export interface FileRoutesByFullPath {
   '/admin/': typeof AdminIndexRoute
   '/app/': typeof AppIndexRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
+  '/api/admin/audio-url': typeof ApiAdminAudioUrlRoute
   '/api/admin/usage': typeof ApiAdminUsageRoute
   '/api/admin/user': typeof ApiAdminUserRoute
+  '/api/admin/user-data': typeof ApiAdminUserDataRoute
   '/api/admin/users': typeof ApiAdminUsersRoute
   '/api/auth/ensure-role': typeof ApiAuthEnsureRoleRoute
   '/api/embed/openai': typeof ApiEmbedOpenaiRoute
@@ -281,8 +295,10 @@ export interface FileRoutesByTo {
   '/admin': typeof AdminIndexRoute
   '/app': typeof AppIndexRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
+  '/api/admin/audio-url': typeof ApiAdminAudioUrlRoute
   '/api/admin/usage': typeof ApiAdminUsageRoute
   '/api/admin/user': typeof ApiAdminUserRoute
+  '/api/admin/user-data': typeof ApiAdminUserDataRoute
   '/api/admin/users': typeof ApiAdminUsersRoute
   '/api/auth/ensure-role': typeof ApiAuthEnsureRoleRoute
   '/api/embed/openai': typeof ApiEmbedOpenaiRoute
@@ -320,8 +336,10 @@ export interface FileRoutesById {
   '/admin/': typeof AdminIndexRoute
   '/app/': typeof AppIndexRoute
   '/admin/users/$userId': typeof AdminUsersUserIdRoute
+  '/api/admin/audio-url': typeof ApiAdminAudioUrlRoute
   '/api/admin/usage': typeof ApiAdminUsageRoute
   '/api/admin/user': typeof ApiAdminUserRoute
+  '/api/admin/user-data': typeof ApiAdminUserDataRoute
   '/api/admin/users': typeof ApiAdminUsersRoute
   '/api/auth/ensure-role': typeof ApiAuthEnsureRoleRoute
   '/api/embed/openai': typeof ApiEmbedOpenaiRoute
@@ -358,8 +376,10 @@ export interface FileRouteTypes {
     | '/admin/'
     | '/app/'
     | '/admin/users/$userId'
+    | '/api/admin/audio-url'
     | '/api/admin/usage'
     | '/api/admin/user'
+    | '/api/admin/user-data'
     | '/api/admin/users'
     | '/api/auth/ensure-role'
     | '/api/embed/openai'
@@ -392,8 +412,10 @@ export interface FileRouteTypes {
     | '/admin'
     | '/app'
     | '/admin/users/$userId'
+    | '/api/admin/audio-url'
     | '/api/admin/usage'
     | '/api/admin/user'
+    | '/api/admin/user-data'
     | '/api/admin/users'
     | '/api/auth/ensure-role'
     | '/api/embed/openai'
@@ -430,8 +452,10 @@ export interface FileRouteTypes {
     | '/admin/'
     | '/app/'
     | '/admin/users/$userId'
+    | '/api/admin/audio-url'
     | '/api/admin/usage'
     | '/api/admin/user'
+    | '/api/admin/user-data'
     | '/api/admin/users'
     | '/api/auth/ensure-role'
     | '/api/embed/openai'
@@ -451,8 +475,10 @@ export interface RootRouteChildren {
   AdminRoute: typeof AdminRouteWithChildren
   AppRoute: typeof AppRouteWithChildren
   ApiWaitlistRoute: typeof ApiWaitlistRoute
+  ApiAdminAudioUrlRoute: typeof ApiAdminAudioUrlRoute
   ApiAdminUsageRoute: typeof ApiAdminUsageRoute
   ApiAdminUserRoute: typeof ApiAdminUserRoute
+  ApiAdminUserDataRoute: typeof ApiAdminUserDataRoute
   ApiAdminUsersRoute: typeof ApiAdminUsersRoute
   ApiAuthEnsureRoleRoute: typeof ApiAuthEnsureRoleRoute
   ApiEmbedOpenaiRoute: typeof ApiEmbedOpenaiRoute
@@ -698,6 +724,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiAdminUsersRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/admin/user-data': {
+      id: '/api/admin/user-data'
+      path: '/api/admin/user-data'
+      fullPath: '/api/admin/user-data'
+      preLoaderRoute: typeof ApiAdminUserDataRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/admin/user': {
       id: '/api/admin/user'
       path: '/api/admin/user'
@@ -710,6 +743,13 @@ declare module '@tanstack/react-router' {
       path: '/api/admin/usage'
       fullPath: '/api/admin/usage'
       preLoaderRoute: typeof ApiAdminUsageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/admin/audio-url': {
+      id: '/api/admin/audio-url'
+      path: '/api/admin/audio-url'
+      fullPath: '/api/admin/audio-url'
+      preLoaderRoute: typeof ApiAdminAudioUrlRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/users/$userId': {
@@ -810,8 +850,10 @@ const rootRouteChildren: RootRouteChildren = {
   AdminRoute: AdminRouteWithChildren,
   AppRoute: AppRouteWithChildren,
   ApiWaitlistRoute: ApiWaitlistRoute,
+  ApiAdminAudioUrlRoute: ApiAdminAudioUrlRoute,
   ApiAdminUsageRoute: ApiAdminUsageRoute,
   ApiAdminUserRoute: ApiAdminUserRoute,
+  ApiAdminUserDataRoute: ApiAdminUserDataRoute,
   ApiAdminUsersRoute: ApiAdminUsersRoute,
   ApiAuthEnsureRoleRoute: ApiAuthEnsureRoleRoute,
   ApiEmbedOpenaiRoute: ApiEmbedOpenaiRoute,

@@ -125,3 +125,68 @@ export async function fetchUsage(days = 30): Promise<UsageAggregate> {
   const body = (await res.json()) as { aggregate: UsageAggregate };
   return body.aggregate;
 }
+
+// --------------------------------------------------------------------------
+// Synced per-user data (from /api/admin/user-data)
+// --------------------------------------------------------------------------
+
+/**
+ * Fetch decoded Firestore rows from `users/{uid}/<table>`. Each row is the
+ * Dexie row's JSON (with Blob fields swapped for `{ storagePath, sizeBytes }`).
+ * Defaults to 100 rows per call; the server caps at 500.
+ */
+export async function fetchUserData(
+  uid: string,
+  table: string,
+  limit = 100,
+): Promise<Array<Record<string, unknown>>> {
+  const res = await authedFetch("/api/admin/user-data", { uid, table, limit });
+  if (!res.ok) return parseError(res);
+  const body = (await res.json()) as { rows: Array<Record<string, unknown>> };
+  return body.rows;
+}
+
+// --------------------------------------------------------------------------
+// Signed audio playback (from /api/admin/audio-url)
+// --------------------------------------------------------------------------
+
+/** Single-shared <audio> instance so triggering a new clip stops the previous. */
+let currentAudio: HTMLAudioElement | null = null;
+
+/**
+ * Fetch a short-lived signed URL for a Storage blob and play it. If another
+ * clip is already playing, it is paused first. Returns the Audio element so
+ * callers can pause/resume by tracking the same ref.
+ */
+export async function playAudioFromAdminUrl(
+  storagePath: string,
+): Promise<HTMLAudioElement> {
+  const res = await authedFetch("/api/admin/audio-url", { storagePath });
+  if (!res.ok) return parseError(res);
+  const { url } = (await res.json()) as { url: string };
+
+  if (currentAudio) {
+    try {
+      currentAudio.pause();
+    } catch {
+      // ignore
+    }
+  }
+
+  const audio = new Audio(url);
+  currentAudio = audio;
+  await audio.play();
+  return audio;
+}
+
+/** Stop any audio started via playAudioFromAdminUrl. Safe to call any time. */
+export function stopAdminAudio(): void {
+  if (currentAudio) {
+    try {
+      currentAudio.pause();
+    } catch {
+      // ignore
+    }
+    currentAudio = null;
+  }
+}
