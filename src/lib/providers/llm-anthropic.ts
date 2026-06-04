@@ -1,3 +1,5 @@
+import { authHeaders } from "@/lib/auth-headers";
+
 import type { LLMProvider, LLMRequest, LLMResponse } from "./types";
 
 /**
@@ -25,9 +27,10 @@ export class AnthropicLLM implements LLMProvider {
   async complete(request: LLMRequest): Promise<LLMResponse> {
     const { signal, dispose } = withTimeoutSignal(request.signal, LIVE_TIMEOUT_MS);
     try {
+      const auth = await authHeaders();
       const res = await fetch("/api/llm/anthropic", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...auth },
         body: JSON.stringify({ ...request, stream: false }),
         signal,
       });
@@ -41,9 +44,10 @@ export class AnthropicLLM implements LLMProvider {
   async *stream(request: LLMRequest): AsyncIterable<string> {
     const { signal, dispose } = withTimeoutSignal(request.signal, LIVE_TIMEOUT_MS);
     try {
+      const auth = await authHeaders();
       const res = await fetch("/api/llm/anthropic", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", ...auth },
         body: JSON.stringify({ ...request, stream: true }),
         signal,
       });

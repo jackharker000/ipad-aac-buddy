@@ -1,3 +1,5 @@
+import { authHeaders } from "@/lib/auth-headers";
+
 import type { STTProvider, STTRequest, STTSegment } from "./types";
 
 /**
@@ -19,8 +21,10 @@ export class ElevenLabsScribeSTT implements STTProvider {
       form.append("keyTerms", JSON.stringify(request.keyTerms));
     }
 
+    const auth = await authHeaders();
     const res = await fetch("/api/stt/elevenlabs", {
       method: "POST",
+      headers: { ...auth },
       body: form,
       signal: request.signal,
     });

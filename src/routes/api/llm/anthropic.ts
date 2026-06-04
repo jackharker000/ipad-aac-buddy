@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { corsPreflight, requireClientToken, withCors } from "@/lib/api-cors";
+import { meter } from "@/lib/metering";
 
 /**
  * Anthropic Messages API proxy. The browser sends an `LLMRequest`
@@ -85,6 +86,8 @@ export const Route = createFileRoute("/api/llm/anthropic")({
         const denied = requireClientToken(request);
         if (denied) return denied;
 
+        const start = Date.now();
+
         const apiKey = process.env.ANTHROPIC_API_KEY;
         if (!apiKey) return errorResponse(500, "ANTHROPIC_API_KEY not set on the server");
 
@@ -108,6 +111,7 @@ export const Route = createFileRoute("/api/llm/anthropic")({
 
         const stream = !!body.stream;
         const payload = buildAnthropicPayload(body);
+        const modelId = payload.model;
 
         let upstream: Response;
         try {
@@ -126,7 +130,18 @@ export const Route = createFileRoute("/api/llm/anthropic")({
           // AbortSignal.timeout fires a TimeoutError DOMException; anything else
           // is a connect-level failure. Either way the route must resolve so the
           // client's catch runs and degradation kicks in.
-          if (err instanceof DOMException && err.name === "TimeoutError") {
+          const isTimeout = err instanceof DOMException && err.name === "TimeoutError";
+          const status = isTimeout ? 504 : 502;
+          await meter(request, {
+            kind: "llm",
+            provider: "anthropic",
+            model: modelId,
+            tokensIn: 0,
+            tokensOut: 0,
+            durationMs: Date.now() - start,
+            status,
+          });
+          if (isTimeout) {
             return errorResponse(504, `Anthropic timed out after ${UPSTREAM_TIMEOUT_MS}ms`);
           }
           return errorResponse(502, `Anthropic request failed: ${(err as Error).message}`);
@@ -134,6 +149,15 @@ export const Route = createFileRoute("/api/llm/anthropic")({
 
         if (!upstream.ok) {
           const text = await upstream.text();
+          await meter(request, {
+            kind: "llm",
+            provider: "anthropic",
+            model: modelId,
+            tokensIn: 0,
+            tokensOut: 0,
+            durationMs: Date.now() - start,
+            status: upstream.status,
+          });
           return errorResponse(upstream.status, `Anthropic ${upstream.status}: ${text}`);
         }
 
@@ -150,6 +174,15 @@ export const Route = createFileRoute("/api/llm/anthropic")({
             .filter((b) => b.type === "text")
             .map((b) => b.text ?? "")
             .join("");
+          await meter(request, {
+            kind: "llm",
+            provider: "anthropic",
+            model: modelId,
+            tokensIn: data.usage?.input_tokens ?? 0,
+            tokensOut: data.usage?.output_tokens ?? 0,
+            durationMs: Date.now() - start,
+            status: upstream.status,
+          });
           return Response.json(
             {
               text,
@@ -175,6 +208,8 @@ export const Route = createFileRoute("/api/llm/anthropic")({
         const decoder = new TextDecoder();
         const encoder = new TextEncoder();
         let sseBuffer = "";
+        const usage = { tokensIn: 0, tokensOut: 0 };
+        const upstreamStatus = upstream.status;
 
         const out = new ReadableStream({
           async pull(controller) {
@@ -184,9 +219,22 @@ export const Route = createFileRoute("/api/llm/anthropic")({
               // multi-byte char split across the final reads). Then drain the
               // trailing partial SSE event so the last delta isn't dropped.
               sseBuffer += decoder.decode();
-              emitSseEvents(sseBuffer, controller, encoder);
+              emitSseEvents(sseBuffer, controller, encoder, usage);
               controller.enqueue(encoder.encode(`${JSON.stringify({ done: true })}\n`));
               controller.close();
+              // Meter the streamed call after the consumer has its `done`. The
+              // tokens come from the captured message_start / message_delta
+              // events; if they didn't arrive we still log 0/0 with the status
+              // so the dashboard sees the call.
+              await meter(request, {
+                kind: "llm",
+                provider: "anthropic",
+                model: modelId,
+                tokensIn: usage.tokensIn,
+                tokensOut: usage.tokensOut,
+                durationMs: Date.now() - start,
+                status: upstreamStatus,
+              });
               return;
             }
             sseBuffer += decoder.decode(value, { stream: true });
@@ -195,13 +243,24 @@ export const Route = createFileRoute("/api/llm/anthropic")({
             const events = sseBuffer.split("\n\n");
             sseBuffer = events.pop() ?? "";
             for (const eventBlock of events) {
-              emitSseEvents(eventBlock, controller, encoder);
+              emitSseEvents(eventBlock, controller, encoder, usage);
             }
           },
           // Consumer aborted (James interrupted, nav away). Cancel the keyed
           // upstream body so we don't leak the Anthropic connection.
           cancel() {
             void reader.cancel().catch(() => {});
+            // Best-effort meter even on consumer abort so the dashboard sees
+            // the call. Tokens whatever we captured before the cut.
+            void meter(request, {
+              kind: "llm",
+              provider: "anthropic",
+              model: modelId,
+              tokensIn: usage.tokensIn,
+              tokensOut: usage.tokensOut,
+              durationMs: Date.now() - start,
+              status: upstreamStatus,
+            });
           },
         });
 
@@ -220,11 +279,14 @@ export const Route = createFileRoute("/api/llm/anthropic")({
 
 // Parse one SSE event block (lines split on \n) and enqueue any `delta` text
 // as an NDJSON line. Shared between the live `pull` path and the EOF flush so
-// the trailing partial event isn't dropped.
+// the trailing partial event isn't dropped. Also captures token usage from
+// `message_start` (input_tokens) and `message_delta` (output_tokens) into the
+// caller's accumulator for the metering call at end-of-stream.
 function emitSseEvents(
   eventBlock: string,
   controller: ReadableStreamDefaultController<Uint8Array>,
   encoder: TextEncoder,
+  usage: { tokensIn: number; tokensOut: number },
 ): void {
   for (const line of eventBlock.split("\n")) {
     const trimmed = line.trim();
@@ -235,7 +297,25 @@ function emitSseEvents(
       const event = JSON.parse(payloadText) as {
         type?: string;
         delta?: { type?: string; text?: string; partial_json?: string };
+        message?: { usage?: { input_tokens?: number; output_tokens?: number } };
+        usage?: { input_tokens?: number; output_tokens?: number };
       };
+      if (event.type === "message_start") {
+        const u = event.message?.usage;
+        if (u) {
+          if (typeof u.input_tokens === "number") usage.tokensIn = u.input_tokens;
+          if (typeof u.output_tokens === "number") usage.tokensOut = u.output_tokens;
+        }
+        continue;
+      }
+      if (event.type === "message_delta") {
+        const u = event.usage;
+        if (u) {
+          if (typeof u.input_tokens === "number") usage.tokensIn = u.input_tokens;
+          if (typeof u.output_tokens === "number") usage.tokensOut = u.output_tokens;
+        }
+        continue;
+      }
       if (event.type !== "content_block_delta" || !event.delta) continue;
       const piece = event.delta.text ?? event.delta.partial_json;
       if (typeof piece === "string" && piece.length > 0) {

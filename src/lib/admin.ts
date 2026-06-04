@@ -83,3 +83,45 @@ export async function fetchUser(uid: string): Promise<AdminUserRecord | null> {
   const body = (await res.json()) as { user: AdminUserRecord };
   return body.user;
 }
+
+// --------------------------------------------------------------------------
+// Usage aggregates (from /api/admin/usage)
+// --------------------------------------------------------------------------
+
+export type UsageUserBucket = {
+  uid: string | null;
+  events: number;
+  tokensIn: number;
+  tokensOut: number;
+  characters: number;
+  audioBytes: number;
+  millicents: number;
+};
+
+export type UsageKindBucket = { kind: string; events: number; millicents: number };
+export type UsageProviderBucket = { provider: string; events: number; millicents: number };
+
+export type UsageAggregate = {
+  totals: {
+    events: number;
+    tokensIn: number;
+    tokensOut: number;
+    characters: number;
+    audioBytes: number;
+    millicents: number;
+  };
+  byUser: UsageUserBucket[];
+  byKind: UsageKindBucket[];
+  byProvider: UsageProviderBucket[];
+  days: number;
+  rangeFrom: string;
+  rangeTo: string;
+};
+
+/** Fetch aggregated usage_events for the last `days` days. */
+export async function fetchUsage(days = 30): Promise<UsageAggregate> {
+  const res = await authedFetch("/api/admin/usage", { days });
+  if (!res.ok) return parseError(res);
+  const body = (await res.json()) as { aggregate: UsageAggregate };
+  return body.aggregate;
+}

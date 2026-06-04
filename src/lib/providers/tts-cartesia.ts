@@ -1,3 +1,5 @@
+import { authHeaders } from "@/lib/auth-headers";
+
 import type { TTSProvider, TTSRequest } from "./types";
 
 /**
@@ -8,9 +10,10 @@ export class CartesiaSonicTTS implements TTSProvider {
   readonly id = "cartesia-sonic";
 
   async *stream(request: TTSRequest): AsyncIterable<Uint8Array> {
+    const auth = await authHeaders();
     const res = await fetch("/api/tts/cartesia", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...auth },
       body: JSON.stringify({ text: request.text, voiceId: request.voiceId }),
       signal: request.signal,
     });

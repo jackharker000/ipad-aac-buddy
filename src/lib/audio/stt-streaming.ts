@@ -34,6 +34,8 @@
  * server.
  */
 
+import { authHeaders } from "@/lib/auth-headers";
+
 const SCRIBE_WS_BASE = "wss://api.elevenlabs.io/v1/speech-to-text/realtime";
 const MODEL_ID = "scribe_v2_realtime";
 
@@ -347,9 +349,10 @@ export async function transcribeSegmentStreaming(args: {
 }
 
 async function fetchScribeToken(signal?: AbortSignal): Promise<string> {
+  const auth = await authHeaders();
   const res = await fetch("/api/stt/scribe-token", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...auth },
     body: "{}",
     signal,
   });

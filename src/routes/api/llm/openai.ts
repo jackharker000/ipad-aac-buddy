@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { corsPreflight, requireClientToken, withCors } from "@/lib/api-cors";
+import { meter } from "@/lib/metering";
 
 /**
  * OpenAI Chat Completions proxy. Same request shape as the Anthropic
@@ -48,6 +49,8 @@ export const Route = createFileRoute("/api/llm/openai")({
         const denied = requireClientToken(request);
         if (denied) return denied;
 
+        const start = Date.now();
+
         const apiKey = process.env.OPENAI_API_KEY;
         if (!apiKey) return errorResponse(500, "OPENAI_API_KEY not set on the server");
 
@@ -71,6 +74,8 @@ export const Route = createFileRoute("/api/llm/openai")({
 
         const stream = !!body.stream;
 
+        const modelId = modelFor(body.tier);
+
         // Structured-output parity with the Anthropic proxy. GPT otherwise
         // wraps JSON in prose more often than Claude, diverging the provider
         // abstraction. We turn on json_object mode for the structured calls
@@ -87,12 +92,14 @@ export const Route = createFileRoute("/api/llm/openai")({
         );
 
         const payload = {
-          model: modelFor(body.tier),
+          model: modelId,
           messages: body.messages,
           temperature: body.temperature ?? 0.7,
           max_tokens: Math.min(body.maxTokens ?? 1024, MAX_OUTPUT_TOKENS),
           ...(wantsJson ? { response_format: { type: "json_object" as const } } : {}),
-          ...(stream ? { stream: true } : {}),
+          ...(stream
+            ? { stream: true, stream_options: { include_usage: true as const } }
+            : {}),
         };
 
         let upstream: Response;
@@ -109,7 +116,18 @@ export const Route = createFileRoute("/api/llm/openai")({
         } catch (err) {
           // TimeoutError -> 504 so the client catch fires and degradation kicks
           // in; any other throw is a connect-level failure -> 502.
-          if (err instanceof DOMException && err.name === "TimeoutError") {
+          const isTimeout = err instanceof DOMException && err.name === "TimeoutError";
+          const status = isTimeout ? 504 : 502;
+          await meter(request, {
+            kind: "llm",
+            provider: "openai",
+            model: modelId,
+            tokensIn: 0,
+            tokensOut: 0,
+            durationMs: Date.now() - start,
+            status,
+          });
+          if (isTimeout) {
             return errorResponse(504, `OpenAI timed out after ${UPSTREAM_TIMEOUT_MS}ms`);
           }
           return errorResponse(502, `OpenAI request failed: ${(err as Error).message}`);
@@ -117,6 +135,15 @@ export const Route = createFileRoute("/api/llm/openai")({
 
         if (!upstream.ok) {
           const text = await upstream.text();
+          await meter(request, {
+            kind: "llm",
+            provider: "openai",
+            model: modelId,
+            tokensIn: 0,
+            tokensOut: 0,
+            durationMs: Date.now() - start,
+            status: upstream.status,
+          });
           return errorResponse(upstream.status, `OpenAI ${upstream.status}: ${text}`);
         }
 
@@ -126,6 +153,15 @@ export const Route = createFileRoute("/api/llm/openai")({
             usage?: { prompt_tokens?: number; completion_tokens?: number };
           };
           const text = data.choices?.[0]?.message?.content ?? "";
+          await meter(request, {
+            kind: "llm",
+            provider: "openai",
+            model: modelId,
+            tokensIn: data.usage?.prompt_tokens ?? 0,
+            tokensOut: data.usage?.completion_tokens ?? 0,
+            durationMs: Date.now() - start,
+            status: upstream.status,
+          });
           return Response.json(
             {
               text,
@@ -147,6 +183,8 @@ export const Route = createFileRoute("/api/llm/openai")({
         const decoder = new TextDecoder();
         const encoder = new TextEncoder();
         let sseBuffer = "";
+        const usage = { tokensIn: 0, tokensOut: 0 };
+        const upstreamStatus = upstream.status;
 
         const out = new ReadableStream({
           async pull(controller) {
@@ -156,22 +194,40 @@ export const Route = createFileRoute("/api/llm/openai")({
               // multi-byte char split across the final reads), then drain the
               // trailing partial SSE event so the last delta isn't dropped.
               sseBuffer += decoder.decode();
-              emitSseEvents(sseBuffer, controller, encoder);
+              emitSseEvents(sseBuffer, controller, encoder, usage);
               controller.enqueue(encoder.encode(`${JSON.stringify({ done: true })}\n`));
               controller.close();
+              await meter(request, {
+                kind: "llm",
+                provider: "openai",
+                model: modelId,
+                tokensIn: usage.tokensIn,
+                tokensOut: usage.tokensOut,
+                durationMs: Date.now() - start,
+                status: upstreamStatus,
+              });
               return;
             }
             sseBuffer += decoder.decode(value, { stream: true });
             const events = sseBuffer.split("\n\n");
             sseBuffer = events.pop() ?? "";
             for (const eventBlock of events) {
-              emitSseEvents(eventBlock, controller, encoder);
+              emitSseEvents(eventBlock, controller, encoder, usage);
             }
           },
           // Consumer aborted (James interrupted, nav away). Cancel the keyed
           // upstream body so we don't leak the OpenAI connection.
           cancel() {
             void reader.cancel().catch(() => {});
+            void meter(request, {
+              kind: "llm",
+              provider: "openai",
+              model: modelId,
+              tokensIn: usage.tokensIn,
+              tokensOut: usage.tokensOut,
+              durationMs: Date.now() - start,
+              status: upstreamStatus,
+            });
           },
         });
 
@@ -190,11 +246,15 @@ export const Route = createFileRoute("/api/llm/openai")({
 
 // Parse one SSE event block (lines split on \n) and enqueue any
 // `choices[0].delta.content` as an NDJSON line. Shared between the live `pull`
-// path and the EOF flush so the trailing partial event isn't dropped.
+// path and the EOF flush so the trailing partial event isn't dropped. Also
+// captures token usage from the final event's `usage` field (sent when
+// stream_options.include_usage is true) into the caller's accumulator for the
+// metering call at end-of-stream.
 function emitSseEvents(
   eventBlock: string,
   controller: ReadableStreamDefaultController<Uint8Array>,
   encoder: TextEncoder,
+  usage: { tokensIn: number; tokensOut: number },
 ): void {
   for (const line of eventBlock.split("\n")) {
     const trimmed = line.trim();
@@ -204,7 +264,16 @@ function emitSseEvents(
     try {
       const event = JSON.parse(payloadText) as {
         choices?: Array<{ delta?: { content?: string } }>;
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
       };
+      if (event.usage) {
+        if (typeof event.usage.prompt_tokens === "number") {
+          usage.tokensIn = event.usage.prompt_tokens;
+        }
+        if (typeof event.usage.completion_tokens === "number") {
+          usage.tokensOut = event.usage.completion_tokens;
+        }
+      }
       const delta = event.choices?.[0]?.delta?.content;
       if (typeof delta === "string" && delta.length > 0) {
         controller.enqueue(encoder.encode(`${JSON.stringify({ delta })}\n`));

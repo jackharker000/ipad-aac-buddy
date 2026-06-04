@@ -1,3 +1,5 @@
+import { authHeaders } from "@/lib/auth-headers";
+
 import type { TTSProvider, TTSRequest } from "./types";
 
 /**
@@ -10,9 +12,10 @@ export class ElevenLabsFlashTTS implements TTSProvider {
   readonly id = "elevenlabs-flash";
 
   async *stream(request: TTSRequest): AsyncIterable<Uint8Array> {
+    const auth = await authHeaders();
     const res = await fetch("/api/tts/elevenlabs", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...auth },
       body: JSON.stringify({ text: request.text, voiceId: request.voiceId }),
       signal: request.signal,
     });

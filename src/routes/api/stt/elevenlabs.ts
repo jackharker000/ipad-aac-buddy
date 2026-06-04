@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { corsPreflight, requireClientToken, withCors } from "@/lib/api-cors";
+import { meter } from "@/lib/metering";
 
 /**
  * ElevenLabs Scribe (batch REST) proxy.
@@ -17,6 +18,7 @@ import { corsPreflight, requireClientToken, withCors } from "@/lib/api-cors";
  */
 
 const SCRIBE_URL = "https://api.elevenlabs.io/v1/speech-to-text";
+const SCRIBE_MODEL_ID = "scribe_v2_realtime";
 
 // Upstream timeout. This batch path is the fallback when the streaming WS
 // transcription fails; if it also hangs after sending headers, the segment's
@@ -32,6 +34,9 @@ export const Route = createFileRoute("/api/stt/elevenlabs")({
         const denied = requireClientToken(request);
         if (denied) return denied;
 
+        const t0 = Date.now();
+        const audioBytesHeader = Number(request.headers.get("content-length")) || 0;
+
         const apiKey = process.env.ELEVENLABS_API_KEY;
         if (!apiKey) return errorResponse(500, "ELEVENLABS_API_KEY not set on the server");
 
@@ -40,10 +45,13 @@ export const Route = createFileRoute("/api/stt/elevenlabs")({
         if (!(audio instanceof Blob)) {
           return errorResponse(400, "Multipart field `audio` (Blob) is required");
         }
+        // Audio blob size is the most accurate proxy for billable input — fall
+        // back to the request's Content-Length if the blob doesn't expose a size.
+        const audioBytes = audio.size || audioBytesHeader;
 
         const upstreamForm = new FormData();
         upstreamForm.append("file", audio, "audio.webm");
-        upstreamForm.append("model_id", "scribe_v2_realtime");
+        upstreamForm.append("model_id", SCRIBE_MODEL_ID);
         upstreamForm.append("timestamps_granularity", "word");
         // Suppress (laughs)/(pauses)/etc. event tags that Scribe injects into
         // the transcript text and that James can't easily strip out of the
@@ -86,7 +94,17 @@ export const Route = createFileRoute("/api/stt/elevenlabs")({
             signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
           });
         } catch (err) {
-          if (err instanceof DOMException && err.name === "TimeoutError") {
+          const isTimeout = err instanceof DOMException && err.name === "TimeoutError";
+          const status = isTimeout ? 504 : 502;
+          await meter(request, {
+            kind: "stt",
+            provider: "elevenlabs",
+            model: SCRIBE_MODEL_ID,
+            audioBytes,
+            durationMs: Date.now() - t0,
+            status,
+          });
+          if (isTimeout) {
             return errorResponse(504, `Scribe timed out after ${UPSTREAM_TIMEOUT_MS}ms`);
           }
           return errorResponse(502, `Scribe request failed: ${(err as Error).message}`);
@@ -94,6 +112,14 @@ export const Route = createFileRoute("/api/stt/elevenlabs")({
 
         if (!upstream.ok) {
           const text = await upstream.text();
+          await meter(request, {
+            kind: "stt",
+            provider: "elevenlabs",
+            model: SCRIBE_MODEL_ID,
+            audioBytes,
+            durationMs: Date.now() - t0,
+            status: upstream.status,
+          });
           return errorResponse(upstream.status, `Scribe ${upstream.status}: ${text}`);
         }
 
@@ -127,6 +153,14 @@ export const Route = createFileRoute("/api/stt/elevenlabs")({
           },
         ];
 
+        await meter(request, {
+          kind: "stt",
+          provider: "elevenlabs",
+          model: SCRIBE_MODEL_ID,
+          audioBytes,
+          durationMs: Date.now() - t0,
+          status: upstream.status,
+        });
         return Response.json({ segments }, { headers: withCors() });
       },
     },

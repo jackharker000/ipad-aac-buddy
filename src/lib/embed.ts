@@ -15,6 +15,7 @@
  */
 
 import { cosine as cosineF32 } from "@/lib/audio/utils";
+import { authHeaders } from "@/lib/auth-headers";
 
 const LRU_CAPACITY = 256;
 /** OpenAI's per-request input cap and our server proxy's enforced ceiling. */
@@ -101,9 +102,10 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
 async function fetchEmbeddings(texts: string[]): Promise<number[][]> {
   let response: Response;
   try {
+    const auth = await authHeaders();
     response = await fetch("/api/embed/openai", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...auth },
       body: JSON.stringify({ texts }),
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });

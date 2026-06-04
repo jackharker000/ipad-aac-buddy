@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { corsPreflight, requireClientToken, withCors } from "@/lib/api-cors";
+import { meter } from "@/lib/metering";
 
 /**
  * OpenAI embeddings proxy. Used for the Tier-3 semantic memory retrieval
@@ -38,6 +39,8 @@ export const Route = createFileRoute("/api/embed/openai")({
       POST: async ({ request }) => {
         const denied = requireClientToken(request);
         if (denied) return denied;
+
+        const start = Date.now();
 
         const apiKey = process.env.OPENAI_API_KEY;
         if (!apiKey) return errorResponse(500, "OPENAI_API_KEY not set on the server");
@@ -77,7 +80,17 @@ export const Route = createFileRoute("/api/embed/openai")({
             signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
           });
         } catch (err) {
-          if (err instanceof DOMException && err.name === "TimeoutError") {
+          const isTimeout = err instanceof DOMException && err.name === "TimeoutError";
+          const status = isTimeout ? 504 : 502;
+          await meter(request, {
+            kind: "embed",
+            provider: "openai",
+            model: EMBEDDING_MODEL,
+            tokensIn: 0,
+            durationMs: Date.now() - start,
+            status,
+          });
+          if (isTimeout) {
             return errorResponse(504, `OpenAI embeddings timed out after ${UPSTREAM_TIMEOUT_MS}ms`);
           }
           return errorResponse(502, `OpenAI embeddings request failed: ${(err as Error).message}`);
@@ -85,11 +98,21 @@ export const Route = createFileRoute("/api/embed/openai")({
 
         if (!upstream.ok) {
           const text = await upstream.text();
+          await meter(request, {
+            kind: "embed",
+            provider: "openai",
+            model: EMBEDDING_MODEL,
+            tokensIn: 0,
+            durationMs: Date.now() - start,
+            status: upstream.status,
+          });
           return errorResponse(upstream.status, `OpenAI ${upstream.status}: ${text}`);
         }
 
         const data = (await upstream.json()) as {
+          model?: string;
           data?: Array<{ embedding?: number[]; index?: number }>;
+          usage?: { prompt_tokens?: number; total_tokens?: number };
         };
         const rows = Array.isArray(data.data) ? data.data : [];
         const embeddings: number[][] = new Array(body.texts.length);
@@ -106,9 +129,26 @@ export const Route = createFileRoute("/api/embed/openai")({
         // the client doesn't silently feed all-zero vectors into the matcher.
         for (let i = 0; i < embeddings.length; i++) {
           if (!embeddings[i]) {
+            await meter(request, {
+              kind: "embed",
+              provider: "openai",
+              model: data.model ?? EMBEDDING_MODEL,
+              tokensIn: data.usage?.total_tokens ?? data.usage?.prompt_tokens ?? 0,
+              durationMs: Date.now() - start,
+              status: 502,
+            });
             return errorResponse(502, `OpenAI returned no embedding for input ${i}`);
           }
         }
+
+        await meter(request, {
+          kind: "embed",
+          provider: "openai",
+          model: data.model ?? EMBEDDING_MODEL,
+          tokensIn: data.usage?.total_tokens ?? data.usage?.prompt_tokens ?? 0,
+          durationMs: Date.now() - start,
+          status: upstream.status,
+        });
 
         return Response.json(
           { embeddings },
