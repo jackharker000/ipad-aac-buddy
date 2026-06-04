@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { SetupChecklist } from "@/components/onboarding/SetupChecklist";
 import { cn } from "@/lib/cn";
 import {
   db,
@@ -410,6 +411,7 @@ function Cockpit() {
 
   return (
     <div className="mx-auto w-full max-w-6xl space-y-5 px-4 py-6">
+      <SetupChecklist />
       <header className="space-y-1">
         <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
           Live cockpit
