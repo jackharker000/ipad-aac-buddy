@@ -4,7 +4,7 @@ import { Link, Outlet, createFileRoute, useLocation, useRouter } from "@tanstack
 import { ParleyLogo } from "@/components/ParleyLogo";
 import { cn } from "@/lib/cn";
 import { drainPendingJobs } from "@/lib/jobs/drain";
-import { signOut, useSession } from "@/lib/auth";
+import { useSession } from "@/lib/auth";
 import { useCloudSync } from "@/lib/sync/use-cloud-sync";
 import { useSettings } from "@/lib/settings";
 
@@ -73,21 +73,24 @@ function AppLayout() {
     );
   }
 
-  async function handleSignOut() {
-    await signOut();
-    router.navigate({ to: "/login" });
-  }
-
   // Cockpit (/app exactly) renders its own 120×120 action row + status strip
-  // — strip the parent's top nav so we don't double-stack chrome. Account
-  // controls (user email + sign-out + sync-paused pill + admin link) move
-  // into a tiny floating control in the top-right corner of the cockpit.
+  // — strip the parent's top nav so we don't double-stack chrome. Sync-paused
+  // pill + admin link live as a small floating control in the top-right
+  // corner of the cockpit so the operator can still hop to /admin without
+  // burning a 120-px button slot. Sign out moved into Settings → System →
+  // Account (per user request — keeps the cockpit chrome quieter).
+  //
   // Sub-routes (/app/recent etc.) keep the conventional top nav as their
   // back-to-Live affordance.
   const isCockpit = location.pathname === "/app" || location.pathname === "/app/";
 
   return (
-    <div className="flex min-h-full flex-col bg-background text-foreground">
+    // h-dvh + min-h-0 chain so the cockpit's flex-1 main grid actually
+    // fills the viewport (the Suggestions + Live transcript + Speakers
+    // panels need a definite parent height to expand into). dvh handles
+    // the iPad Safari URL-bar resize without leaving dead space at the
+    // bottom of the cockpit.
+    <div className="flex h-dvh flex-col bg-background text-foreground">
       {!isCockpit && (
         <header className="sticky top-0 z-20 border-b border-border bg-background/95 backdrop-blur">
           <div className="mx-auto flex w-full max-w-6xl items-center gap-3 px-4 py-3">
@@ -122,7 +125,6 @@ function AppLayout() {
                     Admin
                   </Link>
                 ) : null}
-                <span className="hidden text-xs text-muted-foreground sm:inline">{user.email}</span>
                 {syncPaused && (
                   <Link
                     to="/app/settings"
@@ -132,23 +134,16 @@ function AppLayout() {
                     Sync paused
                   </Link>
                 )}
-                <button
-                  onClick={handleSignOut}
-                  className="rounded-md px-3 py-1.5 text-sm font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  Sign out
-                </button>
               </div>
             </nav>
           </div>
         </header>
       )}
 
-      {/* Cockpit-only floating account corner. Sits over the cockpit's
-          top-right corner without disturbing the 120×120 button row.
-          Sign-out + sync-paused pill + admin link live here so the chrome
-          stays out of the way of speech. */}
-      {isCockpit && (
+      {/* Cockpit-only floating corner — sync-paused pill + admin link.
+          Sign out moved to Settings → System → Account so this chrome
+          stays quiet during a live conversation. */}
+      {isCockpit && (syncPaused || user.is_admin) && (
         <div className="pointer-events-none absolute right-4 top-4 z-30 flex items-center gap-2">
           {syncPaused && (
             <Link
@@ -167,18 +162,10 @@ function AppLayout() {
               Admin
             </Link>
           ) : null}
-          <button
-            type="button"
-            onClick={handleSignOut}
-            title={user.email ?? "Sign out"}
-            className="pointer-events-auto rounded-md bg-background/80 px-2 py-1 text-xs font-medium text-muted-foreground backdrop-blur hover:bg-muted hover:text-foreground"
-          >
-            Sign out
-          </button>
         </div>
       )}
 
-      <main className={cn("flex-1", isCockpit && "relative")}>
+      <main className={cn("flex-1 min-h-0", isCockpit && "relative")}>
         <Outlet />
       </main>
     </div>
