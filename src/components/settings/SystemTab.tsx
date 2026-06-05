@@ -240,7 +240,7 @@ function SliderRow({
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <span className="text-sm font-medium text-foreground">{label}</span>
         <span className="rounded-md bg-muted px-2 py-0.5 font-mono text-xs tabular-nums text-muted-foreground">
-          {value.toFixed(2)}
+          {(value ?? 0).toFixed(2)}
         </span>
       </div>
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
