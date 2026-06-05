@@ -29,6 +29,7 @@ const SYNCED_TABLES = new Set<string>([
   "suggestionsLog",
   "helperDrafts",
   "manualReplies",
+  "syncErrors",
 ]);
 
 export const Route = createFileRoute("/api/admin/user-data")({

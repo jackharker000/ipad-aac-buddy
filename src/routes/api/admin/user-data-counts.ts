@@ -32,6 +32,7 @@ const SYNCED_TABLES = [
   "suggestionsLog",
   "helperDrafts",
   "manualReplies",
+  "syncErrors",
 ] as const;
 
 export const Route = createFileRoute("/api/admin/user-data-counts")({

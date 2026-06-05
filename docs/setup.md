@@ -90,6 +90,12 @@ service firebase.storage {
 
 Publish both. Admin reads (the `/admin/*` dashboard) go through the server using the service account, which bypasses these rules — that's how the admin can still see every user's data without weakening them.
 
+The `syncErrors` table is part of the per-user subtree (`users/{uid}/syncErrors/{id}`) and is already covered by the per-user Firestore rule above — users write their own sync-error log when the engine logs after several failed retries; admins read across users via the service account.
+
+## Sync error visibility (collection-group index)
+
+Sync error visibility uses a Firestore collection-group query on `syncErrors`. You'll need to create a collection-group index in the Firebase console (Firestore → Indexes → Composite → Collection group: `syncErrors`, fields: `recovered` ASC, `createdAt` DESC). Without the index, the admin overview "Users with sync errors" widget will show 0 instead of erroring — see the `/api/admin/sync-errors-summary` endpoint, which detects the FAILED_PRECONDITION response and returns an empty count map so the dashboard never reads as broken.
+
 ## Dev
 
 ```bash
