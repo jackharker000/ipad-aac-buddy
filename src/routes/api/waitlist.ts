@@ -37,7 +37,14 @@ export const Route = createFileRoute("/api/waitlist")({
 
         const parsed = BodySchema.safeParse(raw);
         if (!parsed.success) {
-          return jsonResponse({ ok: false, error: "Invalid body" }, 400, request);
+          // Surface a field-specific message instead of the opaque "Invalid
+          // body" — the most common failure is a malformed email (e.g.
+          // "test@test" with no TLD), and the user needs to know what to fix.
+          return jsonResponse(
+            { ok: false, error: firstValidationMessage(parsed.error) },
+            400,
+            request,
+          );
         }
 
         const { name, email, about } = parsed.data;
@@ -70,6 +77,19 @@ export const Route = createFileRoute("/api/waitlist")({
     },
   },
 });
+
+/**
+ * Map the first Zod validation issue to a friendly, field-specific message.
+ * The form only has three fields, so the mapping is tiny and explicit.
+ */
+function firstValidationMessage(error: z.ZodError): string {
+  const issue = error.issues[0];
+  const field = issue?.path?.[0];
+  if (field === "email") return "Please enter a valid email address.";
+  if (field === "name") return "Please enter your name.";
+  if (field === "about") return "That message is too long — please shorten it.";
+  return "Please check the form and try again.";
+}
 
 function jsonResponse(body: unknown, status: number, request?: Request): Response {
   return new Response(JSON.stringify(body), {
