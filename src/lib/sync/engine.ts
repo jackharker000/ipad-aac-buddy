@@ -303,6 +303,13 @@ async function getCursor(): Promise<number> {
 function installHooks(handle: EngineHandle): void {
   const d = db();
   for (const name of SYNCED_TABLES) {
+    // syncErrors is deliberately excluded from the hook-driven outbox
+    // path: a failed sync that records into syncErrors would re-fire
+    // this hook and enqueue itself, which after MAX_RETRIES_BEFORE_LOG
+    // failures recurses into recordSyncError again — chronic write loop
+    // capped only by the 50-row prune. recordSyncError instead pushes
+    // its row to Firestore directly (best-effort, never throws).
+    if (name === "syncErrors") continue;
     // Dexie's runtime table lookup. The static class fields are typed
     // separately, but a string-indexed access is the only generic way
     // to attach hooks across the full list. `d.table(name)` throws if
@@ -623,15 +630,23 @@ async function recordSyncError(
     (e) => e.rowId === entry.rowId && e.recovered === false,
   );
 
+  let written: SyncError;
   if (prior) {
-    await db().syncErrors.update(prior.id, {
+    written = {
+      ...prior,
       retries: entry.retries ?? prior.retries,
       message,
       kind,
       updatedAt: now,
+    };
+    await db().syncErrors.update(prior.id, {
+      retries: written.retries,
+      message: written.message,
+      kind: written.kind,
+      updatedAt: written.updatedAt,
     });
   } else {
-    const row: SyncError = {
+    written = {
       id: nanoid(),
       table: entry.table,
       rowId: entry.rowId,
@@ -643,10 +658,14 @@ async function recordSyncError(
       createdAt: now,
       updatedAt: now,
     };
-    await db().syncErrors.put(row);
+    await db().syncErrors.put(written);
   }
 
   await pruneSyncErrorsIfNeeded();
+  // Direct upload (no outbox enqueue, no Dexie hook): bypasses the loop
+  // where a failed flush of a syncErrors row would itself record another
+  // syncError. Best-effort; the cockpit never blocks on it.
+  void pushSyncErrorDirect(written);
 }
 
 /**
@@ -665,10 +684,43 @@ async function markSyncErrorRecovered(table: string, rowId: string): Promise<voi
   // bulkUpdate availability isn't guaranteed. The match set is tiny in
   // practice (almost always 1), so this isn't a hot path.
   await Promise.all(
-    matches.map((m) =>
-      db().syncErrors.update(m.id, { recovered: true, updatedAt: now }),
-    ),
+    matches.map(async (m) => {
+      await db().syncErrors.update(m.id, { recovered: true, updatedAt: now });
+      void pushSyncErrorDirect({ ...m, recovered: true, updatedAt: now });
+    }),
   );
+}
+
+/**
+ * Push a SyncError row to Firestore via a direct setDoc, bypassing the
+ * outbox + Dexie hook path so a failed sync of a syncErrors row can't
+ * cascade into recording another syncError. Best-effort: silent no-op
+ * when no engine is running or Firebase isn't configured. Failures are
+ * swallowed (the row is still in local Dexie; the admin gets it next
+ * time something works).
+ */
+async function pushSyncErrorDirect(row: SyncError): Promise<void> {
+  try {
+    if (!active || active.stopped) return;
+    if (!isFirebaseConfigured()) return;
+    const uid = active.uid;
+    const fs = getFirebaseDb();
+    await setDoc(doc(fs, "users", uid, "syncErrors", row.id), {
+      table: row.table,
+      rowId: row.rowId,
+      op: row.op,
+      message: row.message,
+      retries: row.retries,
+      kind: row.kind,
+      recovered: row.recovered,
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+    });
+  } catch {
+    // Direct push failed; nothing to do — the local row stands and the
+    // next successful flush cycle will see it via list queries from the
+    // admin anyway.
+  }
 }
 
 /**

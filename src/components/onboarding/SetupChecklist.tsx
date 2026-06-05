@@ -153,6 +153,20 @@ export function SetupChecklist(): JSX.Element | null {
   const doneCount = steps.filter((s) => s.done).length;
   const allDone = doneCount === steps.length;
 
+  // Persist dismissal the moment the user reaches all-done so the card
+  // auto-hides on the next mount. We deliberately keep showing the
+  // "All set!" celebration in the current render (the user gets one
+  // closure moment) before it disappears for good.
+  useEffect(() => {
+    if (allDone) {
+      try {
+        localStorage.setItem(DISMISS_KEY, "1");
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [allDone]);
+
   if (dismissed) return null;
   if (allDone && doneCount === 0) {
     // Defensive: shouldn't be reachable, but keeps the guard explicit.
