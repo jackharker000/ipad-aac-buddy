@@ -8,10 +8,17 @@ import { DEFAULT_SETTINGS, db, type SettingsRecord } from "@/lib/db";
  * querier valid inside `useLiveQuery` — Dexie throws on any write from a
  * liveQuery context. The singleton row is materialised lazily on first
  * write via `put`, not by seeding here.
+ *
+ * The stored row is MERGED over DEFAULT_SETTINGS so a partial record can
+ * never surface `undefined` for a field the UI assumes is present. This is
+ * a real failure mode: a settings row written by an older app version (or
+ * restored from an older backup) may be missing fields like
+ * `speakerIdAcceptThreshold`, and reading it raw crashed the System tab on
+ * `value.toFixed(2)`. Spreading defaults first backfills every gap.
  */
 async function readSettings(): Promise<SettingsRecord> {
   const existing = await db().settings.get("singleton");
-  return existing ?? DEFAULT_SETTINGS;
+  return existing ? { ...DEFAULT_SETTINGS, ...existing } : DEFAULT_SETTINGS;
 }
 
 export function useSettings(): SettingsRecord {
