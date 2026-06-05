@@ -11,9 +11,44 @@ import { type Firestore, getFirestore } from "firebase/firestore";
  * server import doesn't crash the build.
  */
 
+/**
+ * Resolve the Firebase Auth domain.
+ *
+ * `signInWithPopup` (Google sign-in) loads `https://<authDomain>/__/auth/
+ * handler`. That path is ONLY served by Firebase-hosted domains
+ * (`*.firebaseapp.com` / `*.web.app`). This app is hosted on Vercel, so a
+ * custom authDomain like `parley.help` 404s the handler and breaks Google
+ * sign-in entirely (it also surfaces earlier as `redirect_uri_mismatch`).
+ *
+ * So: trust the configured value only when it's a Firebase-hosted domain;
+ * otherwise coerce it back to the canonical `<projectId>.firebaseapp.com`.
+ * This makes Google sign-in resilient to a misconfigured
+ * VITE_FIREBASE_AUTH_DOMAIN (the common foot-gun is setting it to the site's
+ * custom domain). To intentionally use a custom auth domain, serve
+ * `/__/auth/handler` from it via Firebase Hosting and point the env var at a
+ * `*.firebaseapp.com` / `*.web.app` host.
+ */
+function resolveAuthDomain(): string {
+  const configured = (import.meta.env.VITE_FIREBASE_AUTH_DOMAIN as string | undefined)?.trim();
+  const projectId = (import.meta.env.VITE_FIREBASE_PROJECT_ID as string | undefined)?.trim();
+  if (configured && /\.(firebaseapp\.com|web\.app)$/i.test(configured)) {
+    return configured;
+  }
+  if (projectId) {
+    if (configured && configured !== `${projectId}.firebaseapp.com`) {
+      console.warn(
+        `[firebase] VITE_FIREBASE_AUTH_DOMAIN="${configured}" can't serve the auth handler on this host; ` +
+          `using "${projectId}.firebaseapp.com" so Google sign-in works.`,
+      );
+    }
+    return `${projectId}.firebaseapp.com`;
+  }
+  return configured ?? "";
+}
+
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY as string,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN as string,
+  authDomain: resolveAuthDomain(),
   projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID as string,
   storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET as string,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID as string,
