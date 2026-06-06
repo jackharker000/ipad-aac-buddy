@@ -2,6 +2,7 @@ import { type FirebaseApp, getApps, initializeApp } from "firebase/app";
 import {
   type Auth,
   browserLocalPersistence,
+  browserPopupRedirectResolver,
   getAuth,
   indexedDBLocalPersistence,
   initializeAuth,
@@ -94,6 +95,12 @@ export function getFirebaseApp(): FirebaseApp {
  * Firebase exposes, so we ask for that first and fall back to localStorage
  * only if the runtime refuses IDB (private mode, very old browser).
  *
+ * `popupRedirectResolver` is REQUIRED when going through `initializeAuth`
+ * rather than `getAuth` — otherwise `signInWithPopup` and
+ * `signInWithRedirect` both throw `auth/operation-not-supported-in-this-
+ * environment`. `getAuth` wires this in by default; `initializeAuth` makes
+ * us pass it explicitly.
+ *
  * `initializeAuth` must run BEFORE any other `getAuth(app)` call against
  * the same app, so we go through it on first access. After that,
  * subsequent callers get the same cached instance.
@@ -104,6 +111,7 @@ export function getFirebaseAuth(): Auth {
     try {
       authInstance = initializeAuth(fbApp, {
         persistence: [indexedDBLocalPersistence, browserLocalPersistence],
+        popupRedirectResolver: browserPopupRedirectResolver,
       });
     } catch {
       // Already initialised (e.g. HMR hot-reload picked the cached app).

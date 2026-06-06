@@ -2,9 +2,10 @@ import { useEffect, useState } from "react";
 import {
   GoogleAuthProvider,
   createUserWithEmailAndPassword,
+  getRedirectResult,
   onAuthStateChanged,
   signInWithEmailAndPassword,
-  signInWithPopup,
+  signInWithRedirect,
   signOut as fbSignOut,
   type User,
 } from "firebase/auth";
@@ -119,25 +120,60 @@ export async function signIn(email: string, password: string): Promise<SessionUs
   }
 }
 
-export async function signInWithGoogle(): Promise<SessionUser> {
+/**
+ * Where to navigate after the Google redirect returns. Stashed before we
+ * leave, read by the login route's post-redirect effect. Picks up on the
+ * same device because sessionStorage survives the Firebase OAuth bounce
+ * (same origin, same tab) — but NOT cross-device, which is fine: a
+ * redirect by definition resumes on the device it started on.
+ */
+const POST_REDIRECT_KEY = "parley.auth.postRedirect";
+
+export function readPostSignInRedirect(): string | null {
+  try {
+    if (typeof window === "undefined") return null;
+    const target = window.sessionStorage.getItem(POST_REDIRECT_KEY);
+    window.sessionStorage.removeItem(POST_REDIRECT_KEY);
+    return target ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Kick off a full-page redirect to Google's OAuth flow. Resolves once the
+ * browser has accepted the navigation — the page leaves before any
+ * meaningful work, so the caller should NOT try to navigate or await a
+ * SessionUser after this. The returning page (any route mounting
+ * `useSession`) harvests the result via `getRedirectResult` and
+ * `onAuthStateChanged` fires with the signed-in user.
+ *
+ * Was `signInWithPopup` historically; switched because Apple's standalone
+ * PWA webview reliably breaks popup-based sign-in (popups open a new tab
+ * outside the PWA frame, or are blocked outright, depending on iOS
+ * version). Redirect works in every surface.
+ */
+export async function signInWithGoogle(redirect?: string): Promise<void> {
   if (!isFirebaseConfigured()) {
     throw new AuthError("Sign-in isn't configured yet (missing Firebase config).");
   }
   try {
+    if (typeof window !== "undefined") {
+      try {
+        window.sessionStorage.setItem(POST_REDIRECT_KEY, redirect ?? "/app");
+      } catch {
+        // sessionStorage unavailable (private mode etc.) — the login
+        // route's fallback to `/app` still works.
+      }
+    }
     const provider = new GoogleAuthProvider();
-    const cred = await signInWithPopup(getFirebaseAuth(), provider);
-    return await resolve(cred.user, true);
+    await signInWithRedirect(getFirebaseAuth(), provider);
+    // Control transferred to the OAuth flow. We don't return.
   } catch (err) {
     const code = (err as { code?: string })?.code;
     // Log the raw code so future unrecognised failures are diagnosable
     // from devtools without digging through the Firebase source.
     console.warn("[auth] signInWithGoogle failed:", code, err);
-    if (code === "auth/popup-closed-by-user" || code === "auth/cancelled-popup-request") {
-      throw new AuthError("Sign-in cancelled.");
-    }
-    if (code === "auth/popup-blocked") {
-      throw new AuthError("Your browser blocked the Google sign-in popup. Allow popups and try again.");
-    }
     if (code === "auth/account-exists-with-different-credential") {
       throw new AuthError(
         "An account with this email already exists with a different sign-in method. Try email + password instead.",
@@ -222,6 +258,18 @@ export function useSession(): { user: SessionUser | null; loading: boolean } {
     }
 
     maybeAskStoragePersist();
+
+    // Harvest a pending `signInWithRedirect` result if we just got
+    // bounced back from Google. The SDK applies it to the current user
+    // internally, so we don't need the return value — `onAuthStateChanged`
+    // below will fire with the signed-in user either way. Failures are
+    // logged because they're useful for diagnosing
+    // unauthorized-domain / redirect-uri config drift; they don't block
+    // anything because the existing auth state still controls the gate.
+    void getRedirectResult(getFirebaseAuth()).catch((err) => {
+      const code = (err as { code?: string })?.code;
+      if (code) console.warn("[auth] getRedirectResult:", code, err);
+    });
 
     const unsub = onAuthStateChanged(getFirebaseAuth(), async (u) => {
       if (!u) {

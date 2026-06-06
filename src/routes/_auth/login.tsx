@@ -1,11 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
 import { z } from "zod";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { AuthError, signIn } from "@/lib/auth";
+import { AuthError, readPostSignInRedirect, signIn, useSession } from "@/lib/auth";
 import { GoogleSignInButton } from "@/components/auth/GoogleSignInButton";
 
 const LoginSearch = z.object({
@@ -29,10 +29,27 @@ export const Route = createFileRoute("/_auth/login")({
 function LoginPage() {
   const router = useRouter();
   const search = Route.useSearch();
+  const { user } = useSession();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Post-redirect landing pad. When Google sends the user back here
+  // after `signInWithRedirect`, `useSession` picks up the new user via
+  // `getRedirectResult` + `onAuthStateChanged`, and this effect fires
+  // the navigation onward. Priority of destinations:
+  //   1) the sessionStorage stash we set just before the redirect (so
+  //      the original `?redirect=` param survives the bounce)
+  //   2) the current `?redirect=` search param (covers a fresh
+  //      sign-in that wasn't started here)
+  //   3) /app
+  useEffect(() => {
+    if (!user) return;
+    const stashed = readPostSignInRedirect();
+    const target = stashed ?? search.redirect ?? "/app";
+    router.navigate({ to: target });
+  }, [user, router, search.redirect]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();

@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useRouter } from "@tanstack/react-router";
 
 import { AuthError, signInWithGoogle } from "@/lib/auth";
 
@@ -10,11 +9,14 @@ type Props = {
 };
 
 /**
- * Google sign-in button. Uses Firebase signInWithPopup under the hood.
- * Routes to `redirect` (or `/app`) on success.
+ * Google sign-in button. Uses Firebase `signInWithRedirect` under the
+ * hood — the page leaves for Google's OAuth flow and returns to the
+ * login route, at which point a useEffect watches `useSession()` and
+ * navigates onward. We never resolve a `SessionUser` here, so loading
+ * state stays on until the navigation completes; only an error initiating
+ * the redirect resets it.
  */
 export function GoogleSignInButton({ redirect, label = "Continue with Google" }: Props) {
-  const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -22,11 +24,12 @@ export function GoogleSignInButton({ redirect, label = "Continue with Google" }:
     setError(null);
     setLoading(true);
     try {
-      await signInWithGoogle();
-      router.navigate({ to: redirect ?? "/app" });
+      await signInWithGoogle(redirect);
+      // signInWithRedirect navigates away — anything past this is the
+      // browser still pre-navigation. Leave loading=true so the button
+      // visually stays in its "Signing in…" state until the page leaves.
     } catch (err) {
       setError(err instanceof AuthError ? err.message : "Something went wrong");
-    } finally {
       setLoading(false);
     }
   }
