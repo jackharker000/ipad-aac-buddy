@@ -75,17 +75,21 @@ function ProfileCard() {
   const [hydrated, setHydrated] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // Hydrate the draft from the loaded profile once. Subsequent edits keep
-  // local state so live-query refreshes don't clobber the user's typing.
-  // We only re-hydrate after the live row has materialised (updatedAt !== 0
-  // is the "real saved row" signal); an empty default profile is left as-is
-  // so the form fields don't flicker between the empty default and an
-  // already-typed draft.
+  // Hydrate the draft from the persisted profile exactly once, but only
+  // after a REAL row has materialised. The previous gate (`profile`-then-
+  // `setHydrated(true)` unconditionally) flipped to "hydrated" on the
+  // very first render — when `useJamesProfile()` still hands back
+  // DEFAULT_JAMES_PROFILE because the live query hasn't resolved — and
+  // never re-hydrated when the actual saved row arrived. Result: the
+  // form stayed blank, the user thought save was broken, and every
+  // attempt failed the "Display name is required" check.
+  //
+  // updatedAt === 0 is the "default seed, no real save yet" signal; we
+  // wait for it to flip non-zero before declaring hydration done.
   useEffect(() => {
     if (hydrated) return;
-    if (profile.updatedAt !== 0) {
-      setDraft(draftFromProfile(profile));
-    }
+    if (profile.updatedAt === 0) return;
+    setDraft(draftFromProfile(profile));
     setHydrated(true);
   }, [profile, hydrated]);
 
