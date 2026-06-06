@@ -4,6 +4,7 @@ import {
   createUserWithEmailAndPassword,
   getRedirectResult,
   onAuthStateChanged,
+  signInWithCustomToken,
   signInWithEmailAndPassword,
   signInWithRedirect,
   signOut as fbSignOut,
@@ -197,6 +198,38 @@ export async function getIdToken(): Promise<string | null> {
 }
 
 /**
+ * Exchange a long-lived iPad device key for a fresh Firebase session.
+ *
+ * The home-screen icon's `start_url` (baked at Add-to-Home-Screen time
+ * via `/api/manifest?key=…`) launches `/app?device_key=…`. When the
+ * cockpit boots without an existing session it pulls the key off the
+ * URL, POSTs it here, and the server hands back a Firebase custom
+ * token. `signInWithCustomToken` then mints a real session, after
+ * which `onAuthStateChanged` fires and the gate flips to the cockpit.
+ *
+ * Returns true on success, false on any failure — caller falls through
+ * to the normal sign-out path (gateway redirects to /login).
+ */
+export async function signInWithDeviceKey(deviceKey: string): Promise<boolean> {
+  if (!isFirebaseConfigured() || !deviceKey) return false;
+  try {
+    const res = await fetch("/api/autologin", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ device_key: deviceKey }),
+    });
+    if (!res.ok) return false;
+    const data = (await res.json()) as { token?: string };
+    if (!data.token) return false;
+    await signInWithCustomToken(getFirebaseAuth(), data.token);
+    return true;
+  } catch (err) {
+    console.warn("[auth] signInWithDeviceKey failed:", err);
+    return false;
+  }
+}
+
+/**
  * Reactive session. Subscribes to Firebase auth state and reads the admin
  * custom claim from the ID token. `loading` is true until the first auth
  * state resolves.
@@ -224,6 +257,30 @@ export async function getIdToken(): Promise<string | null> {
  * these refreshes succeed silently — no network round-trip for the user.
  */
 const TOKEN_REFRESH_INTERVAL_MS = 50 * 60 * 1000;
+
+/**
+ * Pull the `device_key` search param off the current URL and remove it
+ * via history.replaceState so refreshes don't re-fire the autologin call.
+ * Returns the trimmed key string (or null when absent / oversized).
+ */
+function consumeDeviceKeyFromUrl(): string | null {
+  try {
+    const url = new URL(window.location.href);
+    const raw = url.searchParams.get("device_key");
+    if (!raw) return null;
+    url.searchParams.delete("device_key");
+    window.history.replaceState(
+      window.history.state,
+      "",
+      url.pathname + url.search + url.hash,
+    );
+    const trimmed = raw.trim();
+    if (trimmed.length === 0 || trimmed.length > 256) return null;
+    return trimmed;
+  } catch {
+    return null;
+  }
+}
 
 let storagePersistAsked = false;
 function maybeAskStoragePersist(): void {
@@ -270,6 +327,20 @@ export function useSession(): { user: SessionUser | null; loading: boolean } {
       const code = (err as { code?: string })?.code;
       if (code) console.warn("[auth] getRedirectResult:", code, err);
     });
+
+    // iPad autologin: when the home-screen icon launches the cockpit
+    // with `?device_key=…`, exchange it for a Firebase custom-token
+    // session BEFORE we decide there's no user. We only attempt this if
+    // there's no current user yet — a signed-in icon-launcher (the
+    // happy 7-day-window path) skips the exchange. Strip the param from
+    // the URL after consumption so refreshes don't re-fire the call.
+    const deviceKey = consumeDeviceKeyFromUrl();
+    if (deviceKey && !getFirebaseAuth().currentUser) {
+      void signInWithDeviceKey(deviceKey);
+      // `onAuthStateChanged` fires either way — on success with the
+      // resolved user, on failure with null (gateway falls through to
+      // /login). No need to await here.
+    }
 
     const unsub = onAuthStateChanged(getFirebaseAuth(), async (u) => {
       if (!u) {

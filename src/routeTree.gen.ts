@@ -22,6 +22,8 @@ import { Route as AppPeopleRouteImport } from './routes/app/people'
 import { Route as AppHelpersRouteImport } from './routes/app/helpers'
 import { Route as AppEventsRouteImport } from './routes/app/events'
 import { Route as ApiWaitlistRouteImport } from './routes/api/waitlist'
+import { Route as ApiManifestRouteImport } from './routes/api/manifest'
+import { Route as ApiAutologinRouteImport } from './routes/api/autologin'
 import { Route as AdminWaitlistRouteImport } from './routes/admin/waitlist'
 import { Route as AdminUsersRouteImport } from './routes/admin/users'
 import { Route as AdminUsageRouteImport } from './routes/admin/usage'
@@ -42,6 +44,9 @@ import { Route as ApiSttElevenlabsRouteImport } from './routes/api/stt/elevenlab
 import { Route as ApiLlmOpenaiRouteImport } from './routes/api/llm/openai'
 import { Route as ApiLlmAnthropicRouteImport } from './routes/api/llm/anthropic'
 import { Route as ApiEmbedOpenaiRouteImport } from './routes/api/embed/openai'
+import { Route as ApiDeviceKeysRevokeRouteImport } from './routes/api/device-keys/revoke'
+import { Route as ApiDeviceKeysListRouteImport } from './routes/api/device-keys/list'
+import { Route as ApiDeviceKeysCreateRouteImport } from './routes/api/device-keys/create'
 import { Route as ApiAuthEnsureRoleRouteImport } from './routes/api/auth/ensure-role'
 import { Route as ApiAdminWaitlistActionRouteImport } from './routes/api/admin/waitlist-action'
 import { Route as ApiAdminWaitlistRouteImport } from './routes/api/admin/waitlist'
@@ -119,6 +124,16 @@ const AppEventsRoute = AppEventsRouteImport.update({
 const ApiWaitlistRoute = ApiWaitlistRouteImport.update({
   id: '/api/waitlist',
   path: '/api/waitlist',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiManifestRoute = ApiManifestRouteImport.update({
+  id: '/api/manifest',
+  path: '/api/manifest',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiAutologinRoute = ApiAutologinRouteImport.update({
+  id: '/api/autologin',
+  path: '/api/autologin',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminWaitlistRoute = AdminWaitlistRouteImport.update({
@@ -221,6 +236,21 @@ const ApiEmbedOpenaiRoute = ApiEmbedOpenaiRouteImport.update({
   path: '/api/embed/openai',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiDeviceKeysRevokeRoute = ApiDeviceKeysRevokeRouteImport.update({
+  id: '/api/device-keys/revoke',
+  path: '/api/device-keys/revoke',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiDeviceKeysListRoute = ApiDeviceKeysListRouteImport.update({
+  id: '/api/device-keys/list',
+  path: '/api/device-keys/list',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiDeviceKeysCreateRoute = ApiDeviceKeysCreateRouteImport.update({
+  id: '/api/device-keys/create',
+  path: '/api/device-keys/create',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAuthEnsureRoleRoute = ApiAuthEnsureRoleRouteImport.update({
   id: '/api/auth/ensure-role',
   path: '/api/auth/ensure-role',
@@ -314,6 +344,8 @@ export interface FileRoutesByFullPath {
   '/admin/usage': typeof AdminUsageRoute
   '/admin/users': typeof AdminUsersRouteWithChildren
   '/admin/waitlist': typeof AdminWaitlistRoute
+  '/api/autologin': typeof ApiAutologinRoute
+  '/api/manifest': typeof ApiManifestRoute
   '/api/waitlist': typeof ApiWaitlistRoute
   '/app/events': typeof AppEventsRoute
   '/app/helpers': typeof AppHelpersRoute
@@ -336,6 +368,9 @@ export interface FileRoutesByFullPath {
   '/api/admin/waitlist': typeof ApiAdminWaitlistRoute
   '/api/admin/waitlist-action': typeof ApiAdminWaitlistActionRoute
   '/api/auth/ensure-role': typeof ApiAuthEnsureRoleRoute
+  '/api/device-keys/create': typeof ApiDeviceKeysCreateRoute
+  '/api/device-keys/list': typeof ApiDeviceKeysListRoute
+  '/api/device-keys/revoke': typeof ApiDeviceKeysRevokeRoute
   '/api/embed/openai': typeof ApiEmbedOpenaiRoute
   '/api/llm/anthropic': typeof ApiLlmAnthropicRoute
   '/api/llm/openai': typeof ApiLlmOpenaiRoute
@@ -360,6 +395,8 @@ export interface FileRoutesByTo {
   '/admin/usage': typeof AdminUsageRoute
   '/admin/users': typeof AdminUsersRouteWithChildren
   '/admin/waitlist': typeof AdminWaitlistRoute
+  '/api/autologin': typeof ApiAutologinRoute
+  '/api/manifest': typeof ApiManifestRoute
   '/api/waitlist': typeof ApiWaitlistRoute
   '/app/events': typeof AppEventsRoute
   '/app/helpers': typeof AppHelpersRoute
@@ -382,6 +419,9 @@ export interface FileRoutesByTo {
   '/api/admin/waitlist': typeof ApiAdminWaitlistRoute
   '/api/admin/waitlist-action': typeof ApiAdminWaitlistActionRoute
   '/api/auth/ensure-role': typeof ApiAuthEnsureRoleRoute
+  '/api/device-keys/create': typeof ApiDeviceKeysCreateRoute
+  '/api/device-keys/list': typeof ApiDeviceKeysListRoute
+  '/api/device-keys/revoke': typeof ApiDeviceKeysRevokeRoute
   '/api/embed/openai': typeof ApiEmbedOpenaiRoute
   '/api/llm/anthropic': typeof ApiLlmAnthropicRoute
   '/api/llm/openai': typeof ApiLlmOpenaiRoute
@@ -410,6 +450,8 @@ export interface FileRoutesById {
   '/admin/usage': typeof AdminUsageRoute
   '/admin/users': typeof AdminUsersRouteWithChildren
   '/admin/waitlist': typeof AdminWaitlistRoute
+  '/api/autologin': typeof ApiAutologinRoute
+  '/api/manifest': typeof ApiManifestRoute
   '/api/waitlist': typeof ApiWaitlistRoute
   '/app/events': typeof AppEventsRoute
   '/app/helpers': typeof AppHelpersRoute
@@ -433,6 +475,9 @@ export interface FileRoutesById {
   '/api/admin/waitlist': typeof ApiAdminWaitlistRoute
   '/api/admin/waitlist-action': typeof ApiAdminWaitlistActionRoute
   '/api/auth/ensure-role': typeof ApiAuthEnsureRoleRoute
+  '/api/device-keys/create': typeof ApiDeviceKeysCreateRoute
+  '/api/device-keys/list': typeof ApiDeviceKeysListRoute
+  '/api/device-keys/revoke': typeof ApiDeviceKeysRevokeRoute
   '/api/embed/openai': typeof ApiEmbedOpenaiRoute
   '/api/llm/anthropic': typeof ApiLlmAnthropicRoute
   '/api/llm/openai': typeof ApiLlmOpenaiRoute
@@ -461,6 +506,8 @@ export interface FileRouteTypes {
     | '/admin/usage'
     | '/admin/users'
     | '/admin/waitlist'
+    | '/api/autologin'
+    | '/api/manifest'
     | '/api/waitlist'
     | '/app/events'
     | '/app/helpers'
@@ -483,6 +530,9 @@ export interface FileRouteTypes {
     | '/api/admin/waitlist'
     | '/api/admin/waitlist-action'
     | '/api/auth/ensure-role'
+    | '/api/device-keys/create'
+    | '/api/device-keys/list'
+    | '/api/device-keys/revoke'
     | '/api/embed/openai'
     | '/api/llm/anthropic'
     | '/api/llm/openai'
@@ -507,6 +557,8 @@ export interface FileRouteTypes {
     | '/admin/usage'
     | '/admin/users'
     | '/admin/waitlist'
+    | '/api/autologin'
+    | '/api/manifest'
     | '/api/waitlist'
     | '/app/events'
     | '/app/helpers'
@@ -529,6 +581,9 @@ export interface FileRouteTypes {
     | '/api/admin/waitlist'
     | '/api/admin/waitlist-action'
     | '/api/auth/ensure-role'
+    | '/api/device-keys/create'
+    | '/api/device-keys/list'
+    | '/api/device-keys/revoke'
     | '/api/embed/openai'
     | '/api/llm/anthropic'
     | '/api/llm/openai'
@@ -556,6 +611,8 @@ export interface FileRouteTypes {
     | '/admin/usage'
     | '/admin/users'
     | '/admin/waitlist'
+    | '/api/autologin'
+    | '/api/manifest'
     | '/api/waitlist'
     | '/app/events'
     | '/app/helpers'
@@ -579,6 +636,9 @@ export interface FileRouteTypes {
     | '/api/admin/waitlist'
     | '/api/admin/waitlist-action'
     | '/api/auth/ensure-role'
+    | '/api/device-keys/create'
+    | '/api/device-keys/list'
+    | '/api/device-keys/revoke'
     | '/api/embed/openai'
     | '/api/llm/anthropic'
     | '/api/llm/openai'
@@ -596,6 +656,8 @@ export interface RootRouteChildren {
   MarketingRoute: typeof MarketingRouteWithChildren
   AdminRoute: typeof AdminRouteWithChildren
   AppRoute: typeof AppRouteWithChildren
+  ApiAutologinRoute: typeof ApiAutologinRoute
+  ApiManifestRoute: typeof ApiManifestRoute
   ApiWaitlistRoute: typeof ApiWaitlistRoute
   ApiAdminActivityRoute: typeof ApiAdminActivityRoute
   ApiAdminAudioUrlRoute: typeof ApiAdminAudioUrlRoute
@@ -610,6 +672,9 @@ export interface RootRouteChildren {
   ApiAdminWaitlistRoute: typeof ApiAdminWaitlistRoute
   ApiAdminWaitlistActionRoute: typeof ApiAdminWaitlistActionRoute
   ApiAuthEnsureRoleRoute: typeof ApiAuthEnsureRoleRoute
+  ApiDeviceKeysCreateRoute: typeof ApiDeviceKeysCreateRoute
+  ApiDeviceKeysListRoute: typeof ApiDeviceKeysListRoute
+  ApiDeviceKeysRevokeRoute: typeof ApiDeviceKeysRevokeRoute
   ApiEmbedOpenaiRoute: typeof ApiEmbedOpenaiRoute
   ApiLlmAnthropicRoute: typeof ApiLlmAnthropicRoute
   ApiLlmOpenaiRoute: typeof ApiLlmOpenaiRoute
@@ -711,6 +776,20 @@ declare module '@tanstack/react-router' {
       path: '/api/waitlist'
       fullPath: '/api/waitlist'
       preLoaderRoute: typeof ApiWaitlistRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/manifest': {
+      id: '/api/manifest'
+      path: '/api/manifest'
+      fullPath: '/api/manifest'
+      preLoaderRoute: typeof ApiManifestRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/autologin': {
+      id: '/api/autologin'
+      path: '/api/autologin'
+      fullPath: '/api/autologin'
+      preLoaderRoute: typeof ApiAutologinRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/admin/waitlist': {
@@ -851,6 +930,27 @@ declare module '@tanstack/react-router' {
       path: '/api/embed/openai'
       fullPath: '/api/embed/openai'
       preLoaderRoute: typeof ApiEmbedOpenaiRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/device-keys/revoke': {
+      id: '/api/device-keys/revoke'
+      path: '/api/device-keys/revoke'
+      fullPath: '/api/device-keys/revoke'
+      preLoaderRoute: typeof ApiDeviceKeysRevokeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/device-keys/list': {
+      id: '/api/device-keys/list'
+      path: '/api/device-keys/list'
+      fullPath: '/api/device-keys/list'
+      preLoaderRoute: typeof ApiDeviceKeysListRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/device-keys/create': {
+      id: '/api/device-keys/create'
+      path: '/api/device-keys/create'
+      fullPath: '/api/device-keys/create'
+      preLoaderRoute: typeof ApiDeviceKeysCreateRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/auth/ensure-role': {
@@ -1064,6 +1164,8 @@ const rootRouteChildren: RootRouteChildren = {
   MarketingRoute: MarketingRouteWithChildren,
   AdminRoute: AdminRouteWithChildren,
   AppRoute: AppRouteWithChildren,
+  ApiAutologinRoute: ApiAutologinRoute,
+  ApiManifestRoute: ApiManifestRoute,
   ApiWaitlistRoute: ApiWaitlistRoute,
   ApiAdminActivityRoute: ApiAdminActivityRoute,
   ApiAdminAudioUrlRoute: ApiAdminAudioUrlRoute,
@@ -1078,6 +1180,9 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAdminWaitlistRoute: ApiAdminWaitlistRoute,
   ApiAdminWaitlistActionRoute: ApiAdminWaitlistActionRoute,
   ApiAuthEnsureRoleRoute: ApiAuthEnsureRoleRoute,
+  ApiDeviceKeysCreateRoute: ApiDeviceKeysCreateRoute,
+  ApiDeviceKeysListRoute: ApiDeviceKeysListRoute,
+  ApiDeviceKeysRevokeRoute: ApiDeviceKeysRevokeRoute,
   ApiEmbedOpenaiRoute: ApiEmbedOpenaiRoute,
   ApiLlmAnthropicRoute: ApiLlmAnthropicRoute,
   ApiLlmOpenaiRoute: ApiLlmOpenaiRoute,

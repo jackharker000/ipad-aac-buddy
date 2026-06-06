@@ -12,6 +12,7 @@ import { Switch } from "@/components/ui/switch";
 import { db, type SettingsRecord } from "@/lib/db";
 import { signOut, useSession } from "@/lib/auth";
 import { persistSettings, useSettings } from "@/lib/settings";
+import { DeviceKeysCard } from "@/components/settings/DeviceKeysCard";
 import { drainPendingJobs } from "@/lib/jobs/drain";
 import {
   exportEncryptedBackup,
@@ -48,6 +49,7 @@ export function SystemTab() {
       <DisplayPresetCard />
       <SpeakerIdCard />
       <CloudSyncCard />
+      <DeviceKeysCard />
       <GpsCard />
       <DeadPhraseCard />
       <StyleProfileCard />

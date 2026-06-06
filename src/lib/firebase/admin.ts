@@ -315,3 +315,246 @@ export async function addWaitlistEntry(entry: {
     throw new Error(`Firestore write failed: ${res.status}`);
   }
 }
+
+// --------------------------------------------------------------------------
+// Firebase custom tokens (sign a JWT with the service-account key)
+// --------------------------------------------------------------------------
+
+/**
+ * Mint a Firebase custom token for `uid`. The browser then exchanges it for a
+ * real session via `signInWithCustomToken(auth, customToken)`.
+ *
+ * Spec: https://firebase.google.com/docs/auth/admin/create-custom-tokens
+ * The audience MUST be the literal Identity Toolkit URL below; this is not
+ * the same JWT as our service-account OAuth bearer (different audience,
+ * different claims). Valid 1 hour — but the client exchanges it immediately,
+ * so in practice the token lives for seconds.
+ *
+ * Used by /api/autologin to swap a long-lived device-key for a fresh
+ * Firebase session. Never returned to a caller who hasn't proven possession
+ * of a valid device-key.
+ */
+const CUSTOM_TOKEN_AUDIENCE =
+  "https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit";
+
+export function createCustomToken(uid: string): string {
+  const sa = serviceAccount();
+  const now = Math.floor(Date.now() / 1000);
+  const header = b64url(JSON.stringify({ alg: "RS256", typ: "JWT" }));
+  const claims = b64url(
+    JSON.stringify({
+      iss: sa.client_email,
+      sub: sa.client_email,
+      aud: CUSTOM_TOKEN_AUDIENCE,
+      iat: now,
+      exp: now + 3600,
+      uid,
+    }),
+  );
+  const signingInput = `${header}.${claims}`;
+  const signature = b64url(
+    crypto.createSign("RSA-SHA256").update(signingInput).sign(sa.private_key),
+  );
+  return `${signingInput}.${signature}`;
+}
+
+// --------------------------------------------------------------------------
+// iPad device keys (long-lived autologin)
+// --------------------------------------------------------------------------
+
+/**
+ * Long-lived autologin keys baked into the iPad's home-screen icon URL.
+ *
+ * Threat model: a device key IS a credential — anyone who knows the key
+ * can sign in as the owning user with no further challenge. Mitigations:
+ *
+ *   - The key value itself is NEVER stored. We store SHA-256(key) as the
+ *     Firestore doc id; a database breach reveals only mappings, not
+ *     usable keys.
+ *   - Generated with 32 bytes of crypto-grade randomness → 256-bit
+ *     unguessable.
+ *   - Revocable from Settings — delete the doc, the icon becomes inert.
+ *   - Last-used timestamp surfaces in the list view so the owner can spot
+ *     suspicious activity.
+ *
+ * The collection lives at top-level `deviceKeys` (NOT under `users/{uid}`)
+ * because lookup at autologin time is unauthenticated — the caller only
+ * has the key. Security rules deny all client reads/writes; every
+ * operation goes through a server route holding the service account.
+ */
+const DEVICE_KEYS_COLLECTION = "deviceKeys";
+
+function firestoreDocUrl(path: string): string {
+  return `https://firestore.googleapis.com/v1/projects/${getProjectId()}/databases/(default)/documents/${path}`;
+}
+
+function hashDeviceKey(key: string): string {
+  return crypto.createHash("sha256").update(key).digest("hex");
+}
+
+export function generateDeviceKey(): string {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
+export type DeviceKeyMeta = {
+  id: string; // hash, also the Firestore doc id
+  userId: string;
+  label: string;
+  createdAt: string; // ISO
+  lastUsedAt: string | null; // ISO
+};
+
+/**
+ * Create a new device key for `uid`. The plaintext key is returned to the
+ * caller exactly once — it's never persisted server-side. The caller is
+ * responsible for displaying it / baking it into the manifest immediately.
+ */
+export async function createDeviceKey(
+  uid: string,
+  label: string,
+): Promise<{ key: string; meta: DeviceKeyMeta }> {
+  const key = generateDeviceKey();
+  const id = hashDeviceKey(key);
+  const now = new Date().toISOString();
+  const accessToken = await getAccessToken();
+  const res = await fetch(`${firestoreDocUrl(DEVICE_KEYS_COLLECTION)}?documentId=${id}`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      fields: {
+        userId: { stringValue: uid },
+        label: { stringValue: label },
+        createdAt: { timestampValue: now },
+        // lastUsedAt left absent — first autologin fills it.
+      },
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`Firestore createDocument failed: ${res.status}`);
+  }
+  return {
+    key,
+    meta: { id, userId: uid, label, createdAt: now, lastUsedAt: null },
+  };
+}
+
+/**
+ * Resolve a device key to its owning user. Updates the lastUsedAt
+ * timestamp on success so the Settings UI can surface "last used 3 days
+ * ago" per key. Returns null when the key is unknown (i.e., revoked or
+ * never existed).
+ */
+export async function lookupDeviceKey(
+  key: string,
+): Promise<{ userId: string; id: string } | null> {
+  if (!key) return null;
+  const id = hashDeviceKey(key);
+  const accessToken = await getAccessToken();
+  const res = await fetch(firestoreDocUrl(`${DEVICE_KEYS_COLLECTION}/${id}`), {
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Firestore get failed: ${res.status}`);
+  const data = (await res.json()) as {
+    fields?: { userId?: { stringValue?: string } };
+  };
+  const userId = data.fields?.userId?.stringValue;
+  if (!userId) return null;
+  // Best-effort touch — failure is non-fatal, we still return the userId
+  // because the autologin should succeed even if the metadata write blips.
+  await fetch(
+    `${firestoreDocUrl(`${DEVICE_KEYS_COLLECTION}/${id}`)}?updateMask.fieldPaths=lastUsedAt`,
+    {
+      method: "PATCH",
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        fields: { lastUsedAt: { timestampValue: new Date().toISOString() } },
+      }),
+    },
+  ).catch(() => {
+    // swallow — touch is best-effort
+  });
+  return { userId, id };
+}
+
+/**
+ * List all device keys belonging to a user (metadata only — the key
+ * values themselves were never stored). Used by Settings → Device keys
+ * to render the revocation UI.
+ */
+export async function listDeviceKeysForUser(uid: string): Promise<DeviceKeyMeta[]> {
+  const accessToken = await getAccessToken();
+  const url = `https://firestore.googleapis.com/v1/projects/${getProjectId()}/databases/(default)/documents:runQuery`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      structuredQuery: {
+        from: [{ collectionId: DEVICE_KEYS_COLLECTION }],
+        where: {
+          fieldFilter: {
+            field: { fieldPath: "userId" },
+            op: "EQUAL",
+            value: { stringValue: uid },
+          },
+        },
+        orderBy: [{ field: { fieldPath: "createdAt" }, direction: "DESCENDING" }],
+      },
+    }),
+  });
+  if (!res.ok) throw new Error(`runQuery failed: ${res.status}`);
+  const rows = (await res.json()) as Array<{
+    document?: {
+      name: string;
+      fields?: {
+        userId?: { stringValue?: string };
+        label?: { stringValue?: string };
+        createdAt?: { timestampValue?: string };
+        lastUsedAt?: { timestampValue?: string };
+      };
+    };
+  }>;
+  const out: DeviceKeyMeta[] = [];
+  for (const r of rows) {
+    const d = r.document;
+    if (!d?.name) continue;
+    const idMatch = /\/deviceKeys\/([^/]+)$/.exec(d.name);
+    if (!idMatch) continue;
+    const id = idMatch[1];
+    const fields = d.fields ?? {};
+    out.push({
+      id,
+      userId: fields.userId?.stringValue ?? uid,
+      label: fields.label?.stringValue ?? "",
+      createdAt: fields.createdAt?.timestampValue ?? "",
+      lastUsedAt: fields.lastUsedAt?.timestampValue ?? null,
+    });
+  }
+  return out;
+}
+
+/**
+ * Revoke a device key by its hash id. The home-screen icon that
+ * references the underlying key becomes inert immediately — the next
+ * autologin attempt 401s and the gateway redirects to /login.
+ */
+export async function deleteDeviceKey(id: string): Promise<void> {
+  const accessToken = await getAccessToken();
+  const res = await fetch(firestoreDocUrl(`${DEVICE_KEYS_COLLECTION}/${id}`), {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${accessToken}` },
+  });
+  // 404 is fine — already revoked.
+  if (!res.ok && res.status !== 404) {
+    throw new Error(`Firestore delete failed: ${res.status}`);
+  }
+}
