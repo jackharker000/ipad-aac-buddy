@@ -41,12 +41,6 @@ export function useCloudSync(): {
     return subscribeSyncStatus(setStatus);
   }, []);
 
-  // Start/stop the engine in response to user + settings. Always go
-  // through the dispose returned by startCloudSync — calling
-  // stopCloudSync() unconditionally tears the engine down regardless
-  // of refcount, which would break a hypothetical second consumer
-  // (Settings panel + app layout currently share one engine via
-  // refcounting; the contract has to hold both ways).
   useEffect(() => {
     if (!user || !enabled || !isFirebaseConfigured()) {
       return;

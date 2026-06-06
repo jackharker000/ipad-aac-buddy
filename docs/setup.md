@@ -71,6 +71,14 @@ service cloud.firestore {
     match /admin_actions/{doc} {
       allow read, write: if false;
     }
+    // iPad autologin device keys — server-only. The client never reads
+    // or writes these directly; /api/device-keys/* and /api/autologin
+    // mediate every operation through the service account. Direct client
+    // access would expose the user→hash mapping for every device key
+    // and is the whole reason we store hashes here, not plaintext.
+    match /deviceKeys/{key} {
+      allow read, write: if false;
+    }
   }
 }
 ```

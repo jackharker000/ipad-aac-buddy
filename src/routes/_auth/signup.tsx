@@ -1,10 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, createFileRoute, useRouter } from "@tanstack/react-router";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { AuthError, signUp } from "@/lib/auth";
+import { AuthError, readPostSignInRedirect, signUp, useSession } from "@/lib/auth";
 import { GoogleSignInButton } from "@/components/auth/GoogleSignInButton";
 
 export const Route = createFileRoute("/_auth/signup")({
@@ -23,11 +23,20 @@ export const Route = createFileRoute("/_auth/signup")({
 
 function SignupPage() {
   const router = useRouter();
+  const { user } = useSession();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // Mirror /login: if a Google `signInWithRedirect` returns us here with
+  // a fresh session, navigate onward.
+  useEffect(() => {
+    if (!user) return;
+    const target = readPostSignInRedirect() ?? "/app";
+    router.navigate({ to: target });
+  }, [user, router]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
