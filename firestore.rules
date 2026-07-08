@@ -1,0 +1,62 @@
+rules_version = '2';
+
+// Parley multi-tenant Firestore rules. Reproduces the old Supabase RLS model:
+//  * Per-user isolation — a user can only ever read/write their own rows.
+//  * profiles: readable by the owner or an admin; the client may create/update
+//    only its own doc and can NEVER set or change `role` (role changes happen
+//    exclusively via the Admin SDK, which bypasses these rules).
+//  * user_backups: owner-only, NO admin access (encrypted, medical-adjacent
+//    AAC transcripts — admins deliberately cannot read them).
+//  * usage_log: readable by the owning user or an admin; NEVER writable from
+//    the client (rows are inserted server-side via the Admin SDK only).
+//  * Everything else: deny.
+//
+// Admin-ness is proven by the `admin` custom claim (set by adminSetRole) so no
+// extra document read is needed to authorize an admin.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.admin == true;
+    }
+
+    // One row per user: email, displayName, role, createdAt, lastActiveAt.
+    match /profiles/{uid} {
+      allow read: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+
+      // A user may create their own profile, but only as a plain 'user'
+      // (or with no role field at all — the server fills it in).
+      allow create: if isSignedIn()
+        && request.auth.uid == uid
+        && (!('role' in request.resource.data) || request.resource.data.role == 'user');
+
+      // A user may update their own profile but may NOT touch `role`.
+      allow update: if isSignedIn()
+        && request.auth.uid == uid
+        && !('role' in request.resource.data.diff(resource.data).affectedKeys());
+
+      allow delete: if false;
+    }
+
+    // Per-user encrypted Dexie snapshot. Owner-only — no admin access.
+    match /user_backups/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    }
+
+    // One row per external API call. Server-only writes; owner/admin reads.
+    match /usage_log/{docId} {
+      allow read: if isSignedIn()
+        && (resource.data.userId == request.auth.uid || isAdmin());
+      allow create, update, delete: if false;
+    }
+
+    // Default deny.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,10 +1,10 @@
 /**
  * backup-crypto — client-side end-to-end encryption for cloud backups.
  *
- * Parley stores a full snapshot of the user's on-device Dexie data in Supabase
- * (`user_backups.data`). That data is sensitive and medical-adjacent (AAC speech
- * transcripts, personal context). This module encrypts the snapshot in the
- * browser so the SERVER — and any admin with DB access — only ever sees
+ * Parley stores a full snapshot of the user's on-device Dexie data in Firestore
+ * (`user_backups/{uid}.data`). That data is sensitive and medical-adjacent (AAC
+ * speech transcripts, personal context). This module encrypts the snapshot in
+ * the browser so the SERVER — and any admin with DB access — only ever sees
  * ciphertext.
  *
  * ── Scheme ─────────────────────────────────────────────────────────────────
@@ -23,7 +23,7 @@
  *   The per-device passphrase is stored in localStorage (see the passphrase
  *   helpers below) so a returning session on the same device can decrypt
  *   without re-prompting. That means:
- *     • Someone who can read the Supabase row sees only ciphertext.  ✅
+ *     • Someone who can read the Firestore document sees only ciphertext.  ✅
  *     • Someone with physical/JS access to THIS device can read the passphrase
  *       out of localStorage and decrypt.  ⚠️  (This is accepted — the device
  *       itself is trusted; the server is not.)

@@ -6,17 +6,16 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LogOut, Cloud, Loader2, ShieldCheck } from "lucide-react";
-import { isSupabaseConfigured } from "@/integrations/supabase/client";
+import { isFirebaseConfigured } from "@/integrations/firebase/client";
 import { signOutAndClear } from "@/components/AuthGate";
 import { whoami } from "@/lib/account.functions";
 import { flushPush } from "@/lib/cloud-sync";
 import { toast } from "sonner";
 
 export function AccountCard() {
-  // Local-first / anonymous mode: when Supabase isn't configured on the
-  // deploy, this whole card has nothing to render. Returning null keeps the
-  // Supabase proxy untouched so it never throws on first property access.
-  if (!isSupabaseConfigured()) return null;
+  // Local-first / anonymous mode: when Firebase isn't configured on the
+  // deploy, this whole card has nothing to render (there's no account to show).
+  if (!isFirebaseConfigured()) return null;
   return <AccountCardContent />;
 }
 

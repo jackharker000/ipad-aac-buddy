@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import type { Session } from "@supabase/supabase-js";
-import { supabase, isSupabaseConfigured } from "@/integrations/supabase/client";
+import {
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
+  signInWithPopup,
+  signOut,
+  GoogleAuthProvider,
+  type User,
+} from "firebase/auth";
+import { auth, isFirebaseConfigured } from "@/integrations/firebase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -11,33 +20,32 @@ import { pullForUser, clearLocal } from "@/lib/cloud-sync";
 
 /**
  * Wraps the whole app. Parley is a login-gated, multi-tenant product: when
- * Supabase is configured every visitor must sign in, and each account's data
- * is fully isolated (RLS server-side, per-user Dexie snapshot client-side).
+ * Firebase is configured every visitor must sign in, and each account's data
+ * is fully isolated (Firestore security rules server-side, per-user Dexie
+ * snapshot client-side).
  *
- * Local-first escape hatch: in DEV builds with no Supabase env vars the app
+ * Local-first escape hatch: in DEV builds with no Firebase env vars the app
  * runs anonymous so the engine can be hacked on offline. A PRODUCTION build
- * without Supabase shows a configuration notice instead of silently running
+ * without Firebase shows a configuration notice instead of silently running
  * an unauthenticated multi-user deploy.
  */
 export function AuthGate({ children }: { children: React.ReactNode }) {
-  const supabaseReady = isSupabaseConfigured();
+  const firebaseReady = isFirebaseConfigured();
 
-  const [session, setSession] = useState<Session | null>(null);
-  const [checking, setChecking] = useState(supabaseReady);
+  const [user, setUser] = useState<User | null>(null);
+  const [checking, setChecking] = useState(firebaseReady);
   const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    if (!supabaseReady) return;
-    // Set up listener BEFORE checking the session, per Supabase guidance.
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
-      setSession(s);
-    });
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
+    if (!firebaseReady) return;
+    // onAuthStateChanged fires once Firebase has restored the persisted session
+    // and on every subsequent sign-in/sign-out.
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
       setChecking(false);
     });
-    return () => sub.subscription.unsubscribe();
-  }, [supabaseReady]);
+    return () => unsub();
+  }, [firebaseReady]);
 
   // Pull cloud backup whenever the user changes. On a shared AAC iPad this is
   // also the point where we must isolate tenants: sign-out / session expiry
@@ -46,7 +54,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   // backup (pullForUser wipes on switch too). Security review HIGH-2.
   const prevUserIdRef = useRef<string | null>(null);
   useEffect(() => {
-    const uid = session?.user?.id ?? null;
+    const uid = user?.uid ?? null;
     if (!uid) {
       if (prevUserIdRef.current) {
         prevUserIdRef.current = null;
@@ -66,10 +74,10 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [session?.user?.id]);
+  }, [user?.uid]);
 
-  if (!supabaseReady) {
-    // Dev without Supabase → run local-first so the engine works offline.
+  if (!firebaseReady) {
+    // Dev without Firebase → run local-first so the engine works offline.
     if (import.meta.env.DEV) return <>{children}</>;
     return <NotConfiguredScreen />;
   }
@@ -82,7 +90,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!session) return <AuthScreen />;
+  if (!user) return <AuthScreen />;
 
   if (!hydrated) {
     return (
@@ -107,9 +115,9 @@ function NotConfiguredScreen() {
         </h1>
         <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
           Accounts are required so each person's conversations stay private, and this server has no
-          authentication configured. Set the <code>SUPABASE_URL</code>,{" "}
-          <code>SUPABASE_PUBLISHABLE_KEY</code> and <code>VITE_SUPABASE_*</code> environment
-          variables, then redeploy.
+          authentication configured. Set the <code>VITE_FIREBASE_*</code> client config and the
+          server-side <code>FIREBASE_SERVICE_ACCOUNT_B64</code> environment variables, then
+          redeploy.
         </p>
       </div>
     </main>
@@ -117,6 +125,43 @@ function NotConfiguredScreen() {
 }
 
 type AuthMode = "signin" | "signup" | "reset";
+
+function GoogleButton({ busy, onBusy }: { busy: boolean; onBusy: (b: boolean) => void }) {
+  async function handleGoogle() {
+    onBusy(true);
+    try {
+      await signInWithPopup(auth, new GoogleAuthProvider());
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Google sign-in failed";
+      // A user closing the popup isn't an error worth shouting about.
+      if (!/popup-closed-by-user|cancelled-popup-request/.test(msg)) toast.error(msg);
+    } finally {
+      onBusy(false);
+    }
+  }
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="lg"
+      className="h-11 w-full"
+      disabled={busy}
+      onClick={handleGoogle}
+    >
+      Continue with Google
+    </Button>
+  );
+}
+
+function OrDivider() {
+  return (
+    <div className="flex items-center gap-3 text-xs text-muted-foreground">
+      <span className="h-px flex-1 bg-border" />
+      or
+      <span className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
 
 function AuthScreen() {
   const [mode, setMode] = useState<AuthMode>("signin");
@@ -128,8 +173,9 @@ function AuthScreen() {
     e.preventDefault();
     setBusy(true);
     try {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) toast.error(error.message);
+      await signInWithEmailAndPassword(auth, email, password);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Sign in failed");
     } finally {
       setBusy(false);
     }
@@ -143,17 +189,10 @@ function AuthScreen() {
     }
     setBusy(true);
     try {
-      const redirectUrl = `${window.location.origin}/`;
-      const { error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: { emailRedirectTo: redirectUrl },
-      });
-      if (error) {
-        toast.error(error.message);
-      } else {
-        toast.success("Welcome to Parley — your account is ready");
-      }
+      await createUserWithEmailAndPassword(auth, email, password);
+      toast.success("Welcome to Parley — your account is ready");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not create account");
     } finally {
       setBusy(false);
     }
@@ -163,11 +202,10 @@ function AuthScreen() {
     e.preventDefault();
     setBusy(true);
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/`,
-      });
-      if (error) toast.error(error.message);
-      else toast.success("Check your email for a reset link");
+      await sendPasswordResetEmail(auth, email);
+      toast.success("Check your email for a reset link");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not send reset link");
     } finally {
       setBusy(false);
     }
@@ -223,6 +261,8 @@ function AuthScreen() {
               <Button type="submit" size="lg" className="h-11 w-full" disabled={busy}>
                 {busy ? "Signing in…" : "Sign in"}
               </Button>
+              <OrDivider />
+              <GoogleButton busy={busy} onBusy={setBusy} />
               <p className="text-center text-sm text-muted-foreground">
                 New to Parley?{" "}
                 <button
@@ -267,6 +307,8 @@ function AuthScreen() {
               <Button type="submit" size="lg" className="h-11 w-full" disabled={busy}>
                 {busy ? "Creating…" : "Create account"}
               </Button>
+              <OrDivider />
+              <GoogleButton busy={busy} onBusy={setBusy} />
               <p className="text-center text-sm text-muted-foreground">
                 Already have an account?{" "}
                 <button
@@ -325,7 +367,9 @@ export async function signOutAndClear() {
   const { flushPush } = await import("@/lib/cloud-sync");
   try {
     await flushPush();
-  } catch {}
-  await supabase.auth.signOut();
+  } catch {
+    // best-effort final flush; sign out regardless
+  }
+  await signOut(auth);
   await clearLocal();
 }

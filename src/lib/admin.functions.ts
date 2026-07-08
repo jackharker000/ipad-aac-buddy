@@ -1,35 +1,72 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import type { Firestore, Timestamp as TimestampType } from "firebase-admin/firestore";
+import type { Auth as AdminAuthType, UserRecord } from "firebase-admin/auth";
 import { requireAdmin } from "./server/auth-guard";
 
 /**
  * Admin-only server functions: metrics + cost ONLY.
  *
  * Scope note (project policy): admins must never see user conversations or
- * transcripts. user_backups is only ever queried for its metadata columns
- * (user_id, updated_at) — the encrypted `data` column is deliberately never
- * selected here, and no transcript-adjacent table is touched.
+ * transcripts. `user_backups` holds the encrypted snapshot and is deliberately
+ * NEVER read here — not even its metadata. `backupUpdatedAt` is therefore
+ * always null (the admin surface has zero backup visibility), preserving the
+ * "no admin access to backups" guarantee at the code level, not just via rules.
  */
 
 /** Hard cap on usage_log rows fetched per aggregate query. */
 const USAGE_ROW_CAP = 50_000;
+/** Hard cap on auth users paged in for the dashboard. */
+const USER_CAP = 5_000;
+
+function daysAgoDate(days: number): Date {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+}
 
 function isoDaysAgo(days: number): string {
-  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  return daysAgoDate(days).toISOString();
 }
 
-async function getAdminDb() {
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  return supabaseAdmin;
-}
-
-function throwIfError(
-  res: { error?: { message?: string } | null } | null | undefined,
-  what: string,
-): void {
-  if (res?.error) {
-    throw new Error(`${what} failed: ${res.error.message ?? "unknown error"}`);
+/** Firestore Timestamp → ISO string (tolerant of missing/pending values). */
+function tsToIso(v: unknown): string {
+  if (v && typeof (v as { toDate?: () => Date }).toDate === "function") {
+    return (v as { toDate: () => Date }).toDate().toISOString();
   }
+  return new Date().toISOString();
+}
+
+async function loadAdmin(): Promise<{
+  db: Firestore;
+  auth: AdminAuthType;
+  Timestamp: typeof TimestampType;
+  FieldValue: typeof import("firebase-admin/firestore").FieldValue;
+}> {
+  const [{ adminDb, adminAuth }, { Timestamp, FieldValue }] = await Promise.all([
+    import("@/integrations/firebase/admin"),
+    import("firebase-admin/firestore"),
+  ]);
+  return { db: adminDb(), auth: adminAuth(), Timestamp, FieldValue };
+}
+
+/** Page through every auth user (up to USER_CAP). */
+async function listAllUsers(auth: AdminAuthType): Promise<UserRecord[]> {
+  const users: UserRecord[] = [];
+  let pageToken: string | undefined;
+  do {
+    const res = await auth.listUsers(1000, pageToken);
+    users.push(...res.users);
+    pageToken = res.pageToken;
+  } while (pageToken && users.length < USER_CAP);
+  return users;
+}
+
+/** Most recent activity signal for an auth user, as epoch ms (0 if unknown). */
+function lastActiveMs(u: UserRecord): number {
+  const candidates = [u.metadata?.lastRefreshTime, u.metadata?.lastSignInTime]
+    .filter(Boolean)
+    .map((s) => new Date(s as string).getTime())
+    .filter((n) => Number.isFinite(n));
+  return candidates.length ? Math.max(...candidates) : 0;
 }
 
 /* -------------------------------- Overview --------------------------------- */
@@ -47,52 +84,39 @@ export type AdminOverview = {
 export const adminOverview = createServerFn({ method: "GET" })
   .middleware([requireAdmin])
   .handler(async (): Promise<AdminOverview> => {
-    const supabaseAdmin = await getAdminDb();
-    const cut7 = isoDaysAgo(7);
-    const cut30 = isoDaysAgo(30);
+    const { db, auth, Timestamp } = await loadAdmin();
+    const cut7 = daysAgoDate(7).getTime();
+    const cut30 = daysAgoDate(30).getTime();
+    const ts7 = Timestamp.fromDate(daysAgoDate(7));
+    const ts30 = Timestamp.fromDate(daysAgoDate(30));
 
-    const [totalRes, activeRes, newRes, calls30Res, calls7Res, errors7Res, costRes] =
-      await Promise.all([
-        (supabaseAdmin.from("profiles") as any).select("id", { count: "exact", head: true }),
-        (supabaseAdmin.from("profiles") as any)
-          .select("id", { count: "exact", head: true })
-          .gte("last_active_at", cut7),
-        (supabaseAdmin.from("profiles") as any)
-          .select("id", { count: "exact", head: true })
-          .gte("created_at", cut30),
-        (supabaseAdmin.from("usage_log") as any)
-          .select("id", { count: "exact", head: true })
-          .gte("created_at", cut30),
-        (supabaseAdmin.from("usage_log") as any)
-          .select("id", { count: "exact", head: true })
-          .gte("created_at", cut7),
-        (supabaseAdmin.from("usage_log") as any)
-          .select("id", { count: "exact", head: true })
-          .eq("ok", false)
-          .gte("created_at", cut7),
-        (supabaseAdmin.from("usage_log") as any)
-          .select("est_cost_usd")
-          .gte("created_at", cut30)
-          .limit(USAGE_ROW_CAP),
-      ]);
-    throwIfError(totalRes, "profiles count");
-    throwIfError(activeRes, "active users count");
-    throwIfError(newRes, "new users count");
-    throwIfError(calls30Res, "usage 30d count");
-    throwIfError(calls7Res, "usage 7d count");
-    throwIfError(errors7Res, "errors 7d count");
-    throwIfError(costRes, "usage cost fetch");
+    const usage = db.collection("usage_log");
+    const [users, calls30Agg, cost30Snap, rows7Snap] = await Promise.all([
+      listAllUsers(auth),
+      usage.where("createdAt", ">=", ts30).count().get(),
+      usage.where("createdAt", ">=", ts30).select("estCostUsd").limit(USAGE_ROW_CAP).get(),
+      usage.where("createdAt", ">=", ts7).select("ok").limit(USAGE_ROW_CAP).get(),
+    ]);
 
-    const costRows = (costRes.data ?? []) as { est_cost_usd: number | null }[];
-    const estCost30d = costRows.reduce((sum, r) => sum + (r.est_cost_usd ?? 0), 0);
-    const calls7 = calls7Res.count ?? 0;
-    const errors7 = errors7Res.count ?? 0;
+    const totalUsers = users.length;
+    const newUsers30d = users.filter((u) => {
+      const c = new Date(u.metadata?.creationTime ?? 0).getTime();
+      return Number.isFinite(c) && c >= cut30;
+    }).length;
+    const activeUsers7d = users.filter((u) => lastActiveMs(u) >= cut7).length;
+
+    const estCost30d = cost30Snap.docs.reduce(
+      (sum, d) => sum + ((d.get("estCostUsd") as number | null) ?? 0),
+      0,
+    );
+    const calls7 = rows7Snap.size;
+    const errors7 = rows7Snap.docs.filter((d) => d.get("ok") === false).length;
 
     return {
-      totalUsers: totalRes.count ?? 0,
-      activeUsers7d: activeRes.count ?? 0,
-      newUsers30d: newRes.count ?? 0,
-      calls30d: calls30Res.count ?? 0,
+      totalUsers,
+      activeUsers7d,
+      newUsers30d,
+      calls30d: calls30Agg.data().count,
       estCost30d,
       errorRate7d: calls7 > 0 ? errors7 / calls7 : 0,
     };
@@ -107,70 +131,76 @@ export type AdminUserRow = {
   role: string;
   createdAt: string;
   lastActiveAt: string | null;
-  /** From user_backups.updated_at (metadata only — never the data column). */
+  /** Always null — admins deliberately have zero visibility into backups. */
   backupUpdatedAt: string | null;
   calls30d: number;
   estCost30d: number;
 };
 
+type ProfileDoc = {
+  email?: string | null;
+  displayName?: string | null;
+  role?: string;
+  createdAt?: unknown;
+  lastActiveAt?: unknown;
+};
+
 export const adminUsers = createServerFn({ method: "GET" })
   .middleware([requireAdmin])
   .handler(async (): Promise<AdminUserRow[]> => {
-    const supabaseAdmin = await getAdminDb();
-    const cut30 = isoDaysAgo(30);
+    const { db, auth, Timestamp } = await loadAdmin();
+    const ts30 = Timestamp.fromDate(daysAgoDate(30));
 
-    const [profRes, backupRes, usageRes] = await Promise.all([
-      (supabaseAdmin.from("profiles") as any)
-        .select("id, email, display_name, role, created_at, last_active_at")
-        .order("created_at", { ascending: true }),
-      (supabaseAdmin.from("user_backups") as any).select("user_id, updated_at"),
-      (supabaseAdmin.from("usage_log") as any)
-        .select("user_id, est_cost_usd, created_at")
-        .gte("created_at", cut30)
-        .limit(USAGE_ROW_CAP),
+    const [users, profSnap, usageSnap] = await Promise.all([
+      listAllUsers(auth),
+      db.collection("profiles").get(),
+      db
+        .collection("usage_log")
+        .where("createdAt", ">=", ts30)
+        .select("userId", "estCostUsd")
+        .limit(USAGE_ROW_CAP)
+        .get(),
     ]);
-    throwIfError(profRes, "profiles fetch");
-    throwIfError(backupRes, "backups metadata fetch");
-    throwIfError(usageRes, "usage fetch");
 
-    const profiles = (profRes.data ?? []) as {
-      id: string;
-      email: string | null;
-      display_name: string | null;
-      role: string;
-      created_at: string;
-      last_active_at: string | null;
-    }[];
-    const backups = (backupRes.data ?? []) as { user_id: string; updated_at: string }[];
-    const usage = (usageRes.data ?? []) as {
-      user_id: string | null;
-      est_cost_usd: number | null;
-    }[];
+    const profileById = new Map<string, ProfileDoc>();
+    for (const doc of profSnap.docs) profileById.set(doc.id, doc.data() as ProfileDoc);
 
-    const backupByUser = new Map(backups.map((b) => [b.user_id, b.updated_at] as const));
     const usageByUser = new Map<string, { calls: number; cost: number }>();
-    for (const row of usage) {
-      if (!row.user_id) continue;
-      const agg = usageByUser.get(row.user_id) ?? { calls: 0, cost: 0 };
+    for (const doc of usageSnap.docs) {
+      const uid = doc.get("userId") as string | null;
+      if (!uid) continue;
+      const agg = usageByUser.get(uid) ?? { calls: 0, cost: 0 };
       agg.calls += 1;
-      agg.cost += row.est_cost_usd ?? 0;
-      usageByUser.set(row.user_id, agg);
+      agg.cost += (doc.get("estCostUsd") as number | null) ?? 0;
+      usageByUser.set(uid, agg);
     }
 
-    return profiles.map((p) => {
-      const agg = usageByUser.get(p.id);
+    const rows: AdminUserRow[] = users.map((u) => {
+      const p = profileById.get(u.uid);
+      const agg = usageByUser.get(u.uid);
+      const createdAt = p?.createdAt
+        ? tsToIso(p.createdAt)
+        : new Date(u.metadata?.creationTime ?? Date.now()).toISOString();
+      const lastActiveIso = p?.lastActiveAt
+        ? tsToIso(p.lastActiveAt)
+        : lastActiveMs(u)
+          ? new Date(lastActiveMs(u)).toISOString()
+          : null;
       return {
-        userId: p.id,
-        email: p.email,
-        displayName: p.display_name,
-        role: p.role,
-        createdAt: p.created_at,
-        lastActiveAt: p.last_active_at,
-        backupUpdatedAt: backupByUser.get(p.id) ?? null,
+        userId: u.uid,
+        email: p?.email ?? u.email ?? null,
+        displayName: p?.displayName ?? u.displayName ?? null,
+        role: p?.role ?? "user",
+        createdAt,
+        lastActiveAt: lastActiveIso,
+        backupUpdatedAt: null,
         calls30d: agg?.calls ?? 0,
         estCost30d: agg?.cost ?? 0,
       };
     });
+
+    rows.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    return rows;
   });
 
 /* --------------------------------- Usage ----------------------------------- */
@@ -198,41 +228,36 @@ export const adminUsage = createServerFn({ method: "POST" })
   .middleware([requireAdmin])
   .inputValidator((d) => usageInputSchema.parse(d))
   .handler(async ({ data }): Promise<AdminUsageReport> => {
-    const supabaseAdmin = await getAdminDb();
+    const { db, Timestamp } = await loadAdmin();
     const days = data.days;
-    const cutoff = isoDaysAgo(days);
+    const cutoff = Timestamp.fromDate(daysAgoDate(days));
 
-    const [usageRes, profRes] = await Promise.all([
+    const [usageSnap, profSnap] = await Promise.all([
       // Numeric/meta columns only — never the error text.
-      (supabaseAdmin.from("usage_log") as any)
+      db
+        .collection("usage_log")
+        .where("createdAt", ">=", cutoff)
+        .orderBy("createdAt", "asc")
+        .limit(USAGE_ROW_CAP)
         .select(
-          "user_id, fn, provider, model, input_tokens, output_tokens, est_cost_usd, latency_ms, ok, created_at",
+          "userId",
+          "fn",
+          "provider",
+          "model",
+          "inputTokens",
+          "outputTokens",
+          "estCostUsd",
+          "latencyMs",
+          "ok",
+          "createdAt",
         )
-        .gte("created_at", cutoff)
-        .order("created_at", { ascending: true })
-        .limit(USAGE_ROW_CAP),
-      (supabaseAdmin.from("profiles") as any).select("id, email"),
+        .get(),
+      db.collection("profiles").select("email").get(),
     ]);
-    throwIfError(usageRes, "usage fetch");
-    throwIfError(profRes, "profiles fetch");
 
-    const rows = (usageRes.data ?? []) as {
-      user_id: string | null;
-      fn: string;
-      provider: string;
-      model: string | null;
-      input_tokens: number | null;
-      output_tokens: number | null;
-      est_cost_usd: number | null;
-      latency_ms: number | null;
-      ok: boolean;
-      created_at: string;
-    }[];
-    const emailByUser = new Map(
-      ((profRes.data ?? []) as { id: string; email: string | null }[]).map(
-        (p) => [p.id, p.email] as const,
-      ),
-    );
+    const emailByUser = new Map<string, string | null>();
+    for (const doc of profSnap.docs)
+      emailByUser.set(doc.id, (doc.get("email") as string | null) ?? null);
 
     // Daily series: seed every day in the window so the chart has no gaps.
     const daily = new Map<string, { calls: number; estCostUsd: number; errors: number }>();
@@ -251,53 +276,53 @@ export const adminUsage = createServerFn({ method: "POST" })
     >();
     const byUser = new Map<string, { calls: number; estCostUsd: number }>();
 
-    for (const row of rows) {
-      const cost = row.est_cost_usd ?? 0;
+    for (const doc of usageSnap.docs) {
+      const cost = (doc.get("estCostUsd") as number | null) ?? 0;
+      const provider = (doc.get("provider") as string | null) ?? "unknown";
+      const fnName = (doc.get("fn") as string | null) ?? "unknown";
+      const okVal = doc.get("ok") as boolean;
+      const latency = doc.get("latencyMs") as number | null;
+      const userId = doc.get("userId") as string | null;
 
-      const dayKey = row.created_at.slice(0, 10);
+      const dayKey = tsToIso(doc.get("createdAt")).slice(0, 10);
       const day = daily.get(dayKey) ?? { calls: 0, estCostUsd: 0, errors: 0 };
       day.calls += 1;
       day.estCostUsd += cost;
-      if (!row.ok) day.errors += 1;
+      if (okVal === false) day.errors += 1;
       daily.set(dayKey, day);
 
-      const prov = byProvider.get(row.provider) ?? {
+      const prov = byProvider.get(provider) ?? {
         calls: 0,
         inputTokens: 0,
         outputTokens: 0,
         estCostUsd: 0,
       };
       prov.calls += 1;
-      prov.inputTokens += row.input_tokens ?? 0;
-      prov.outputTokens += row.output_tokens ?? 0;
+      prov.inputTokens += (doc.get("inputTokens") as number | null) ?? 0;
+      prov.outputTokens += (doc.get("outputTokens") as number | null) ?? 0;
       prov.estCostUsd += cost;
-      byProvider.set(row.provider, prov);
+      byProvider.set(provider, prov);
 
-      const modelKey = row.model ?? "(none)";
+      const modelKey = (doc.get("model") as string | null) ?? "(none)";
       const model = byModel.get(modelKey) ?? { calls: 0, estCostUsd: 0 };
       model.calls += 1;
       model.estCostUsd += cost;
       byModel.set(modelKey, model);
 
-      const fn = byFn.get(row.fn) ?? {
-        calls: 0,
-        estCostUsd: 0,
-        latencySum: 0,
-        latencyCount: 0,
-      };
+      const fn = byFn.get(fnName) ?? { calls: 0, estCostUsd: 0, latencySum: 0, latencyCount: 0 };
       fn.calls += 1;
       fn.estCostUsd += cost;
-      if (row.latency_ms != null) {
-        fn.latencySum += row.latency_ms;
+      if (latency != null) {
+        fn.latencySum += latency;
         fn.latencyCount += 1;
       }
-      byFn.set(row.fn, fn);
+      byFn.set(fnName, fn);
 
-      if (row.user_id) {
-        const user = byUser.get(row.user_id) ?? { calls: 0, estCostUsd: 0 };
+      if (userId) {
+        const user = byUser.get(userId) ?? { calls: 0, estCostUsd: 0 };
         user.calls += 1;
         user.estCostUsd += cost;
-        byUser.set(row.user_id, user);
+        byUser.set(userId, user);
       }
     }
 
@@ -346,21 +371,28 @@ export const adminSetRole = createServerFn({ method: "POST" })
     if (data.userId === me && data.role !== "admin") {
       throw new Response("You cannot demote yourself", { status: 400 });
     }
-    const supabaseAdmin = await getAdminDb();
+    const { db, auth, FieldValue } = await loadAdmin();
+
     // Last-admin-standing guard: refuse a demotion that would leave zero admins
     // and lock everyone out of the admin surface with no in-app recovery.
     // (Security review M1.) PARLEY_ADMIN_EMAILS remains the break-glass path.
     if (data.role !== "admin") {
-      const { count } = await (supabaseAdmin.from("profiles") as any)
-        .select("id", { count: "exact", head: true })
-        .eq("role", "admin");
-      if ((count ?? 0) <= 1) {
+      const adminCount = await db.collection("profiles").where("role", "==", "admin").count().get();
+      if (adminCount.data().count <= 1) {
         throw new Response("Cannot demote the last remaining admin", { status: 400 });
       }
     }
-    const { error } = await (supabaseAdmin.from("profiles") as any)
-      .update({ role: data.role })
-      .eq("id", data.userId);
-    if (error) throw new Error(`role update failed: ${error.message}`);
+
+    // Durable role in Firestore (source of truth) + Firebase custom claim
+    // (so `request.auth.token.admin` gates client Firestore reads and the auth
+    // guard can short-circuit without a profile read). The claim reaches the
+    // client on the next ID-token refresh; requireAdmin also honors the role
+    // doc, so server-side admin access is effective immediately.
+    await db
+      .collection("profiles")
+      .doc(data.userId)
+      .set({ role: data.role, lastActiveAt: FieldValue.serverTimestamp() }, { merge: true });
+    await auth.setCustomUserClaims(data.userId, { admin: data.role === "admin" });
+
     return { ok: true as const, userId: data.userId, role: data.role };
   });

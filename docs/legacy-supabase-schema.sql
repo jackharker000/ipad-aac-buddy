@@ -1,3 +1,11 @@
+-- HISTORICAL / SUPERSEDED — kept for reference only.
+-- The backend has migrated from Supabase (Postgres + RLS) to Firebase
+-- (Firestore + security rules). This file is NOT applied anywhere; the live
+-- data model and access control now live in `firestore.rules` /
+-- `firestore.indexes.json` and are documented in `docs/MULTI_TENANT_SETUP.md`.
+-- Preserved because the RLS reasoning (self-escalation guard, last-admin
+-- guard, no-admin-access-to-backups) carried over to the Firestore rules.
+--
 -- Multi-tenant core: profiles + roles, per-user backups with RLS, usage/cost log.
 --
 -- Design notes:

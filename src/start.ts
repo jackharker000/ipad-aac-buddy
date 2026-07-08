@@ -1,7 +1,7 @@
 import { createStart, createMiddleware } from "@tanstack/react-start";
 
 import { renderErrorPage } from "./lib/error-page";
-import { attachSupabaseAuth } from "./integrations/supabase/auth-attacher";
+import { attachFirebaseAuth } from "./integrations/firebase/auth-attacher";
 
 const errorMiddleware = createMiddleware().server(async ({ next }) => {
   try {
@@ -20,7 +20,7 @@ const errorMiddleware = createMiddleware().server(async ({ next }) => {
 
 export const startInstance = createStart(() => ({
   requestMiddleware: [errorMiddleware],
-  // Attach the Supabase bearer token to every serverFn RPC from the browser.
+  // Attach the Firebase ID token to every serverFn RPC from the browser.
   // Without this, server-side auth guards would reject every signed-in user.
-  functionMiddleware: [attachSupabaseAuth],
+  functionMiddleware: [attachFirebaseAuth],
 }));

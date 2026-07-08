@@ -1,5 +1,6 @@
 import { db } from "./db";
-import { supabase, isSupabaseConfigured } from "@/integrations/supabase/client";
+import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import { db as firestore, isFirebaseConfigured } from "@/integrations/firebase/client";
 import {
   encryptSnapshot,
   decryptSnapshot,
@@ -168,13 +169,22 @@ async function applySnapshot(snap: Snapshot) {
   }
 }
 
+/** Rough serialized-byte estimate for the Firestore ~1 MiB document limit. */
+function estimatePayloadBytes(payload: unknown): number {
+  try {
+    return new TextEncoder().encode(JSON.stringify(payload)).length;
+  } catch {
+    return 0;
+  }
+}
+
 async function pushNow() {
   // Capture the target user up-front. If the signed-in user changes while this
   // async push is in flight, we must NOT write the snapshot under the wrong
   // user's row. Security review HIGH-2.
   const uid = currentUserId;
   if (!uid) return;
-  if (!isSupabaseConfigured()) return;
+  if (!isFirebaseConfigured()) return;
   try {
     const snap = await takeSnapshot();
     const passphrase = getDevicePassphrase(uid);
@@ -202,16 +212,24 @@ async function pushNow() {
     // snapshot or encrypting — abort rather than write it under the wrong row.
     if (uid !== currentUserId) return;
 
-    const { error } = await supabase
-      .from("user_backups")
-      .upsert(
-        { user_id: uid, data: payload as any, updated_at: new Date().toISOString() },
-        { onConflict: "user_id" },
-      );
-    if (error) {
-      console.error("[cloud-sync] push failed", error);
-      setSyncState({ status: "error", message: error.message });
+    // Firestore caps a single document at ~1 MiB. A snapshot that large can't
+    // be stored as one doc; surface a clear error instead of an opaque
+    // Firestore rejection. (Future: spill large backups to Firebase Storage.)
+    const approxBytes = estimatePayloadBytes(payload);
+    if (approxBytes > 1_000_000) {
+      const msg = `Backup is ~${Math.round(approxBytes / 1024)} KB, over Firestore's ~1 MB per-document limit.`;
+      console.error("[cloud-sync] push skipped —", msg);
+      setSyncState({ status: "error", message: msg });
+      return;
     }
+
+    // The owner-only Firestore rule (`request.auth.uid == uid`) enforces that a
+    // user can only ever write their own backup document.
+    await setDoc(doc(firestore, "user_backups", uid), {
+      userId: uid,
+      data: payload,
+      updatedAt: serverTimestamp(),
+    });
   } catch (e) {
     console.error("[cloud-sync] push exception", e);
     setSyncState({ status: "error", message: e instanceof Error ? e.message : String(e) });
@@ -250,11 +268,10 @@ function wireDexieHooks() {
  * signal (see `onNeedsPassphrase` / `getSyncState`) and skip applying.
  */
 export async function pullForUser(userId: string) {
-  // Local-first / anonymous mode: when Supabase isn't configured, do
+  // Local-first / anonymous mode: when Firebase isn't configured, do
   // nothing — the user is using the app standalone and the local Dexie
-  // is the only source of truth. The Supabase proxy throws on first
-  // property access, so we MUST exit before reaching it.
-  if (!isSupabaseConfigured()) return;
+  // is the only source of truth.
+  if (!isFirebaseConfigured()) return;
 
   // User SWITCH on a shared device: wipe the previous user's local data before
   // we do anything on behalf of the new user. Without this, the "first sign-in,
@@ -267,20 +284,17 @@ export async function pullForUser(userId: string) {
   lastAppliedUserId = userId;
   setSyncState({ hasPassphrase: !!getDevicePassphrase(userId) });
 
-  const { data, error } = await supabase
-    .from("user_backups")
-    .select("data")
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (error) {
-    console.error("[cloud-sync] pull failed", error);
-    setSyncState({ status: "error", message: error.message });
+  let cloud: unknown;
+  try {
+    const snap = await getDoc(doc(firestore, "user_backups", userId));
+    cloud = snap.exists() ? (snap.data() as { data?: unknown }).data : undefined;
+  } catch (e) {
+    console.error("[cloud-sync] pull failed", e);
+    setSyncState({ status: "error", message: e instanceof Error ? e.message : String(e) });
     // Never wipe local on a fetch failure — just skip applying.
     wireDexieHooks();
     return;
   }
-
-  const cloud = data?.data;
 
   if (isEncryptedEnvelope(cloud)) {
     // Encrypted cloud copy — need a passphrase to open it.
