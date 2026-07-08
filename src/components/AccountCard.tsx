@@ -1,9 +1,14 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { LogOut, Cloud, Loader2 } from "lucide-react";
-import { supabase, isSupabaseConfigured } from "@/integrations/supabase/client";
+import { Skeleton } from "@/components/ui/skeleton";
+import { LogOut, Cloud, Loader2, ShieldCheck } from "lucide-react";
+import { isSupabaseConfigured } from "@/integrations/supabase/client";
 import { signOutAndClear } from "@/components/AuthGate";
+import { whoami } from "@/lib/account.functions";
 import { flushPush } from "@/lib/cloud-sync";
 import { toast } from "sonner";
 
@@ -16,13 +21,15 @@ export function AccountCard() {
 }
 
 function AccountCardContent() {
-  const [email, setEmail] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [backingUp, setBackingUp] = useState(false);
+  const whoamiFn = useServerFn(whoami);
 
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setEmail(data.user?.email ?? null));
-  }, []);
+  const { data: me, isLoading } = useQuery({
+    queryKey: ["whoami"],
+    queryFn: () => whoamiFn(),
+    staleTime: 5 * 60 * 1000,
+  });
 
   async function backupNow() {
     setBackingUp(true);
@@ -40,6 +47,7 @@ function AccountCardContent() {
     setBusy(true);
     try {
       await signOutAndClear();
+      window.location.reload();
     } finally {
       setBusy(false);
     }
@@ -47,22 +55,47 @@ function AccountCardContent() {
 
   return (
     <Card className="p-6">
-      <div className="flex items-center justify-between gap-4">
-        <div>
-          <h2 className="text-lg font-semibold">Account &amp; cloud backup</h2>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-0">
+          <h2 className="flex items-center gap-2 text-lg font-semibold">
+            Account &amp; cloud backup
+            {me?.isAdmin && (
+              <span className="inline-flex items-center gap-1 rounded-full border border-[var(--accent)]/50 bg-[var(--accent)]/15 px-2 py-0.5 text-xs font-medium text-foreground">
+                <ShieldCheck className="size-3" /> Admin
+              </span>
+            )}
+          </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Signed in as <span className="font-medium text-foreground">{email ?? "…"}</span>.
-            Your data syncs to the cloud automatically — sign in with the same email
-            on any other device to see it there.
+            Signed in as{" "}
+            {isLoading ? (
+              <Skeleton className="inline-block h-4 w-40 align-middle" />
+            ) : (
+              <span className="font-medium text-foreground">
+                {me?.displayName || me?.email || "…"}
+                {me?.displayName && me?.email ? (
+                  <span className="font-normal text-muted-foreground"> ({me.email})</span>
+                ) : null}
+              </span>
+            )}
+            . Your data syncs to the cloud automatically — sign in with the same email on any other
+            device to see it there.
           </p>
         </div>
-        <div className="flex flex-shrink-0 gap-2">
+        <div className="flex flex-shrink-0 flex-wrap gap-2">
+          {me?.isAdmin && (
+            <Button asChild variant="outline" className="gap-2">
+              <Link to="/admin">
+                <ShieldCheck className="size-4" />
+                Admin
+              </Link>
+            </Button>
+          )}
           <Button variant="secondary" onClick={backupNow} disabled={backingUp} className="gap-2">
             {backingUp ? <Loader2 className="size-4 animate-spin" /> : <Cloud className="size-4" />}
             Back up now
           </Button>
           <Button variant="outline" onClick={handleSignOut} disabled={busy} className="gap-2">
-            <LogOut className="size-4" />
+            {busy ? <Loader2 className="size-4 animate-spin" /> : <LogOut className="size-4" />}
             Sign out
           </Button>
         </div>

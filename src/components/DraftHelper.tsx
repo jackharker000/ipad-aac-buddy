@@ -47,9 +47,7 @@ export function DraftHelper(props: {
 
   useEffect(() => {
     // Drafts and interest extraction are quality-critical, not latency-critical.
-    getSettings().then((s) =>
-      setModel(s.smart_model ?? s.suggestion_model ?? s.expand_model),
-    );
+    getSettings().then((s) => setModel(s.smart_model ?? s.suggestion_model ?? s.expand_model));
   }, []);
 
   async function handleDraft() {
@@ -181,9 +179,7 @@ export function DraftHelper(props: {
                 rows={5}
                 className="mt-1 text-base"
               />
-              <p className="mt-1 text-xs text-muted-foreground">
-                Tip: Cmd/Ctrl + Enter to draft.
-              </p>
+              <p className="mt-1 text-xs text-muted-foreground">Tip: Cmd/Ctrl + Enter to draft.</p>
             </div>
           </div>
           <div className="flex flex-col gap-3">
@@ -226,7 +222,11 @@ export function DraftHelper(props: {
             <p className="mt-2 whitespace-pre-wrap text-base leading-relaxed">{recommended}</p>
             <div className="mt-3 flex gap-2">
               <Button size="sm" onClick={() => copyText(recommended)} className="gap-2">
-                {copied === recommended ? <Check className="size-4" /> : <Copy className="size-4" />}
+                {copied === recommended ? (
+                  <Check className="size-4" />
+                ) : (
+                  <Copy className="size-4" />
+                )}
                 {copied === recommended ? "Copied" : "Copy"}
               </Button>
               <Button size="sm" variant="ghost" onClick={() => useAsDraft(recommended)}>
@@ -244,8 +244,17 @@ export function DraftHelper(props: {
                   </div>
                   <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed">{alt.text}</p>
                   <div className="mt-3 flex gap-2">
-                    <Button size="sm" variant="secondary" onClick={() => copyText(alt.text)} className="gap-2">
-                      {copied === alt.text ? <Check className="size-4" /> : <Copy className="size-4" />}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => copyText(alt.text)}
+                      className="gap-2"
+                    >
+                      {copied === alt.text ? (
+                        <Check className="size-4" />
+                      ) : (
+                        <Copy className="size-4" />
+                      )}
                       {copied === alt.text ? "Copied" : "Copy"}
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => useAsDraft(alt.text)}>
@@ -273,10 +282,20 @@ export function DraftHelper(props: {
                           : "Phrase"}
                     </span>
                     <span className="flex-1 text-sm">{s.text}</span>
-                    <Button size="sm" variant="ghost" className="gap-1" onClick={() => acceptInterest(s)}>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="gap-1"
+                      onClick={() => acceptInterest(s)}
+                    >
                       <Plus className="size-4" /> Add
                     </Button>
-                    <Button size="sm" variant="ghost" onClick={() => dismissInterest(s)} aria-label="Dismiss">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => dismissInterest(s)}
+                      aria-label="Dismiss"
+                    >
                       <X className="size-4" />
                     </Button>
                   </li>

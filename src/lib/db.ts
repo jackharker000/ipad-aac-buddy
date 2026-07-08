@@ -66,6 +66,20 @@ export type TranscriptSegment = {
   /** MFCC vector captured at transcription time — stored so later manual
    *  speaker reassignments can improve the correct person's voiceprint. */
   mfcc?: number[];
+  /** Set true when the user EXPLICITLY confirmed this segment's speaker (e.g.
+   *  a manual per-segment reassignment, or confirming a speaker chip for the
+   *  cluster this segment belongs to). Confirmed segments must NEVER be
+   *  silently relabeled by re-diarization or any automatic cleanup — they act
+   *  as anchors for their speaker's centroid instead (see
+   *  `rediarize.ts` `UtteranceVec.locked_label` and
+   *  `speaker-id.ts` `buildRediarizeLocks`).
+   *  Non-indexed property — no Dexie version bump needed (same pattern as
+   *  `embedding` / `mfcc` above). Defaults to undefined (= not confirmed).
+   *  UI wiring (cockpit owner, index.tsx): set `person_confirmed: true`
+   *  wherever `person_id` is written from a user action — currently
+   *  `handleReassignSegment` — and on the segments of a cluster when the user
+   *  taps Confirm in the SpeakerPanel (`confirmKnownSpeaker`). */
+  person_confirmed?: boolean;
 };
 
 export type SuggestionLog = {
@@ -532,22 +546,15 @@ export const DEFAULT_SETTINGS: Settings = {
  * to the reliable Anthropic default for the tier, so the Settings UI, local
  * storage, and the server's `resolveChatChain` all agree on which provider runs.
  */
-function normalizeModelId(
-  id: string | undefined,
-  tier: "fast" | "smart",
-): string {
+function normalizeModelId(id: string | undefined, tier: "fast" | "smart"): string {
   if (
     id &&
-    (id.startsWith("anthropic/") ||
-      id.startsWith("gemini/") ||
-      id.startsWith("openai-direct/"))
+    (id.startsWith("anthropic/") || id.startsWith("gemini/") || id.startsWith("openai-direct/"))
   ) {
     return id;
   }
   // Legacy / unknown id → the default provider (Gemini) for the tier.
-  return tier === "fast"
-    ? "gemini/gemini-2.5-flash-lite"
-    : "gemini/gemini-2.5-flash";
+  return tier === "fast" ? "gemini/gemini-2.5-flash-lite" : "gemini/gemini-2.5-flash";
 }
 
 /** Provider family of a prefixed model id (must match ai-models.providerIdForModel). */
@@ -563,10 +570,7 @@ export async function getSettings(): Promise<Settings> {
     // Heal tier fields: backfill the fast/smart split for pre-split users AND
     // rewrite any legacy `google/…` ids to provider-prefixed ones so storage,
     // UI and routing converge. suggestion_model / expand_model track fast_model.
-    const fast = normalizeModelId(
-      existing.fast_model ?? existing.suggestion_model,
-      "fast",
-    );
+    const fast = normalizeModelId(existing.fast_model ?? existing.suggestion_model, "fast");
     let smart = normalizeModelId(existing.smart_model, "smart");
     // Keep both tiers on the SAME provider so the Settings picker (which derives
     // the active provider from the fast model) can't display the wrong smart

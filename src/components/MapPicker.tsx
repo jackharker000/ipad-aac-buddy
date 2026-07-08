@@ -17,12 +17,9 @@ import { getCurrentPosition } from "@/lib/geo";
 
 // Fix default marker icons (Leaflet bundler quirk)
 const markerIcon = L.icon({
-  iconUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-  iconRetinaUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-  shadowUrl:
-    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
   iconSize: [25, 41],
   iconAnchor: [12, 41],
   popupAnchor: [1, -34],
@@ -35,11 +32,7 @@ export type MapPickResult = {
   name?: string;
 };
 
-function ClickHandler({
-  onPick,
-}: {
-  onPick: (lat: number, lng: number) => void;
-}) {
+function ClickHandler({ onPick }: { onPick: (lat: number, lng: number) => void }) {
   useMapEvents({
     click(e) {
       onPick(e.latlng.lat, e.latlng.lng);
@@ -216,9 +209,7 @@ export function MapPicker({
             {(results.length > 0 || searching) && (
               <div className="absolute z-[1000] mt-1 w-full overflow-hidden rounded-md border bg-popover shadow-md">
                 {searching && (
-                  <div className="px-3 py-2 text-sm text-muted-foreground">
-                    Searching…
-                  </div>
+                  <div className="px-3 py-2 text-sm text-muted-foreground">Searching…</div>
                 )}
                 {results.map((r, i) => (
                   <button
@@ -235,11 +226,7 @@ export function MapPicker({
           </div>
 
           <div className="h-[420px] overflow-hidden rounded-lg border">
-            <MapContainer
-              center={center}
-              zoom={zoom}
-              style={{ height: "100%", width: "100%" }}
-            >
+            <MapContainer center={center} zoom={zoom} style={{ height: "100%", width: "100%" }}>
               <TileLayer
                 attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -256,16 +243,18 @@ export function MapPicker({
                   },
                 }}
               />
-              <ClickHandler
-                onPick={(lat, lng) => setPos({ lat, lng })}
-              />
+              <ClickHandler onPick={(lat, lng) => setPos({ lat, lng })} />
               <Recenter lat={pos.lat} lng={pos.lng} zoom={zoom} />
             </MapContainer>
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
             <div className="text-muted-foreground">
-              {name ? <span className="font-medium text-foreground">{name}</span> : "Tap the map or drag the pin"}
+              {name ? (
+                <span className="font-medium text-foreground">{name}</span>
+              ) : (
+                "Tap the map or drag the pin"
+              )}
               <span className="ml-2 tabular-nums">
                 {pos.lat.toFixed(5)}, {pos.lng.toFixed(5)}
               </span>

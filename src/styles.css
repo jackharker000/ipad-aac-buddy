@@ -172,4 +172,23 @@
     background-color: var(--color-background);
     color: var(--color-foreground);
   }
+
+  /* Consistent, visible keyboard-focus ring across every interactive element.
+     Uses the amber ring token; :focus-visible only, so taps stay clean. */
+  :where(a, button, input, textarea, select, summary, [role="button"], [tabindex]):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /* Respect reduced-motion: calm down decorative animation & transitions. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
 }

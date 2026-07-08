@@ -20,6 +20,8 @@ import {
   AlertCircle,
   ChevronDown,
   ChevronUp,
+  Loader2,
+  RefreshCw,
 } from "lucide-react";
 import { VoiceSampleRecorder } from "@/components/VoiceSampleRecorder";
 import { Button } from "@/components/ui/button";
@@ -76,7 +78,12 @@ import {
   CENTROID_UPDATE_THRESHOLD,
 } from "@/lib/voiceprint";
 import { VOICEPRINT_MATCH_THRESHOLD } from "@/lib/db";
-import { SpeakerPanel, type ClusterRow, type ClusterStatus, type SuggestedName } from "@/components/SpeakerPanel";
+import {
+  SpeakerPanel,
+  type ClusterRow,
+  type ClusterStatus,
+  type SuggestedName,
+} from "@/components/SpeakerPanel";
 
 export const Route = createFileRoute("/")({
   component: Home,
@@ -108,10 +115,7 @@ const QUICK_PHRASES = [
 ];
 
 /** Append a suggestion chip onto a cluster status, de-duped by name. */
-function mergeSuggestion(
-  status: ClusterStatus,
-  chip: SuggestedName,
-): ClusterStatus {
+function mergeSuggestion(status: ClusterStatus, chip: SuggestedName): ClusterStatus {
   if (status.kind === "confirmed") return status;
   const cur = status.suggestions ?? [];
   if (cur.some((s) => s.name.toLowerCase() === chip.name.toLowerCase())) {
@@ -222,6 +226,8 @@ function Home() {
   // Suggestions
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  // Last refresh failed — shows an unobtrusive inline Retry strip.
+  const [suggestError, setSuggestError] = useState(false);
   const lastShownRef = useRef<string[]>([]);
   const [mood, setMood] = useState<MoodId>("normal");
   const moodRef = useRef<MoodId>("normal");
@@ -296,7 +302,9 @@ function Home() {
   const expectingNameForClusterRef = useRef<string | null>(null);
   // Require 2 consecutive voiceprint matches before suggesting a speaker to
   // reduce false positives from short or noisy utterances.
-  const pendingVoiceprintMatchRef = useRef<Map<string, { personId: string; matchCount: number }>>(new Map());
+  const pendingVoiceprintMatchRef = useRef<Map<string, { personId: string; matchCount: number }>>(
+    new Map(),
+  );
   // Timestamps (ms) of detected speaker shifts during the current session.
   // Used to split Scribe-committed chunks that span multiple speakers.
   const speakerShiftTimestampsRef = useRef<number[]>([]);
@@ -314,9 +322,7 @@ function Home() {
   // Voiceprints pre-loaded for declared participants at conversation start.
   // Used to suggest the right person immediately when their voice is first
   // heard, bypassing the 2-utterance pending gate.
-  const participantVoiceprintsRef = useRef<
-    Array<{ personId: string; centroid: number[] }>
-  >([]);
+  const participantVoiceprintsRef = useRef<Array<{ personId: string; centroid: number[] }>>([]);
   // Cached voiceprints for in-memory speaker recognition — avoids IDB reads
   // in the hot processUtterance path. Refreshed at start and after each confirm.
   const allVoiceprintsRef = useRef<import("@/lib/db").Voiceprint[]>([]);
@@ -356,10 +362,7 @@ function Home() {
       setVoiceprintStatus({});
       return;
     }
-    const prints = await db.voiceprints
-      .where("person_id")
-      .anyOf(selectedPersonIds)
-      .toArray();
+    const prints = await db.voiceprints.where("person_id").anyOf(selectedPersonIds).toArray();
     const map: Record<string, number | null> = {};
     for (const pid of selectedPersonIds) map[pid] = null;
     for (const vp of prints) map[vp.person_id] = vp.sample_count;
@@ -414,12 +417,8 @@ function Home() {
       // is speaking. Below 0.78 we fall back to the diarizer's normal logic.
       let participantOverridePersonId: string | null = null;
       let participantOverrideSim = 0;
-      if (
-        mfcc &&
-        !opts.forceNewCluster &&
-        participantVoiceprintsRef.current.length > 0
-      ) {
-        const PARTICIPANT_OVERRIDE_THRESHOLD = 0.80;
+      if (mfcc && !opts.forceNewCluster && participantVoiceprintsRef.current.length > 0) {
+        const PARTICIPANT_OVERRIDE_THRESHOLD = 0.8;
         for (const pvp of participantVoiceprintsRef.current) {
           if (pvp.centroid.length !== mfcc.length) continue;
           const sim = discriminativeSim(mfcc, pvp.centroid);
@@ -472,22 +471,16 @@ function Home() {
         } else {
           let forceNew = false;
           if (opts.allowSelfIntroOverride !== false) {
-            const introducedName = extractIntroducedNames([
-              { text, speaker_label: "" },
-            ])[0]?.name;
+            const introducedName = extractIntroducedNames([{ text, speaker_label: "" }])[0]?.name;
             if (introducedName) {
               const preview = diarizerRef.current.peek(mfcc);
               if (preview.label && preview.wouldMerge) {
                 const previewStatus = clusterStatusRef.current[preview.label];
                 let attributedName: string | undefined;
                 if (previewStatus?.kind === "confirmed") {
-                  attributedName = allPeople.find(
-                    (p) => p.id === previewStatus.personId,
-                  )?.name;
+                  attributedName = allPeople.find((p) => p.id === previewStatus.personId)?.name;
                 } else if (previewStatus?.kind === "suggested") {
-                  attributedName = allPeople.find(
-                    (p) => p.id === previewStatus.personId,
-                  )?.name;
+                  attributedName = allPeople.find((p) => p.id === previewStatus.personId)?.name;
                 }
                 if (
                   attributedName &&
@@ -524,26 +517,19 @@ function Home() {
       // from being absorbed into a confirmed speaker as their centroid drifts.
       const GHOST_MATCH_THRESHOLD = 0.88;
       if (mfcc && assignNew && !clusterStatusRef.current[speakerLabel]) {
-        for (const [confirmedLabel, confirmedPersonId] of Object.entries(
-          speakerMapRef.current,
-        )) {
+        for (const [confirmedLabel, confirmedPersonId] of Object.entries(speakerMapRef.current)) {
           if (confirmedLabel === speakerLabel) continue;
           const centroid = confirmedVoiceprintsRef.current.get(confirmedPersonId);
           if (centroid && centroid.length === mfcc.length) {
             const sim = discriminativeSim(mfcc, centroid);
             if (sim >= GHOST_MATCH_THRESHOLD) {
               const fromLabel = speakerLabel;
-              const mergedOk = diarizerRef.current.mergeClusters(
-                fromLabel,
-                confirmedLabel,
-              );
+              const mergedOk = diarizerRef.current.mergeClusters(fromLabel, confirmedLabel);
               if (mergedOk) {
                 // Relabel any prior segments attributed to this ghost cluster.
                 setCommitted((prev) =>
                   prev.map((s) =>
-                    s.speaker_label === fromLabel
-                      ? { ...s, speaker_label: confirmedLabel }
-                      : s,
+                    s.speaker_label === fromLabel ? { ...s, speaker_label: confirmedLabel } : s,
                   ),
                 );
                 const cid = conversationIdRef.current;
@@ -581,7 +567,12 @@ function Home() {
       // If the label is still a new cluster AND participants were declared,
       // prevent runaway cluster creation by merging into the best-matching
       // existing cluster when we're already at the cap.
-      if (mfcc && assignNew && !clusterStatusRef.current[speakerLabel] && personIdsRef.current.length > 0) {
+      if (
+        mfcc &&
+        assignNew &&
+        !clusterStatusRef.current[speakerLabel] &&
+        personIdsRef.current.length > 0
+      ) {
         const existingClusters = diarizerRef.current.clusters();
         // Count clusters that existed before this new one was created.
         // Use personIdsRef (snapshot at start) not peopleInConvo (reactive) so the
@@ -622,7 +613,7 @@ function Home() {
       // against all existing clusters it's clearly distinct → promote
       // immediately. Same-speaker ghosts (0.75–0.85) still wait for 2
       // utterances before becoming visible.
-      const ISOLATION_PROMOTE_THRESHOLD = 0.70;
+      const ISOLATION_PROMOTE_THRESHOLD = 0.7;
       if (mfcc) {
         if (assignNew) {
           const allClusters = diarizerRef.current.clusters();
@@ -671,16 +662,13 @@ function Home() {
         const confirmedPersonIds = new Set(Object.values(speakerMapRef.current));
         const curStatus = clusterStatusRef.current[speakerLabel];
         if (!curStatus || curStatus.kind === "unknown") {
-          const PARTICIPANT_MATCH_THRESHOLD = 0.70;
+          const PARTICIPANT_MATCH_THRESHOLD = 0.7;
           let bestPvp: { personId: string; sim: number } | null = null;
           for (const pvp of participantVoiceprintsRef.current) {
             if (confirmedPersonIds.has(pvp.personId)) continue;
             if (pvp.centroid.length !== mfcc.length) continue;
             const sim = discriminativeSim(mfcc, pvp.centroid);
-            if (
-              sim >= PARTICIPANT_MATCH_THRESHOLD &&
-              (!bestPvp || sim > bestPvp.sim)
-            ) {
+            if (sim >= PARTICIPANT_MATCH_THRESHOLD && (!bestPvp || sim > bestPvp.sim)) {
               bestPvp = { personId: pvp.personId, sim };
             }
           }
@@ -731,13 +719,15 @@ function Home() {
       setCommitted((prev) => [...prev, seg]);
       void db.transcript_segments.add(seg).catch(() => {});
       if (mfcc != null) {
-        void db.segment_mfccs.add({
-          id: newId(),
-          segment_id: seg.id,
-          conversation_id: seg.conversation_id,
-          mfcc,
-          ts: seg.ts,
-        }).catch(() => {});
+        void db.segment_mfccs
+          .add({
+            id: newId(),
+            segment_id: seg.id,
+            conversation_id: seg.conversation_id,
+            mfcc,
+            ts: seg.ts,
+          })
+          .catch(() => {});
       }
 
       // -------- Recognition pass (suggestion-only).
@@ -745,12 +735,10 @@ function Home() {
         const cluster = diarizerRef.current.get(speakerLabel);
         const status = clusterStatusRef.current[speakerLabel];
         if (cluster && status?.kind !== "confirmed") {
-          const introHere = extractIntroducedNames([
-            { text, speaker_label: speakerLabel },
-          ])[0]?.name;
+          const introHere = extractIntroducedNames([{ text, speaker_label: speakerLabel }])[0]
+            ?.name;
           const askTarget = expectingNameForClusterRef.current;
-          const isAskReply =
-            askTarget !== null && (askTarget === speakerLabel || askTarget === "");
+          const isAskReply = askTarget !== null && (askTarget === speakerLabel || askTarget === "");
           const attributionLabel =
             isAskReply && askTarget && askTarget !== "" ? askTarget : speakerLabel;
 
@@ -845,9 +833,7 @@ function Home() {
           // user has declared participants we ONLY send those names as
           // candidates so the AI doesn't get distracted by irrelevant people.
           const clusterCount = cluster?.count ?? 0;
-          const curStatusKind = (
-            nextStatus ?? clusterStatusRef.current[speakerLabel]
-          )?.kind;
+          const curStatusKind = (nextStatus ?? clusterStatusRef.current[speakerLabel])?.kind;
           const lastAiCount = aiSpeakerIdLastRef.current.get(speakerLabel) ?? -1;
           const shouldFireAI =
             clusterCount >= 1 &&
@@ -870,9 +856,7 @@ function Home() {
               .map((id) => allPeople.find((p) => p.id === id)?.name)
               .filter((n): n is string => Boolean(n));
             const candidateNames =
-              declaredNames.length > 0
-                ? declaredNames
-                : allPeople.map((p) => p.name);
+              declaredNames.length > 0 ? declaredNames : allPeople.map((p) => p.name);
             identifyFn({
               data: {
                 unknownLabel: speakerLabel,
@@ -946,8 +930,7 @@ function Home() {
         try {
           const shiftTs = shiftsInSeg[0];
           const firstStart = d.words[0].start ?? 0;
-          const shiftSecFromUtteranceStart =
-            (shiftTs - segStartAbsMs) / 1000;
+          const shiftSecFromUtteranceStart = (shiftTs - segStartAbsMs) / 1000;
           const splitWordIdx = d.words.findIndex(
             (w: any) => (w.start ?? 0) - firstStart >= shiftSecFromUtteranceStart,
           );
@@ -955,9 +938,7 @@ function Home() {
           if (splitWordIdx > 1 && splitWordIdx < d.words.length - 1) {
             const totalSec = spoken + 1.0;
             const totalPcm = cap.recentSlice(totalSec, 0);
-            const splitSampleFromEnd = Math.floor(
-              ((Date.now() - shiftTs) / 1000) * cap.sampleRate,
-            );
+            const splitSampleFromEnd = Math.floor(((Date.now() - shiftTs) / 1000) * cap.sampleRate);
             const splitSampleFromStart = totalPcm.length - splitSampleFromEnd;
             // FRAME size is 512 — need at least 4 frames per half
             if (splitSampleFromStart > 512 * 4 && splitSampleFromEnd > 512 * 4) {
@@ -978,8 +959,9 @@ function Home() {
               // Consume the timestamp unconditionally — even if MFCC fails for
               // one half, this shift is gone. Prevents a stale timestamp from
               // mis-triggering on the next Scribe chunk.
-              speakerShiftTimestampsRef.current =
-                speakerShiftTimestampsRef.current.filter((t) => t !== shiftTs);
+              speakerShiftTimestampsRef.current = speakerShiftTimestampsRef.current.filter(
+                (t) => t !== shiftTs,
+              );
               if (preMfcc && postMfcc) {
                 console.debug("[diarize] split chunk at shift", {
                   shiftAtSec: shiftSecFromUtteranceStart.toFixed(2),
@@ -1029,8 +1011,7 @@ function Home() {
       setVoiceId(s.voice_id);
       setIpadModel(s.ipad_model ?? "auto");
       setFeedbackEnabled(s.suggestion_feedback_enabled ?? true);
-      fastModelRef.current =
-        s.fast_model ?? s.suggestion_model ?? "gemini/gemini-2.5-flash-lite";
+      fastModelRef.current = s.fast_model ?? s.suggestion_model ?? "gemini/gemini-2.5-flash-lite";
       smartModelRef.current = s.smart_model ?? "gemini/gemini-2.5-flash";
 
       const people = await db.people.orderBy("name").toArray();
@@ -1043,10 +1024,7 @@ function Home() {
         try {
           const pos = await getCurrentPosition();
           if (cancelled) return;
-          const match = await findNearestPlace(
-            pos.coords.latitude,
-            pos.coords.longitude,
-          );
+          const match = await findNearestPlace(pos.coords.latitude, pos.coords.longitude);
           if (match) {
             placeIdRef.current = match.place.id;
             placeRef.current = match.place;
@@ -1072,11 +1050,7 @@ function Home() {
     if (active) return;
     let cancelled = false;
     (async () => {
-      const r = await db.conversations
-        .orderBy("started_at")
-        .reverse()
-        .limit(5)
-        .toArray();
+      const r = await db.conversations.orderBy("started_at").reverse().limit(5).toArray();
       if (!cancelled) setRecent(r);
       if (!cancelled && r[0] && !lastConversationIdRef.current) {
         lastConversationIdRef.current = r[0].id;
@@ -1101,6 +1075,7 @@ function Home() {
       setCommitted([]);
       setPartial("");
       setSuggestions([]);
+      setSuggestError(false);
       setSpeakerMap({});
       lastShownRef.current = [];
       diarizerRef.current.reset();
@@ -1148,17 +1123,16 @@ function Home() {
           speakerShiftTimestampsRef.current.push(ts);
           // Trim to the last 30 seconds
           const cutoff = Date.now() - 30000;
-          speakerShiftTimestampsRef.current =
-            speakerShiftTimestampsRef.current.filter((t) => t > cutoff);
+          speakerShiftTimestampsRef.current = speakerShiftTimestampsRef.current.filter(
+            (t) => t > cutoff,
+          );
         });
         console.debug("[voiceprint] capture started", {
           sampleRate: cap.sampleRate,
         });
       } catch (err) {
         console.warn("voice fingerprint capture unavailable", err);
-        toast.warning(
-          "Voice recognition unavailable — speakers won't be auto-identified.",
-        );
+        toast.warning("Voice recognition unavailable — speakers won't be auto-identified.");
         captureRef.current = null;
       }
       setActive(true);
@@ -1213,10 +1187,7 @@ function Home() {
       if (cid) {
         await db.conversations.update(cid, { ended_at: endedAt });
 
-        const segs = await db.transcript_segments
-          .where("conversation_id")
-          .equals(cid)
-          .toArray();
+        const segs = await db.transcript_segments.where("conversation_id").equals(cid).toArray();
         const transcript = segs
           .sort((a, b) => a.ts - b.ts)
           .map((s) => {
@@ -1250,10 +1221,7 @@ function Home() {
             const primary = personIdsRef.current[0];
             await db.memories.bulkAdd(
               r.memories.map(
-                (m: {
-                  text: string;
-                  kind: "fact" | "preference" | "event" | "todo";
-                }) => ({
+                (m: { text: string; kind: "fact" | "preference" | "event" | "todo" }) => ({
                   id: newId(),
                   conversation_id: cid,
                   place_id: placeIdRef.current,
@@ -1323,6 +1291,7 @@ function Home() {
       currentContextRef.current = "";
       lastSuggestKeyRef.current = "";
       setSuggestions([]);
+      setSuggestError(false);
     }
   }, [active, stopping, scribe, summarizeFn, placeName]);
 
@@ -1350,6 +1319,7 @@ function Home() {
     // Mark this key as in-flight; on failure we clear it so the next tick retries.
     lastSuggestKeyRef.current = key;
     setLoadingSuggestions(true);
+    setSuggestError(false);
     let succeeded = false;
     try {
       const peopleById = new Map(allPeople.map((p) => [p.id, p] as const));
@@ -1374,7 +1344,8 @@ function Home() {
       });
       // Detect if a question was just asked so the AI can prioritise answers.
       const jamesLabel = jamesLabelRef.current ?? "__james_self__";
-      const QUESTION_STARTERS = /^(what|how|when|where|why|who|which|would|could|should|is|are|do|did|will|can)\b/i;
+      const QUESTION_STARTERS =
+        /^(what|how|when|where|why|who|which|would|could|should|is|are|do|did|will|can)\b/i;
       const lastNonJames = committed
         .filter((s) => s.speaker_label !== jamesLabel && s.speaker_label !== "__james_self__")
         .slice(-2);
@@ -1408,10 +1379,7 @@ function Home() {
       // Context snippet = the last thing(s) said by someone other than James,
       // i.e. what these suggestions are replies to. Recorded with each choice.
       const contextSnippet = committed
-        .filter(
-          (s) =>
-            s.speaker_label !== jamesLabel && s.speaker_label !== "__james_self__",
-        )
+        .filter((s) => s.speaker_label !== jamesLabel && s.speaker_label !== "__james_self__")
         .slice(-2)
         .map((s) => s.text)
         .join(" ");
@@ -1498,7 +1466,10 @@ function Home() {
       // Surface to the user — the cockpit shouldn't sit on "Thinking…" silently.
       const msg = e?.message ?? "AI request failed";
       // Lightweight toast: don't spam if the call was simply cancelled.
-      if (!String(msg).includes("aborted")) toast.error(msg);
+      if (!String(msg).includes("aborted")) {
+        toast.error(msg);
+        setSuggestError(true);
+      }
     } finally {
       setLoadingSuggestions(false);
       // CRITICAL: on failure, clear the dedupe key so the next render's effect
@@ -1527,9 +1498,7 @@ function Home() {
     const cid = conversationIdRef.current ?? lastConversationIdRef.current;
     if (!cid) return;
     const batch = convoSuggestionsRef.current;
-    const alternatives = batch
-      .filter((s) => s.text !== chosen.text)
-      .map((s) => s.text);
+    const alternatives = batch.filter((s) => s.text !== chosen.text).map((s) => s.text);
     const personId = personIdsRef.current[0];
     try {
       // Mark the losers from this batch as ignored (passed over for a better one).
@@ -1596,59 +1565,56 @@ function Home() {
   }, []);
 
   // Long-press feedback on a suggestion → store explicit signal.
-  const recordFeedback = useCallback(
-    async (s: Suggestion, feedback: SuggestionFeedback) => {
-      const cid = conversationIdRef.current ?? lastConversationIdRef.current;
-      const personId = personIdsRef.current[0];
-      try {
-        if (cid) {
-          // Annotate the matching log row(s) for this text in this conversation.
+  const recordFeedback = useCallback(async (s: Suggestion, feedback: SuggestionFeedback) => {
+    const cid = conversationIdRef.current ?? lastConversationIdRef.current;
+    const personId = personIdsRef.current[0];
+    try {
+      if (cid) {
+        // Annotate the matching log row(s) for this text in this conversation.
+        await db.suggestions_log
+          .where("conversation_id")
+          .equals(cid)
+          .and((l) => l.text === s.text)
+          .modify({ feedback, feedback_at: Date.now() });
+        // Strong negatives also count as "not for me" so the dead-phrase
+        // filter stops re-suggesting it.
+        if (feedback === "not_me" || feedback === "wrong_tone") {
           await db.suggestions_log
             .where("conversation_id")
             .equals(cid)
-            .and((l) => l.text === s.text)
-            .modify({ feedback, feedback_at: Date.now() });
-          // Strong negatives also count as "not for me" so the dead-phrase
-          // filter stops re-suggesting it.
-          if (feedback === "not_me" || feedback === "wrong_tone") {
-            await db.suggestions_log
-              .where("conversation_id")
-              .equals(cid)
-              .and((l) => l.text === s.text && !l.selected)
-              .modify({ ignored: true });
-          }
-          const choice: SuggestionChoice = {
-            id: newId(),
-            conversation_id: cid,
-            person_id: personId,
-            ts: Date.now(),
-            context: currentContextRef.current,
-            chosen: s.text,
-            chosen_category: s.category,
-            alternatives: [],
-            outcome: "feedback",
-            feedback,
-          };
-          await db.suggestion_choices.add(choice);
-          invalidateContextCache();
+            .and((l) => l.text === s.text && !l.selected)
+            .modify({ ignored: true });
         }
-        const labels: Record<SuggestionFeedback, string> = {
-          love: "Noted — more like this",
-          good: "Noted",
-          too_formal: "Noted — will keep it more casual",
-          too_casual: "Noted — will keep it more polished",
-          wrong_tone: "Noted — wrong tone",
-          not_me: "Noted — won't suggest that again",
+        const choice: SuggestionChoice = {
+          id: newId(),
+          conversation_id: cid,
+          person_id: personId,
+          ts: Date.now(),
+          context: currentContextRef.current,
+          chosen: s.text,
+          chosen_category: s.category,
+          alternatives: [],
+          outcome: "feedback",
+          feedback,
         };
-        toast.success(labels[feedback]);
-      } catch (err) {
-        console.warn("record feedback failed", err);
-      } finally {
-        setFeedbackTarget(null);
+        await db.suggestion_choices.add(choice);
+        invalidateContextCache();
       }
-    },
-    [],
-  );
+      const labels: Record<SuggestionFeedback, string> = {
+        love: "Noted — more like this",
+        good: "Noted",
+        too_formal: "Noted — will keep it more casual",
+        too_casual: "Noted — will keep it more polished",
+        wrong_tone: "Noted — wrong tone",
+        not_me: "Noted — won't suggest that again",
+      };
+      toast.success(labels[feedback]);
+    } catch (err) {
+      console.warn("record feedback failed", err);
+    } finally {
+      setFeedbackTarget(null);
+    }
+  }, []);
 
   // Speak via TTS
   const speak = useCallback(
@@ -1665,8 +1631,7 @@ function Home() {
         try {
           // Record James's spoken line as a transcript segment so the next
           // suggestion refresh sees it as part of the conversation.
-          const targetCid =
-            conversationIdRef.current ?? lastConversationIdRef.current;
+          const targetCid = conversationIdRef.current ?? lastConversationIdRef.current;
           if (targetCid) {
             const selfLabel = jamesLabelRef.current ?? JAMES_SELF_LABEL;
             const seg: TranscriptSegment = {
@@ -1751,91 +1716,82 @@ function Home() {
   }, [clusterStatus, committed.length]);
 
   // ---- Speaker confirmation handlers ----
-  const confirmKnownSpeaker = useCallback(
-    async (label: string, personId: string) => {
-      // Confirmation overrides any pending hysteresis — the cluster is now real.
-      pendingClustersRef.current.delete(label);
-      const cluster = diarizerRef.current.get(label);
-      if (cluster) {
-        await recordVoiceprint(personId, cluster.centroid);
-        // Update in-memory caches immediately so future processUtterance calls
-        // benefit without re-querying IDB.
-        const updatedVp = await db.voiceprints.get(personId);
-        if (updatedVp) {
-          allVoiceprintsRef.current = [
-            ...allVoiceprintsRef.current.filter((vp) => vp.person_id !== personId),
-            updatedVp,
-          ];
-          confirmedVoiceprintsRef.current.set(personId, updatedVp.centroid);
-          // Keep participant ref in sync too.
-          participantVoiceprintsRef.current = [
-            ...participantVoiceprintsRef.current.filter((vp) => vp.personId !== personId),
-            { personId, centroid: updatedVp.centroid },
-          ];
-        }
-        // Capture a recent example from this cluster for the user to verify later.
-        const examples = committedRef.current
-          .filter((s) => s.speaker_label === label)
-          .slice(-3)
-          .map((s) => s.text)
-          .join(" / ");
-        await addContributionWithCap({
-          id: newId(),
-          person_id: personId,
-          conversation_id: conversationIdRef.current ?? undefined,
-          source: "auto",
-          mfcc: cluster.centroid.slice(),
-          ts: Date.now(),
-          preview_text: examples || undefined,
-        });
+  const confirmKnownSpeaker = useCallback(async (label: string, personId: string) => {
+    // Confirmation overrides any pending hysteresis — the cluster is now real.
+    pendingClustersRef.current.delete(label);
+    const cluster = diarizerRef.current.get(label);
+    if (cluster) {
+      await recordVoiceprint(personId, cluster.centroid);
+      // Update in-memory caches immediately so future processUtterance calls
+      // benefit without re-querying IDB.
+      const updatedVp = await db.voiceprints.get(personId);
+      if (updatedVp) {
+        allVoiceprintsRef.current = [
+          ...allVoiceprintsRef.current.filter((vp) => vp.person_id !== personId),
+          updatedVp,
+        ];
+        confirmedVoiceprintsRef.current.set(personId, updatedVp.centroid);
+        // Keep participant ref in sync too.
+        participantVoiceprintsRef.current = [
+          ...participantVoiceprintsRef.current.filter((vp) => vp.personId !== personId),
+          { personId, centroid: updatedVp.centroid },
+        ];
       }
-      // Update speakerMap (only confirmed entries) and conversation roster.
-      const nextMap = { ...speakerMapRef.current };
-      // Remove any prior label for this person
-      for (const k of Object.keys(nextMap))
-        if (nextMap[k] === personId) delete nextMap[k];
-      nextMap[label] = personId;
-      speakerMapRef.current = nextMap;
-      setSpeakerMap(nextMap);
-      const nextStatus = {
-        ...clusterStatusRef.current,
-        [label]: { kind: "confirmed" as const, personId },
-      };
-      clusterStatusRef.current = nextStatus;
-      setClusterStatus(nextStatus);
-      if (!personIdsRef.current.includes(personId)) {
-        const merged = [...personIdsRef.current, personId];
-        personIdsRef.current = merged;
-        setSelectedPersonIds(merged);
-      }
-      if (conversationIdRef.current) {
-        await db.conversations.update(conversationIdRef.current, {
-          speaker_map: nextMap,
-          person_ids: personIdsRef.current,
-        });
-      }
-      const p = await db.people.get(personId);
-      if (p) toast.success(`Confirmed ${p.name}`);
-    },
-    [],
-  );
+      // Capture a recent example from this cluster for the user to verify later.
+      const examples = committedRef.current
+        .filter((s) => s.speaker_label === label)
+        .slice(-3)
+        .map((s) => s.text)
+        .join(" / ");
+      await addContributionWithCap({
+        id: newId(),
+        person_id: personId,
+        conversation_id: conversationIdRef.current ?? undefined,
+        source: "auto",
+        mfcc: cluster.centroid.slice(),
+        ts: Date.now(),
+        preview_text: examples || undefined,
+      });
+    }
+    // Update speakerMap (only confirmed entries) and conversation roster.
+    const nextMap = { ...speakerMapRef.current };
+    // Remove any prior label for this person
+    for (const k of Object.keys(nextMap)) if (nextMap[k] === personId) delete nextMap[k];
+    nextMap[label] = personId;
+    speakerMapRef.current = nextMap;
+    setSpeakerMap(nextMap);
+    const nextStatus = {
+      ...clusterStatusRef.current,
+      [label]: { kind: "confirmed" as const, personId },
+    };
+    clusterStatusRef.current = nextStatus;
+    setClusterStatus(nextStatus);
+    if (!personIdsRef.current.includes(personId)) {
+      const merged = [...personIdsRef.current, personId];
+      personIdsRef.current = merged;
+      setSelectedPersonIds(merged);
+    }
+    if (conversationIdRef.current) {
+      await db.conversations.update(conversationIdRef.current, {
+        speaker_map: nextMap,
+        person_ids: personIdsRef.current,
+      });
+    }
+    const p = await db.people.get(personId);
+    if (p) toast.success(`Confirmed ${p.name}`);
+  }, []);
 
   const rejectSuggestion = useCallback((label: string) => {
     const cur = clusterStatusRef.current[label];
     const carried =
-      cur && (cur.kind === "suggested" || cur.kind === "unknown")
-        ? cur.suggestions
-        : undefined;
+      cur && (cur.kind === "suggested" || cur.kind === "unknown") ? cur.suggestions : undefined;
     // Remember the rejected person so we skip them in future voiceprint matches.
-    const prevExcluded =
-      cur?.kind === "unknown" ? (cur.excludedPersonIds ?? []) : [];
+    const prevExcluded = cur?.kind === "unknown" ? (cur.excludedPersonIds ?? []) : [];
     const rejectedId = cur?.kind === "suggested" ? cur.personId : null;
     // Cap excluded list at 3 so a cluster doesn't get permanently locked out of
     // all candidates if the user mis-rejects a few suggestions.
     const excludedPersonIds = rejectedId
-      ? [...prevExcluded, rejectedId]
-          .filter((id, i, arr) => arr.indexOf(id) === i)
-          .slice(-3)
+      ? [...prevExcluded, rejectedId].filter((id, i, arr) => arr.indexOf(id) === i).slice(-3)
       : prevExcluded;
     const next = {
       ...clusterStatusRef.current,
@@ -1857,9 +1813,7 @@ function Home() {
       const trimmed = name.trim();
       if (!trimmed) return;
       // Re-use existing person if name (first-name) matches
-      const existing = allPeople.find(
-        (p) => p.name.toLowerCase() === trimmed.toLowerCase(),
-      );
+      const existing = allPeople.find((p) => p.name.toLowerCase() === trimmed.toLowerCase());
       let personId: string;
       if (existing) {
         personId = existing.id;
@@ -1917,7 +1871,8 @@ function Home() {
           preToStatus?.kind === "confirmed" &&
           preFromStatus.personId !== preToStatus.personId
         ) {
-          const fromName = allPeople.find((p) => p.id === preFromStatus.personId)?.name ?? fromLabel;
+          const fromName =
+            allPeople.find((p) => p.id === preFromStatus.personId)?.name ?? fromLabel;
           const toName = allPeople.find((p) => p.id === preToStatus.personId)?.name ?? toLabel;
           toast.warning(`Merging ${fromName} → ${toName}: both were confirmed to different people`);
         }
@@ -1931,9 +1886,7 @@ function Home() {
 
       // Relabel all transcript segments in state and DB.
       setCommitted((prev) =>
-        prev.map((s) =>
-          s.speaker_label === fromLabel ? { ...s, speaker_label: toLabel } : s,
-        ),
+        prev.map((s) => (s.speaker_label === fromLabel ? { ...s, speaker_label: toLabel } : s)),
       );
       const cid = conversationIdRef.current;
       if (cid) {
@@ -1974,8 +1927,7 @@ function Home() {
       // Re-persist voiceprint for the merged cluster if it's confirmed.
       const mergedCluster = diarizerRef.current.get(toLabel);
       const confirmedPersonId =
-        nextMap[toLabel] ??
-        (newToStatus.kind === "confirmed" ? newToStatus.personId : null);
+        nextMap[toLabel] ?? (newToStatus.kind === "confirmed" ? newToStatus.personId : null);
       if (mergedCluster && confirmedPersonId) {
         await recordVoiceprint(confirmedPersonId, mergedCluster.centroid);
         const updatedVp = await db.voiceprints.get(confirmedPersonId);
@@ -2027,12 +1979,12 @@ function Home() {
       if (segment.mfcc && segment.mfcc.length === 20) {
         try {
           const existingVp = allVoiceprintsRef.current.find((vp) => vp.person_id === personId);
-          const sim = existingVp
-            ? discriminativeSim(segment.mfcc, existingVp.centroid)
-            : 1.0;
+          const sim = existingVp ? discriminativeSim(segment.mfcc, existingVp.centroid) : 1.0;
           if (!existingVp || (Number.isFinite(sim) && sim >= CENTROID_UPDATE_THRESHOLD)) {
             await recordVoiceprint(personId, segment.mfcc);
-            const updatedVp = await import("@/lib/db").then(({ db: d }) => d.voiceprints.get(personId));
+            const updatedVp = await import("@/lib/db").then(({ db: d }) =>
+              d.voiceprints.get(personId),
+            );
             if (updatedVp) {
               allVoiceprintsRef.current = [
                 ...allVoiceprintsRef.current.filter((vp) => vp.person_id !== personId),
@@ -2062,7 +2014,6 @@ function Home() {
     },
     [speak],
   );
-
 
   // Expand James's truncated typing via LLM, then speak the expanded version.
   // For ambiguous input (very short, single-word, no punctuation) we stop at
@@ -2140,9 +2091,7 @@ function Home() {
       // James actually typed (TTS is independent of the chat provider).
       const fallback = draft.trim();
       if (fallback) {
-        toast.error(
-          (e?.message ?? "Could not expand text") + " — speaking your text as typed.",
-        );
+        toast.error((e?.message ?? "Could not expand text") + " — speaking your text as typed.");
         setLastExpansion({ raw: fallback, expanded: fallback });
         setDraft("");
         void commitManualReply(fallback);
@@ -2268,671 +2217,708 @@ function Home() {
 
   return (
     <ScaledShell ipadModel={ipadModel}>
-    <main className="flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
-      {/* Top control bar — always visible, designed for landscape iPad */}
-      <header className="flex shrink-0 items-stretch gap-2 border-b border-border bg-card px-3 py-3">
-        {/* Combined Record / Stop button — green when idle, red when recording */}
-        <button
-          onClick={active ? handleStop : handleStart}
-          disabled={stopping}
-          aria-label={active ? "Stop conversation" : "Start conversation"}
-          className={`flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl text-white shadow-sm transition-all active:scale-95 ${
-            stopping
-              ? "bg-[var(--coral)]/60 ring-2 ring-[var(--coral)]"
-              : active
-                ? "bg-[var(--coral)] hover:opacity-90"
-                : "bg-[var(--teal)] hover:bg-[var(--teal-deep)] disabled:opacity-50"
-          }`}
-        >
-          {active ? (
-            <>
-              <Square className="size-7" />
-              <span className="text-sm font-medium">Stop</span>
-            </>
-          ) : (
-            <>
-              <Mic className="size-7" />
-              <span className="text-sm font-medium">Record</span>
-            </>
-          )}
-        </button>
+      <main className="flex h-full w-full flex-col overflow-hidden bg-background text-foreground">
+        {/* Top control bar — always visible, designed for landscape iPad */}
+        <header className="flex shrink-0 items-stretch gap-2 border-b border-border bg-card px-3 py-3">
+          {/* Combined Record / Stop button — green when idle, red when recording */}
+          <button
+            onClick={active ? handleStop : handleStart}
+            disabled={stopping}
+            aria-label={active ? "Stop conversation" : "Start conversation"}
+            className={`flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl text-white shadow-sm transition-all active:scale-95 ${
+              stopping
+                ? "bg-[var(--coral)]/60 ring-2 ring-[var(--coral)]"
+                : active
+                  ? "bg-[var(--coral)] ring-4 ring-[var(--coral)]/25 hover:opacity-90"
+                  : "bg-[var(--teal)] hover:bg-[var(--teal-deep)] disabled:opacity-50"
+            }`}
+          >
+            {stopping ? (
+              <>
+                <Loader2 className="size-7 motion-safe:animate-spin" />
+                <span className="text-sm font-medium">Saving…</span>
+              </>
+            ) : active ? (
+              <>
+                <Square className="size-7" />
+                <span className="text-sm font-medium">Stop</span>
+              </>
+            ) : (
+              <>
+                <Mic className="size-7" />
+                <span className="text-sm font-medium">Record</span>
+              </>
+            )}
+          </button>
 
-        {/* Text entry — fills remaining width so it stays visible above the on-screen keyboard */}
-        <div className="flex flex-1 flex-col gap-1">
-          {pendingSpeech && (
-            <div className="flex items-center gap-2 rounded-md border-2 border-[var(--accent)] bg-[var(--accent)]/15 px-2 py-1.5 text-sm">
-              <Sparkles className="size-4 shrink-0 text-[var(--accent)]" />
-              <div className="flex-1 leading-snug">
-                <span className="text-xs text-muted-foreground">
-                  Speak this? (typed “{pendingSpeech.raw}”)
-                </span>
-                <div className="font-medium">{pendingSpeech.expanded}</div>
+          {/* Text entry — fills remaining width so it stays visible above the on-screen keyboard */}
+          <div className="flex flex-1 flex-col gap-1">
+            {pendingSpeech && (
+              <div className="flex items-center gap-2 rounded-md border-2 border-[var(--accent)] bg-[var(--accent)]/15 px-2 py-1.5 text-sm">
+                <Sparkles className="size-4 shrink-0 text-[var(--accent)]" />
+                <div className="flex-1 leading-snug">
+                  <span className="text-xs text-muted-foreground">
+                    Speak this? (typed “{pendingSpeech.raw}”)
+                  </span>
+                  <div className="font-medium">{pendingSpeech.expanded}</div>
+                </div>
+                <button
+                  onClick={confirmPendingSpeech}
+                  className="rounded-md bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
+                >
+                  Speak
+                </button>
+                <button
+                  onClick={() => {
+                    // Edit: put the expansion back into the draft for tweaking.
+                    setDraft(pendingSpeech.expanded);
+                    setPendingSpeech(null);
+                  }}
+                  className="rounded-md border border-border bg-secondary/60 px-2 py-1 text-xs hover:bg-secondary"
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => setPendingSpeech(null)}
+                  className="text-muted-foreground hover:text-foreground"
+                  aria-label="Cancel"
+                >
+                  <X className="size-4" />
+                </button>
               </div>
-              <button
-                onClick={confirmPendingSpeech}
-                className="rounded-md bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
-              >
-                Speak
-              </button>
-              <button
-                onClick={() => {
-                  // Edit: put the expansion back into the draft for tweaking.
-                  setDraft(pendingSpeech.expanded);
-                  setPendingSpeech(null);
+            )}
+            {lastExpansion && !pendingSpeech && (
+              <div className="flex items-start gap-2 rounded-md border border-border bg-secondary/40 px-2 py-1 text-xs">
+                <Sparkles className="mt-0.5 size-3 shrink-0 text-[var(--accent)]" />
+                <div className="flex-1 leading-snug">
+                  <span className="text-muted-foreground">Spoke: </span>
+                  <span className="font-medium">{lastExpansion.expanded}</span>
+                  <span className="ml-2 text-muted-foreground">(typed: “{lastExpansion.raw}”)</span>
+                </div>
+                <button
+                  onClick={() => setLastExpansion(null)}
+                  className="text-muted-foreground hover:text-foreground"
+                  aria-label="Dismiss"
+                >
+                  <X className="size-3" />
+                </button>
+              </div>
+            )}
+            <div className="flex flex-1 items-end gap-2">
+              <Textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    expandAndSpeak();
+                  }
                 }}
-                className="rounded-md border border-border bg-secondary/60 px-2 py-1 text-xs hover:bg-secondary"
-              >
-                Edit
-              </button>
-              <button
-                onClick={() => setPendingSpeech(null)}
-                className="text-muted-foreground hover:text-foreground"
-                aria-label="Cancel"
-              >
-                <X className="size-4" />
-              </button>
+                placeholder="Type roughly — AI will clarify and speak it…"
+                className="h-[120px] min-h-[120px] flex-1 resize-none text-base"
+              />
             </div>
+          </div>
+
+          {/* Speak button — same size as Record */}
+          <button
+            onClick={expandAndSpeak}
+            disabled={speaking || expanding || !draft.trim()}
+            aria-label="Speak"
+            className="flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl bg-primary text-primary-foreground shadow-sm transition-all active:scale-95 hover:bg-primary/90 disabled:opacity-50"
+          >
+            {expanding ? (
+              <Sparkles className="size-7 animate-pulse" />
+            ) : (
+              <Volume2 className="size-7" />
+            )}
+            <span className="text-sm font-medium">{expanding ? "Clarifying" : "Speak"}</span>
+          </button>
+
+          {/* Recent conversations */}
+          <Link
+            to="/recent"
+            aria-label="Recent conversations"
+            className="flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl border border-border bg-secondary/40 text-foreground transition hover:bg-secondary active:scale-95"
+          >
+            <History className="size-7" />
+            <span className="text-sm font-medium">Recent</span>
+          </Link>
+
+          {/* Reply helpers — Messages / Email / Facebook combined */}
+          <Link
+            to="/helpers"
+            aria-label="Reply helpers for Messages, Email and Facebook"
+            className="flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl border border-border bg-secondary/40 text-foreground transition hover:bg-secondary active:scale-95"
+          >
+            <Reply className="size-7" />
+            <span className="text-sm font-medium">Helpers</span>
+          </Link>
+
+          {/* Settings */}
+          <Link
+            to="/settings"
+            aria-label="Settings"
+            className="flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl border border-border bg-secondary/40 text-muted-foreground transition hover:bg-secondary active:scale-95"
+          >
+            <SettingsIcon className="size-7" />
+            <span className="text-sm font-medium text-foreground">Settings</span>
+          </Link>
+        </header>
+
+        {/* Status / context strip */}
+        <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border bg-card/60 px-3 py-4 text-base text-muted-foreground">
+          <button
+            onClick={() => setShowPeoplePicker(true)}
+            className="flex items-center gap-2 rounded-full border border-border bg-secondary/40 px-5 py-3 text-base transition hover:bg-secondary active:scale-[0.97] active:bg-secondary"
+          >
+            <Users className="size-5" />
+            {peopleInConvo.length === 0
+              ? "Choose people"
+              : peopleInConvo.map((p) => p.name).join(", ")}
+          </button>
+          {placeName && (
+            <span className="flex items-center gap-2 rounded-full border border-border bg-secondary/40 px-5 py-3">
+              <MapPin className="size-5" /> {placeName}
+            </span>
           )}
-          {lastExpansion && !pendingSpeech && (
-            <div className="flex items-start gap-2 rounded-md border border-border bg-secondary/40 px-2 py-1 text-xs">
-              <Sparkles className="mt-0.5 size-3 shrink-0 text-[var(--accent)]" />
-              <div className="flex-1 leading-snug">
-                <span className="text-muted-foreground">Spoke: </span>
-                <span className="font-medium">{lastExpansion.expanded}</span>
-                <span className="ml-2 text-muted-foreground">
-                  (typed: “{lastExpansion.raw}”)
+          <button
+            onClick={() => setShowEventPicker(true)}
+            className={`flex items-center gap-2 rounded-full border px-5 py-3 text-base transition active:scale-[0.97] ${
+              selectedEvent
+                ? "border-primary/40 bg-primary/10 text-foreground"
+                : "border-border bg-secondary/40 hover:bg-secondary active:bg-secondary"
+            }`}
+          >
+            <Calendar className="size-5" />
+            {selectedEvent ? selectedEvent.name : "Event (optional)"}
+          </button>
+          {/* Recording state — always visible so the mic state is never ambiguous */}
+          {stopping ? (
+            <span
+              role="status"
+              className="ml-auto flex items-center gap-2 rounded-full border border-[var(--coral)]/40 bg-[var(--coral)]/10 px-5 py-3 font-semibold text-destructive"
+            >
+              <Loader2 className="size-5 motion-safe:animate-spin" />
+              Saving conversation…
+            </span>
+          ) : active ? (
+            <span
+              role="status"
+              className="ml-auto flex items-center gap-2 rounded-full border border-[var(--coral)]/40 bg-[var(--coral)]/10 px-5 py-3 font-semibold text-destructive"
+            >
+              <span className="relative flex size-3">
+                <span className="absolute inline-flex h-full w-full rounded-full bg-destructive opacity-60 motion-safe:animate-ping" />
+                <span className="relative inline-flex size-3 rounded-full bg-destructive" />
+              </span>
+              Listening
+            </span>
+          ) : (
+            <span
+              role="status"
+              className="ml-auto flex items-center gap-2 rounded-full border border-border bg-secondary/40 px-5 py-3 text-muted-foreground"
+            >
+              <span className="inline-block size-3 rounded-full bg-muted-foreground/40" />
+              Mic off
+            </span>
+          )}
+        </div>
+
+        {/* Main two-column area: suggestions (80%) + speaker panel (20%) */}
+        <div className="flex min-h-0 flex-1 gap-2 p-2">
+          {/* Suggestions — 3 cols × 4 rows, 80% width */}
+          <section className="flex min-h-0 w-4/5 flex-col rounded-2xl border border-border bg-card/40">
+            <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
+              <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                <Sparkles className="size-4 text-[var(--accent)]" />
+                {predicting ? "Predicting what you're typing…" : "Suggestions"}
+              </h2>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="min-h-9"
+                onClick={refreshSuggestions}
+                disabled={loadingSuggestions || !active || predicting}
+              >
+                {loadingSuggestions ? (
+                  <span className="flex items-center gap-1.5">
+                    <Loader2 className="size-4 motion-safe:animate-spin" /> Thinking…
+                  </span>
+                ) : (
+                  "Refresh"
+                )}
+              </Button>
+            </div>
+            {/* Unobtrusive retry strip when the last refresh failed */}
+            {suggestError && !loadingSuggestions && active && !predicting && (
+              <div className="flex items-center justify-between gap-2 border-b border-[var(--coral)]/30 bg-[var(--coral)]/10 px-3 py-1.5 text-sm text-destructive">
+                <span className="flex items-center gap-1.5">
+                  <AlertCircle className="size-4 shrink-0" />
+                  Suggestions couldn't refresh
                 </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="min-h-9 gap-1.5"
+                  onClick={() => {
+                    lastSuggestKeyRef.current = "";
+                    void refreshSuggestions();
+                  }}
+                >
+                  <RefreshCw className="size-3.5" /> Retry
+                </Button>
               </div>
-              <button
-                onClick={() => setLastExpansion(null)}
-                className="text-muted-foreground hover:text-foreground"
-                aria-label="Dismiss"
-              >
-                <X className="size-3" />
-              </button>
+            )}
+            <div
+              aria-busy={loadingSuggestions}
+              className={`grid min-h-0 flex-1 grid-cols-3 grid-rows-3 gap-2 overflow-hidden p-2 transition-opacity ${
+                loadingSuggestions && suggestions.length > 0 ? "opacity-60" : ""
+              }`}
+            >
+              {!active && suggestions.length === 0 && !predicting && (
+                <Card className="col-span-3 row-span-3 flex items-center justify-center p-5 text-center text-base text-muted-foreground">
+                  Press the record button to start a conversation. Suggestions will appear here.
+                </Card>
+              )}
+              {/* Skeleton chips while the first batch is being fetched */}
+              {suggestions.length === 0 &&
+                loadingSuggestions &&
+                !predicting &&
+                Array.from({ length: 9 }).map((_, i) => (
+                  <div
+                    key={`skeleton-${i}`}
+                    className="flex min-h-14 items-center justify-center rounded-2xl border-2 border-border bg-secondary/40 motion-safe:animate-pulse"
+                  >
+                    <span className="h-4 w-2/3 rounded-full bg-muted-foreground/15" />
+                  </div>
+                ))}
+              {active && suggestions.length === 0 && !loadingSuggestions && !predicting && (
+                <Card className="col-span-3 row-span-3 flex items-center justify-center p-5 text-center text-base text-muted-foreground">
+                  Listening… suggestions will appear after a few words.
+                </Card>
+              )}
+              {suggestions.slice(0, 9).map((s, i) => (
+                <SuggestionCard
+                  key={`${i}-${s.text}`}
+                  suggestion={s}
+                  disabled={speaking}
+                  // Predictions are completions of what James is typing — feedback
+                  // only applies to AI conversation suggestions.
+                  feedbackEnabled={feedbackEnabled && !predicting}
+                  onActivate={() =>
+                    predicting ? speakPrediction(s.text) : speak(s.text, { suggestion: s })
+                  }
+                  onLongPress={() => setFeedbackTarget(s)}
+                  onHoldChange={(h) => {
+                    holdingCardRef.current = h;
+                    if (h) {
+                      heldAtCommittedLenRef.current = committed.length;
+                    } else if (
+                      active &&
+                      !predicting &&
+                      committed.length !== heldAtCommittedLenRef.current
+                    ) {
+                      // A turn landed while we were paused for the hold — refresh
+                      // now so the suggestions aren't a turn stale.
+                      lastSuggestKeyRef.current = "";
+                      void refreshSuggestions();
+                    }
+                  }}
+                />
+              ))}
             </div>
-          )}
-          <div className="flex flex-1 items-end gap-2">
-            <Textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  expandAndSpeak();
-                }
-              }}
-              placeholder="Type roughly — AI will clarify and speak it…"
-              className="h-[120px] min-h-[120px] flex-1 resize-none text-base"
+            {/* Quick phrases */}
+            <div className="grid grid-cols-5 gap-1.5 border-t border-border p-2">
+              {QUICK_PHRASES.map((p) => (
+                <Button
+                  key={p}
+                  variant="secondary"
+                  className="h-16 rounded-xl border border-border px-3 text-base font-medium leading-tight whitespace-normal transition active:scale-[0.97] active:bg-secondary/70"
+                  onClick={() => speak(p)}
+                  disabled={speaking}
+                >
+                  {p}
+                </Button>
+              ))}
+            </div>
+            {/* Mood selector — biases suggestions toward this emotional tone */}
+            <div className="flex flex-wrap items-center gap-1.5 border-t border-border p-2">
+              <span className="mr-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Mood
+              </span>
+              {MOODS.map((m) => {
+                const selected = mood === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => setMood(m.id)}
+                    aria-pressed={selected}
+                    className={`rounded-full border-2 px-5 py-2.5 text-base transition active:scale-[0.97] ${
+                      selected
+                        ? `${m.color} border-transparent font-semibold shadow-md ring-2 ring-[var(--ring)] ring-offset-2 ring-offset-background`
+                        : "border-border bg-background font-medium text-muted-foreground hover:bg-secondary"
+                    }`}
+                  >
+                    {selected && <Check className="mr-1.5 inline size-4 align-[-2px]" />}
+                    {m.label}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          {/* Speaker panel — 20% width */}
+          <div className="flex min-h-0 w-1/5 flex-col">
+            <SpeakerPanel
+              segments={committed}
+              partial={partial}
+              clusters={clusterRows}
+              people={allPeople}
+              participantIds={selectedPersonIds}
+              participantCount={peopleInConvo.length}
+              onConfirmKnown={confirmKnownSpeaker}
+              onRejectSuggestion={rejectSuggestion}
+              onConfirmNew={confirmNewSpeaker}
+              onAskName={askSpeakerName}
+              onClearConfirmed={clearConfirmedSpeaker}
+              onMerge={mergeSpeakerClusters}
+              onForceNew={forceNewSpeaker}
+              onReassignSegment={handleReassignSegment}
             />
           </div>
         </div>
 
-        {/* Speak button — same size as Record */}
-        <button
-          onClick={expandAndSpeak}
-          disabled={speaking || expanding || !draft.trim()}
-          aria-label="Speak"
-          className="flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl bg-primary text-primary-foreground shadow-sm transition-all active:scale-95 hover:bg-primary/90 disabled:opacity-50"
-        >
-          {expanding ? (
-            <Sparkles className="size-7 animate-pulse" />
-          ) : (
-            <Volume2 className="size-7" />
-          )}
-          <span className="text-sm font-medium">
-            {expanding ? "Clarifying" : "Speak"}
-          </span>
-        </button>
-
-        {/* Recent conversations */}
-        <Link
-          to="/recent"
-          aria-label="Recent conversations"
-          className="flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl border border-border bg-secondary/40 text-foreground transition hover:bg-secondary"
-        >
-          <History className="size-7" />
-          <span className="text-sm font-medium">Recent</span>
-        </Link>
-
-        {/* Reply helpers — Messages / Email / Facebook combined */}
-        <Link
-          to="/helpers"
-          aria-label="Reply helpers for Messages, Email and Facebook"
-          className="flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl border border-border bg-secondary/40 text-foreground transition hover:bg-secondary"
-        >
-          <Reply className="size-7" />
-          <span className="text-sm font-medium">Helpers</span>
-        </Link>
-
-        {/* Settings */}
-        <Link
-          to="/settings"
-          aria-label="Settings"
-          className="flex h-[120px] w-[120px] shrink-0 flex-col items-center justify-center gap-1 rounded-2xl border border-border bg-secondary/40 text-muted-foreground transition hover:bg-secondary"
-        >
-          <SettingsIcon className="size-7" />
-          <span className="text-sm font-medium text-foreground">Settings</span>
-        </Link>
-      </header>
-
-      {/* Status / context strip */}
-      <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border bg-card/60 px-3 py-4 text-base text-muted-foreground">
-        <button
-          onClick={() => setShowPeoplePicker(true)}
-          className="flex items-center gap-2 rounded-full border border-border bg-secondary/40 px-5 py-3 text-base hover:bg-secondary"
-        >
-          <Users className="size-5" />
-          {peopleInConvo.length === 0
-            ? "Choose people"
-            : peopleInConvo.map((p) => p.name).join(", ")}
-        </button>
-        {placeName && (
-          <span className="flex items-center gap-2 rounded-full border border-border bg-secondary/40 px-5 py-3">
-            <MapPin className="size-5" /> {placeName}
-          </span>
-        )}
-        <button
-          onClick={() => setShowEventPicker(true)}
-          className={`flex items-center gap-2 rounded-full border px-5 py-3 text-base transition ${
-            selectedEvent
-              ? "border-primary/40 bg-primary/10 text-foreground"
-              : "border-border bg-secondary/40 hover:bg-secondary"
-          }`}
-        >
-          <Calendar className="size-5" />
-          {selectedEvent ? selectedEvent.name : "Event (optional)"}
-        </button>
-        {active && (
-          <span className="flex items-center gap-1.5 text-destructive">
-            <span className="inline-block size-2 animate-pulse rounded-full bg-destructive" />
-            Recording
-          </span>
-        )}
-      </div>
-
-      {/* Main two-column area: suggestions (80%) + speaker panel (20%) */}
-      <div className="flex min-h-0 flex-1 gap-2 p-2">
-        {/* Suggestions — 3 cols × 4 rows, 80% width */}
-        <section className="flex min-h-0 w-4/5 flex-col rounded-2xl border border-border bg-card/40">
-          <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
-            <h2 className="flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-              <Sparkles className="size-4 text-[var(--accent)]" />
-              {predicting ? "Predicting what you're typing…" : "Suggestions"}
-            </h2>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={refreshSuggestions}
-              disabled={loadingSuggestions || !active || predicting}
-            >
-              {loadingSuggestions ? "Thinking…" : "Refresh"}
-            </Button>
-          </div>
-          <div className="grid min-h-0 flex-1 grid-cols-3 grid-rows-3 gap-2 overflow-hidden p-2">
-            {!active && suggestions.length === 0 && !predicting && (
-              <Card className="col-span-3 row-span-3 flex items-center justify-center p-5 text-center text-sm text-muted-foreground">
-                Press the record button to start a conversation. Suggestions
-                will appear here.
-              </Card>
-            )}
-            {active && suggestions.length === 0 && !loadingSuggestions && !predicting && (
-              <Card className="col-span-3 row-span-3 flex items-center justify-center p-5 text-center text-sm text-muted-foreground">
-                Listening… suggestions will appear after a few words.
-              </Card>
-            )}
-            {suggestions.slice(0, 9).map((s, i) => (
-              <SuggestionCard
-                key={`${i}-${s.text}`}
-                suggestion={s}
-                disabled={speaking}
-                // Predictions are completions of what James is typing — feedback
-                // only applies to AI conversation suggestions.
-                feedbackEnabled={feedbackEnabled && !predicting}
-                onActivate={() =>
-                  predicting
-                    ? speakPrediction(s.text)
-                    : speak(s.text, { suggestion: s })
-                }
-                onLongPress={() => setFeedbackTarget(s)}
-                onHoldChange={(h) => {
-                  holdingCardRef.current = h;
-                  if (h) {
-                    heldAtCommittedLenRef.current = committed.length;
-                  } else if (
-                    active &&
-                    !predicting &&
-                    committed.length !== heldAtCommittedLenRef.current
-                  ) {
-                    // A turn landed while we were paused for the hold — refresh
-                    // now so the suggestions aren't a turn stale.
-                    lastSuggestKeyRef.current = "";
-                    void refreshSuggestions();
-                  }
-                }}
-              />
-            ))}
-          </div>
-          {/* Quick phrases */}
-          <div className="grid grid-cols-5 gap-1.5 border-t border-border p-2">
-            {QUICK_PHRASES.map((p) => (
-              <Button
-                key={p}
-                variant="secondary"
-                className="h-16 rounded-xl px-3 text-base font-medium leading-tight whitespace-normal"
-                onClick={() => speak(p)}
-                disabled={speaking}
-              >
-                {p}
-              </Button>
-            ))}
-          </div>
-          {/* Mood selector — biases suggestions toward this emotional tone */}
-          <div className="flex flex-wrap items-center gap-1.5 border-t border-border p-2">
-            <span className="mr-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Mood
-            </span>
-            {MOODS.map((m) => {
-              const selected = mood === m.id;
-              return (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => setMood(m.id)}
-                  aria-pressed={selected}
-                  className={`rounded-full border-2 px-5 py-2.5 text-base font-medium transition ${
-                    selected
-                      ? `${m.color} border-transparent shadow`
-                      : "border-border bg-background text-muted-foreground hover:bg-secondary"
-                  }`}
-                >
-                  {m.label}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        {/* Speaker panel — 20% width */}
-        <div className="flex min-h-0 w-1/5 flex-col">
-          <SpeakerPanel
-            segments={committed}
-            partial={partial}
-            clusters={clusterRows}
-            people={allPeople}
-            participantIds={selectedPersonIds}
-            participantCount={peopleInConvo.length}
-            onConfirmKnown={confirmKnownSpeaker}
-            onRejectSuggestion={rejectSuggestion}
-            onConfirmNew={confirmNewSpeaker}
-            onAskName={askSpeakerName}
-            onClearConfirmed={clearConfirmedSpeaker}
-            onMerge={mergeSpeakerClusters}
-            onForceNew={forceNewSpeaker}
-            onReassignSegment={handleReassignSegment}
+        {/* Suggestion feedback menu (long-press) */}
+        {feedbackTarget && (
+          <FeedbackMenu
+            suggestion={feedbackTarget}
+            onPick={(fb) => recordFeedback(feedbackTarget, fb)}
+            onClose={() => setFeedbackTarget(null)}
           />
-        </div>
-      </div>
+        )}
 
-      {/* Suggestion feedback menu (long-press) */}
-      {feedbackTarget && (
-        <FeedbackMenu
-          suggestion={feedbackTarget}
-          onPick={(fb) => recordFeedback(feedbackTarget, fb)}
-          onClose={() => setFeedbackTarget(null)}
-        />
-      )}
-
-      {/* People picker modal */}
-      {showPeoplePicker && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => setShowPeoplePicker(false)}
-        >
-          <Card
-            className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden p-0"
-            onClick={(e) => e.stopPropagation()}
+        {/* People picker modal */}
+        {showPeoplePicker && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            onClick={() => setShowPeoplePicker(false)}
           >
-            <div className="flex items-center justify-between border-b border-border px-5 py-3">
-              <h3 className="flex items-center gap-2 text-lg font-semibold">
-                <Users className="size-5" /> Who's in this conversation?
-              </h3>
-              <button
-                onClick={() => setShowPeoplePicker(false)}
-                className="rounded-full p-2 hover:bg-secondary"
-              >
-                <X className="size-5" />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-5">
-              {allPeople.length === 0 ? (
-                <p className="text-sm italic text-muted-foreground">
-                  No people added yet. Add them in{" "}
-                  <Link to="/settings" className="underline">
-                    Settings
-                  </Link>
-                  .
-                </p>
-              ) : (
-                <div className="flex flex-wrap gap-2">
-                  {allPeople.map((p) => {
-                    const sel = selectedPersonIds.includes(p.id);
-                    return (
-                      <button
-                        key={p.id}
-                        onClick={() =>
-                          setSelectedPersonIds((cur) =>
-                            cur.includes(p.id)
-                              ? cur.filter((x) => x !== p.id)
-                              : [...cur, p.id],
-                          )
-                        }
-                        className={`flex items-center gap-2 rounded-full border-2 px-4 py-2 text-base transition-colors ${
-                          sel
-                            ? "border-primary bg-primary/10 text-foreground"
-                            : "border-border bg-secondary/40 text-muted-foreground hover:bg-secondary"
-                        }`}
-                      >
-                        {sel && <Check className="size-4" />}
-                        <span className="font-medium">{p.name}</span>
-                        {p.relationship && (
-                          <span className="text-xs opacity-70">
-                            {p.relationship}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
+            <Card
+              className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden p-0"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-border px-5 py-3">
+                <h3 className="flex items-center gap-2 text-lg font-semibold">
+                  <Users className="size-5" /> Who's in this conversation?
+                </h3>
+                <button
+                  onClick={() => setShowPeoplePicker(false)}
+                  className="rounded-full p-2 hover:bg-secondary"
+                >
+                  <X className="size-5" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-5">
+                {allPeople.length === 0 ? (
+                  <p className="text-sm italic text-muted-foreground">
+                    No people added yet. Add them in{" "}
+                    <Link to="/settings" className="underline">
+                      Settings
+                    </Link>
+                    .
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {allPeople.map((p) => {
+                      const sel = selectedPersonIds.includes(p.id);
+                      return (
+                        <button
+                          key={p.id}
+                          onClick={() =>
+                            setSelectedPersonIds((cur) =>
+                              cur.includes(p.id) ? cur.filter((x) => x !== p.id) : [...cur, p.id],
+                            )
+                          }
+                          className={`flex items-center gap-2 rounded-full border-2 px-4 py-2 text-base transition-colors ${
+                            sel
+                              ? "border-primary bg-primary/10 text-foreground"
+                              : "border-border bg-secondary/40 text-muted-foreground hover:bg-secondary"
+                          }`}
+                        >
+                          {sel && <Check className="size-4" />}
+                          <span className="font-medium">{p.name}</span>
+                          {p.relationship && (
+                            <span className="text-xs opacity-70">{p.relationship}</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
 
-              {/* Voice recognition status & inline recording for the people
+                {/* Voice recognition status & inline recording for the people
                   selected for this conversation. Recording a voice sample here
                   means the participant-override path can identify them
                   correctly from their very first utterance — no guessing. */}
-              {selectedPersonIds.length > 0 && (
-                <div className="mt-5 border-t border-border pt-4">
-                  <div className="mb-2 flex items-center justify-between">
-                    <h4 className="text-sm font-semibold">
-                      Voice recognition
-                    </h4>
-                    <span className="text-xs text-muted-foreground">
-                      Recording a sample makes identification instant & accurate
-                    </span>
-                  </div>
-                  <div className="space-y-2">
-                    {selectedPersonIds.map((pid) => {
-                      const person = allPeople.find((p) => p.id === pid);
-                      if (!person) return null;
-                      const sampleCount = voiceprintStatus[pid];
-                      const hasPrint = sampleCount != null;
-                      const expanded = expandedRecorderPersonId === pid;
-                      return (
-                        <div
-                          key={pid}
-                          className={`rounded-lg border ${
-                            hasPrint
-                              ? "border-emerald-500/30 bg-emerald-500/5"
-                              : "border-amber-500/40 bg-amber-500/5"
-                          }`}
-                        >
-                          <div className="flex items-center gap-3 px-3 py-2">
-                            <span className="font-medium">{person.name}</span>
-                            {hasPrint ? (
-                              <span className="flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400">
-                                <Check className="size-3" />
-                                Voice learned · {sampleCount} sample
-                                {sampleCount === 1 ? "" : "s"}
-                              </span>
-                            ) : (
-                              <span className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400">
-                                <AlertCircle className="size-3" />
-                                No voice sample yet
-                              </span>
-                            )}
-                            <button
-                              onClick={() =>
-                                setExpandedRecorderPersonId(
-                                  expanded ? null : pid,
-                                )
-                              }
-                              className="ml-auto flex items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium hover:bg-secondary"
-                            >
+                {selectedPersonIds.length > 0 && (
+                  <div className="mt-5 border-t border-border pt-4">
+                    <div className="mb-2 flex items-center justify-between">
+                      <h4 className="text-sm font-semibold">Voice recognition</h4>
+                      <span className="text-xs text-muted-foreground">
+                        Recording a sample makes identification instant & accurate
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      {selectedPersonIds.map((pid) => {
+                        const person = allPeople.find((p) => p.id === pid);
+                        if (!person) return null;
+                        const sampleCount = voiceprintStatus[pid];
+                        const hasPrint = sampleCount != null;
+                        const expanded = expandedRecorderPersonId === pid;
+                        return (
+                          <div
+                            key={pid}
+                            className={`rounded-lg border ${
+                              hasPrint
+                                ? "border-emerald-500/30 bg-emerald-500/5"
+                                : "border-amber-500/40 bg-amber-500/5"
+                            }`}
+                          >
+                            <div className="flex items-center gap-3 px-3 py-2">
+                              <span className="font-medium">{person.name}</span>
                               {hasPrint ? (
-                                expanded ? (
+                                <span className="flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400">
+                                  <Check className="size-3" />
+                                  Voice learned · {sampleCount} sample
+                                  {sampleCount === 1 ? "" : "s"}
+                                </span>
+                              ) : (
+                                <span className="flex items-center gap-1 text-xs text-amber-700 dark:text-amber-400">
+                                  <AlertCircle className="size-3" />
+                                  No voice sample yet
+                                </span>
+                              )}
+                              <button
+                                onClick={() => setExpandedRecorderPersonId(expanded ? null : pid)}
+                                className="ml-auto flex items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium hover:bg-secondary"
+                              >
+                                {hasPrint ? (
+                                  expanded ? (
+                                    <>
+                                      <ChevronUp className="size-3" /> Hide
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Mic className="size-3" /> Re-record
+                                    </>
+                                  )
+                                ) : expanded ? (
                                   <>
                                     <ChevronUp className="size-3" /> Hide
                                   </>
                                 ) : (
                                   <>
-                                    <Mic className="size-3" /> Re-record
+                                    <Mic className="size-3" /> Record now
                                   </>
-                                )
-                              ) : expanded ? (
-                                <>
-                                  <ChevronUp className="size-3" /> Hide
-                                </>
-                              ) : (
-                                <>
-                                  <Mic className="size-3" /> Record now
-                                </>
-                              )}
-                            </button>
-                          </div>
-                          {expanded && (
-                            <div className="border-t border-border px-3 py-3">
-                              <VoiceSampleRecorder personId={pid} />
-                              <div className="mt-2 flex justify-end">
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={async () => {
-                                    await refreshVoiceprintStatus();
-                                    setExpandedRecorderPersonId(null);
-                                  }}
-                                >
-                                  Done
-                                </Button>
-                              </div>
+                                )}
+                              </button>
                             </div>
-                          )}
-                        </div>
+                            {expanded && (
+                              <div className="border-t border-border px-3 py-3">
+                                <VoiceSampleRecorder personId={pid} />
+                                <div className="mt-2 flex justify-end">
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={async () => {
+                                      await refreshVoiceprintStatus();
+                                      setExpandedRecorderPersonId(null);
+                                    }}
+                                  >
+                                    Done
+                                  </Button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="border-t border-border px-5 py-3">
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    className="flex-1 gap-2"
+                    onClick={() => {
+                      setNewPersonName("");
+                      setNewPersonRel("");
+                      setAddingPerson(true);
+                    }}
+                  >
+                    <Plus className="size-4" /> Add new person
+                  </Button>
+                  <Button className="flex-1" onClick={() => setShowPeoplePicker(false)}>
+                    Done
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* Add new person mini-modal */}
+        {addingPerson && (
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+            onClick={() => setAddingPerson(false)}
+          >
+            <Card className="w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+              <h3 className="mb-3 flex items-center gap-2 text-lg font-semibold">
+                <Plus className="size-5" /> Add new person
+              </h3>
+              <div className="space-y-3">
+                <div>
+                  <label className="mb-1 block text-sm font-medium">Name</label>
+                  <input
+                    autoFocus
+                    value={newPersonName}
+                    onChange={(e) => setNewPersonName(e.target.value)}
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-base"
+                    placeholder="e.g. Sarah"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm font-medium">Relationship (optional)</label>
+                  <input
+                    value={newPersonRel}
+                    onChange={(e) => setNewPersonRel(e.target.value)}
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-base"
+                    placeholder="e.g. care worker, friend"
+                  />
+                </div>
+              </div>
+              <div className="mt-4 flex justify-end gap-2">
+                <Button variant="ghost" onClick={() => setAddingPerson(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={async () => {
+                    const name = newPersonName.trim();
+                    if (!name) {
+                      toast.error("Name is required");
+                      return;
+                    }
+                    const p: Person = {
+                      id: newId(),
+                      name,
+                      relationship: newPersonRel.trim() || undefined,
+                      interests: [],
+                      notes: "",
+                      style_notes: "",
+                      created_at: Date.now(),
+                    };
+                    await db.people.put(p);
+                    setAllPeople((cur) => [...cur, p].sort((a, b) => a.name.localeCompare(b.name)));
+                    setSelectedPersonIds((cur) => [...cur, p.id]);
+                    setAddingPerson(false);
+                    toast.success(`Added ${p.name}`);
+                  }}
+                >
+                  Add
+                </Button>
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {showEventPicker && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            onClick={() => setShowEventPicker(false)}
+          >
+            <Card
+              className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden p-0"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center justify-between border-b border-border px-5 py-3">
+                <h3 className="flex items-center gap-2 text-lg font-semibold">
+                  <Calendar className="size-5" /> Prepping for an event?
+                </h3>
+                <button
+                  onClick={() => setShowEventPicker(false)}
+                  className="rounded-full p-2 hover:bg-secondary"
+                >
+                  <X className="size-5" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-5">
+                <button
+                  onClick={() => {
+                    setSelectedEvent(null);
+                    setShowEventPicker(false);
+                  }}
+                  className={`mb-3 flex w-full items-center justify-between rounded-lg border-2 px-4 py-2 text-left ${
+                    !selectedEvent
+                      ? "border-primary bg-primary/10"
+                      : "border-border bg-secondary/40 hover:bg-secondary"
+                  }`}
+                >
+                  <span className="font-medium">No event</span>
+                  {!selectedEvent && <Check className="size-4" />}
+                </button>
+                {allEvents.length === 0 ? (
+                  <p className="text-sm italic text-muted-foreground">
+                    No events yet. Create one in{" "}
+                    <Link to="/settings" className="underline">
+                      Settings → Events
+                    </Link>
+                    .
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {allEvents.map((e) => {
+                      const sel = selectedEvent?.id === e.id;
+                      return (
+                        <button
+                          key={e.id}
+                          onClick={() => {
+                            setSelectedEvent(e);
+                            setShowEventPicker(false);
+                          }}
+                          className={`flex w-full items-start justify-between gap-3 rounded-lg border-2 px-4 py-2 text-left ${
+                            sel
+                              ? "border-primary bg-primary/10"
+                              : "border-border bg-secondary/40 hover:bg-secondary"
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate font-medium">{e.name}</div>
+                            {(e.when || e.location) && (
+                              <div className="truncate text-xs text-muted-foreground">
+                                {[e.when, e.location].filter(Boolean).join(" · ")}
+                              </div>
+                            )}
+                          </div>
+                          {sel && <Check className="size-4 shrink-0" />}
+                        </button>
                       );
                     })}
                   </div>
-                </div>
-              )}
-            </div>
-            <div className="border-t border-border px-5 py-3">
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  className="flex-1 gap-2"
-                  onClick={() => {
-                    setNewPersonName("");
-                    setNewPersonRel("");
-                    setAddingPerson(true);
-                  }}
-                >
-                  <Plus className="size-4" /> Add new person
-                </Button>
-                <Button
-                  className="flex-1"
-                  onClick={() => setShowPeoplePicker(false)}
-                >
-                  Done
-                </Button>
+                )}
               </div>
-            </div>
-          </Card>
-        </div>
-      )}
-
-      {/* Add new person mini-modal */}
-      {addingPerson && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
-          onClick={() => setAddingPerson(false)}
-        >
-          <Card
-            className="w-full max-w-md p-5"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h3 className="mb-3 flex items-center gap-2 text-lg font-semibold">
-              <Plus className="size-5" /> Add new person
-            </h3>
-            <div className="space-y-3">
-              <div>
-                <label className="mb-1 block text-sm font-medium">Name</label>
-                <input
-                  autoFocus
-                  value={newPersonName}
-                  onChange={(e) => setNewPersonName(e.target.value)}
-                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-base"
-                  placeholder="e.g. Sarah"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block text-sm font-medium">
-                  Relationship (optional)
-                </label>
-                <input
-                  value={newPersonRel}
-                  onChange={(e) => setNewPersonRel(e.target.value)}
-                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-base"
-                  placeholder="e.g. care worker, friend"
-                />
-              </div>
-            </div>
-            <div className="mt-4 flex justify-end gap-2">
-              <Button
-                variant="ghost"
-                onClick={() => setAddingPerson(false)}
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={async () => {
-                  const name = newPersonName.trim();
-                  if (!name) {
-                    toast.error("Name is required");
-                    return;
-                  }
-                  const p: Person = {
-                    id: newId(),
-                    name,
-                    relationship: newPersonRel.trim() || undefined,
-                    interests: [],
-                    notes: "",
-                    style_notes: "",
-                    created_at: Date.now(),
-                  };
-                  await db.people.put(p);
-                  setAllPeople((cur) =>
-                    [...cur, p].sort((a, b) => a.name.localeCompare(b.name)),
-                  );
-                  setSelectedPersonIds((cur) => [...cur, p.id]);
-                  setAddingPerson(false);
-                  toast.success(`Added ${p.name}`);
-                }}
-              >
-                Add
-              </Button>
-            </div>
-          </Card>
-        </div>
-      )}
-
-      {showEventPicker && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => setShowEventPicker(false)}
-        >
-          <Card
-            className="flex max-h-[80vh] w-full max-w-2xl flex-col overflow-hidden p-0"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-border px-5 py-3">
-              <h3 className="flex items-center gap-2 text-lg font-semibold">
-                <Calendar className="size-5" /> Prepping for an event?
-              </h3>
-              <button
-                onClick={() => setShowEventPicker(false)}
-                className="rounded-full p-2 hover:bg-secondary"
-              >
-                <X className="size-5" />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-5">
-              <button
-                onClick={() => {
-                  setSelectedEvent(null);
-                  setShowEventPicker(false);
-                }}
-                className={`mb-3 flex w-full items-center justify-between rounded-lg border-2 px-4 py-2 text-left ${
-                  !selectedEvent
-                    ? "border-primary bg-primary/10"
-                    : "border-border bg-secondary/40 hover:bg-secondary"
-                }`}
-              >
-                <span className="font-medium">No event</span>
-                {!selectedEvent && <Check className="size-4" />}
-              </button>
-              {allEvents.length === 0 ? (
-                <p className="text-sm italic text-muted-foreground">
-                  No events yet. Create one in{" "}
-                  <Link to="/settings" className="underline">
-                    Settings → Events
-                  </Link>
-                  .
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {allEvents.map((e) => {
-                    const sel = selectedEvent?.id === e.id;
-                    return (
-                      <button
-                        key={e.id}
-                        onClick={() => {
-                          setSelectedEvent(e);
-                          setShowEventPicker(false);
-                        }}
-                        className={`flex w-full items-start justify-between gap-3 rounded-lg border-2 px-4 py-2 text-left ${
-                          sel
-                            ? "border-primary bg-primary/10"
-                            : "border-border bg-secondary/40 hover:bg-secondary"
-                        }`}
-                      >
-                        <div className="min-w-0">
-                          <div className="truncate font-medium">{e.name}</div>
-                          {(e.when || e.location) && (
-                            <div className="truncate text-xs text-muted-foreground">
-                              {[e.when, e.location].filter(Boolean).join(" · ")}
-                            </div>
-                          )}
-                        </div>
-                        {sel && <Check className="size-4 shrink-0" />}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </Card>
-        </div>
-      )}
-    </main>
+            </Card>
+          </div>
+        )}
+      </main>
     </ScaledShell>
   );
 }
 
-function ScaledShell({
-  ipadModel,
-  children,
-}: {
-  ipadModel: string;
-  children: React.ReactNode;
-}) {
+function ScaledShell({ ipadModel, children }: { ipadModel: string; children: React.ReactNode }) {
   const preset =
     ipadModel !== "auto" && ipadModel in IPAD_PRESETS
       ? IPAD_PRESETS[ipadModel as keyof typeof IPAD_PRESETS]
@@ -2942,16 +2928,13 @@ function ScaledShell({
     h: typeof window === "undefined" ? 834 : window.innerHeight,
   });
   useEffect(() => {
-    const onResize = () =>
-      setVp({ w: window.innerWidth, h: window.innerHeight });
+    const onResize = () => setVp({ w: window.innerWidth, h: window.innerHeight });
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
   if (!preset) {
-    return (
-      <div className="h-screen w-screen overflow-hidden">{children}</div>
-    );
+    return <div className="h-screen w-screen overflow-hidden">{children}</div>;
   }
 
   const scale = Math.min(vp.w / preset.width, vp.h / preset.height);
@@ -3071,7 +3054,7 @@ function SuggestionCard({
       }}
       disabled={disabled}
       title={feedbackEnabled ? "Tap to speak · hold to give feedback" : "Tap to speak"}
-      className={`relative flex h-full min-h-0 w-full select-none items-center justify-center overflow-hidden rounded-2xl border-2 p-3 text-center text-xl font-medium leading-snug transition-transform active:scale-[0.98] ${categoryClass(suggestion.category)} ${holding ? "ring-2 ring-[var(--accent)]" : ""}`}
+      className={`relative flex h-full min-h-14 w-full select-none items-center justify-center overflow-hidden rounded-2xl border-2 p-3 text-center text-xl font-medium leading-snug transition active:scale-[0.98] active:brightness-95 disabled:opacity-60 ${categoryClass(suggestion.category)} ${holding ? "ring-2 ring-[var(--accent)]" : ""}`}
     >
       <span className="line-clamp-5">{suggestion.text}</span>
       {holding && (
@@ -3113,10 +3096,7 @@ function FeedbackMenu({
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
       onClick={onClose}
     >
-      <Card
-        className="w-full max-w-md p-5"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <Card className="w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
         <div className="mb-1 flex items-center gap-2">
           <Sparkles className="size-4 text-[var(--accent)]" />
           <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
@@ -3148,4 +3128,3 @@ function FeedbackMenu({
     </div>
   );
 }
-

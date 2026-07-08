@@ -96,8 +96,7 @@ export const AI_PROVIDERS: AiProvider[] = [
  *  auto-pick order, so an unrecognised id never shows the wrong provider. */
 export function providerIdForModel(modelId: string | undefined): AiProviderId {
   if (modelId?.startsWith("anthropic/")) return "anthropic";
-  if (modelId?.startsWith("openai-direct/") || modelId?.startsWith("openai/"))
-    return "openai";
+  if (modelId?.startsWith("openai-direct/") || modelId?.startsWith("openai/")) return "openai";
   return "gemini";
 }
 

@@ -20,9 +20,7 @@ export async function getPersonStats(personId: string): Promise<PersonStats> {
     }
   }
   const placeIds = [...placeCounts.keys()];
-  const places = (await db.places.bulkGet(placeIds)).filter(
-    (p): p is Place => !!p,
-  );
+  const places = (await db.places.bulkGet(placeIds)).filter((p): p is Place => !!p);
   const commonPlaces = places
     .map((p) => ({ place: p, count: placeCounts.get(p.id) ?? 0 }))
     .sort((a, b) => b.count - a.count)
@@ -33,13 +31,9 @@ export async function getPersonStats(personId: string): Promise<PersonStats> {
     .equals(personId)
     .reverse()
     .sortBy("created_at");
-  const recentMemories = memories
-    .filter((m) => m.status !== "hidden")
-    .slice(0, 12);
+  const recentMemories = memories.filter((m) => m.status !== "hidden").slice(0, 12);
 
-  const followUps = (
-    await db.follow_ups.where("for_person_id").equals(personId).toArray()
-  )
+  const followUps = (await db.follow_ups.where("for_person_id").equals(personId).toArray())
     .filter((f) => !f.used)
     .sort((a, b) => b.created_at - a.created_at)
     .slice(0, 6)
@@ -54,9 +48,12 @@ export async function getPersonStats(personId: string): Promise<PersonStats> {
   };
 }
 
-export function summarizeRelationship(
-  recentMemoryTexts: string[],
-): { facts: string[]; preferences: string[]; events: string[]; todos: string[] } {
+export function summarizeRelationship(recentMemoryTexts: string[]): {
+  facts: string[];
+  preferences: string[];
+  events: string[];
+  todos: string[];
+} {
   return { facts: [], preferences: [], events: [], todos: [] };
 }
 
@@ -64,7 +61,7 @@ export function summarizeRelationship(
 export function groupMemories(memories: Memory[]) {
   const groups: Record<Memory["kind"], Memory[]> = {
     fact: [],
-	preference: [],
+    preference: [],
     event: [],
     todo: [],
   };

@@ -27,7 +27,11 @@ import {
   type TranscriptSegment,
   MFCC_COEFFS,
 } from "./db";
-import { cosineSim, rebuildVoiceprintFromContributions, addContributionWithCap } from "./voiceprint";
+import {
+  cosineSim,
+  rebuildVoiceprintFromContributions,
+  addContributionWithCap,
+} from "./voiceprint";
 import { kmeansRediarize, type UtteranceVec } from "./rediarize";
 import { aiRediarizeTieBreaker, enrichPersonProfile, detectIntroductions } from "./aac.functions";
 import { extractIntroducedNames } from "./auto-person";

@@ -14,7 +14,8 @@ const SEED_PEOPLE: Omit<Person, "id" | "created_at">[] = [
     name: "Matt",
     relationship: "Brother",
     interests: ["Sailing"],
-    notes: "James's only brother, born 1976. Lives in Remuera, Auckland. Married to Antonia. Loves sailing.",
+    notes:
+      "James's only brother, born 1976. Lives in Remuera, Auckland. Married to Antonia. Loves sailing.",
   },
   {
     name: "Antonia",
@@ -25,7 +26,8 @@ const SEED_PEOPLE: Omit<Person, "id" | "created_at">[] = [
     name: "Jack",
     relationship: "Nephew",
     interests: ["Sailing", "Wing foiling"],
-    notes: "Matt and Antonia's son, born 9 Feb 2011. Studies Cambridge curriculum at ACG College in Parnell. Very smart, doing very well at school. Loves sailing and wing foiling.",
+    notes:
+      "Matt and Antonia's son, born 9 Feb 2011. Studies Cambridge curriculum at ACG College in Parnell. Very smart, doing very well at school. Loves sailing and wing foiling.",
   },
   {
     name: "Kevin",
@@ -66,9 +68,11 @@ export async function seedJamesIfNeeded() {
     const existing = await db.people.toArray();
     const existingNames = new Set(existing.map((p) => p.name.toLowerCase()));
     const now = Date.now();
-    const toAdd = SEED_PEOPLE.filter((p) => !existingNames.has(p.name.toLowerCase())).map(
-      (p) => ({ ...p, id: newId(), created_at: now }),
-    );
+    const toAdd = SEED_PEOPLE.filter((p) => !existingNames.has(p.name.toLowerCase())).map((p) => ({
+      ...p,
+      id: newId(),
+      created_at: now,
+    }));
     if (toAdd.length) await db.people.bulkAdd(toAdd);
 
     localStorage.setItem(SEED_FLAG, "1");

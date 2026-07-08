@@ -226,10 +226,7 @@ export function sanitizeForPrompt(s: string, max = 160): string {
  * Bounded scans keep this cheap: ≤60 recent conversations and a ≤600-segment
  * global recency window (only when no participants are set).
  */
-export async function getJamesVoiceSamples(
-  personIds: string[],
-  limit = 24,
-): Promise<string[]> {
+export async function getJamesVoiceSamples(personIds: string[], limit = 24): Promise<string[]> {
   const seen = new Set<string>();
   const out: string[] = [];
 
@@ -237,7 +234,10 @@ export async function getJamesVoiceSamples(
     if (out.length >= limit) return;
     const text = (raw ?? "").trim();
     if (!text) return;
-    const norm = text.toLowerCase().replace(/[.!?,…]+$/g, "").trim();
+    const norm = text
+      .toLowerCase()
+      .replace(/[.!?,…]+$/g, "")
+      .trim();
     if (seen.has(norm) || VOICE_SAMPLE_STOPWORDS.has(norm)) return;
     // Single-word lines carry little phrasing signal.
     if (text.split(/\s+/).length < 2) return;
@@ -251,11 +251,7 @@ export async function getJamesVoiceSamples(
       // people — no absent identified person was in the room, so nothing of
       // theirs can leak through James's phrasing.
       const present = new Set(personIds);
-      const convos = await db.conversations
-        .orderBy("started_at")
-        .reverse()
-        .limit(60)
-        .toArray();
+      const convos = await db.conversations.orderBy("started_at").reverse().limit(60).toArray();
       const safeIds = convos
         .filter((c) => {
           const ids = c.person_ids ?? [];
@@ -265,10 +261,7 @@ export async function getJamesVoiceSamples(
         .map((c) => c.id);
       for (const cid of safeIds) {
         if (out.length >= limit) break;
-        const segs = await db.transcript_segments
-          .where("conversation_id")
-          .equals(cid)
-          .toArray();
+        const segs = await db.transcript_segments.where("conversation_id").equals(cid).toArray();
         segs.sort((a, b) => b.ts - a.ts);
         for (const s of segs) {
           if (s.speaker_label === JAMES_SELF_LABEL) push(s.text);
@@ -277,11 +270,7 @@ export async function getJamesVoiceSamples(
       }
     } else {
       // No participants selected → recent global lines (nothing to leak against).
-      const recent = await db.transcript_segments
-        .orderBy("ts")
-        .reverse()
-        .limit(600)
-        .toArray();
+      const recent = await db.transcript_segments.orderBy("ts").reverse().limit(600).toArray();
       for (const s of recent) {
         if (out.length >= limit) break;
         if (s.speaker_label === JAMES_SELF_LABEL) push(s.text);
@@ -299,17 +288,10 @@ export async function getJamesVoiceSamples(
  * model what he picked vs. passed over, or that he rejected everything and typed
  * his own — so the suggestion prompt can learn his preferences. Bounded scan.
  */
-export async function getRecentChoiceMemories(
-  personIds: string[],
-  limit = 12,
-): Promise<string[]> {
+export async function getRecentChoiceMemories(personIds: string[], limit = 12): Promise<string[]> {
   const trim = (s: string, n = 80) => sanitizeForPrompt(s, n);
   try {
-    let rows = await db.suggestion_choices
-      .orderBy("ts")
-      .reverse()
-      .limit(200)
-      .toArray();
+    let rows = await db.suggestion_choices.orderBy("ts").reverse().limit(200).toArray();
     // Privacy: when we know who's present, only surface choices tied to one of
     // them. A choice's `context`/`typed_own` can quote what a DIFFERENT person
     // said, so we drop both other-person AND person-less rows (which may carry
@@ -324,15 +306,16 @@ export async function getRecentChoiceMemories(
       if (out.length >= limit) break;
       const ctx = r.context ? `Replying to "${trim(r.context)}", ` : "";
       if (r.outcome === "manual" && r.typed_own) {
-        out.push(
-          `${ctx}he rejected all suggestions and said "${trim(r.typed_own)}" instead.`,
-        );
+        out.push(`${ctx}he rejected all suggestions and said "${trim(r.typed_own)}" instead.`);
       } else if (r.outcome === "feedback" && r.chosen) {
         const fb = (r.feedback ?? "").replace(/_/g, " ");
         out.push(`He marked "${trim(r.chosen)}" as ${fb || "feedback"}.`);
       } else if (r.outcome === "selected" && r.chosen) {
         const alts = r.alternatives?.length
-          ? ` over: ${r.alternatives.slice(0, 3).map((a) => `"${trim(a, 50)}"`).join(", ")}`
+          ? ` over: ${r.alternatives
+              .slice(0, 3)
+              .map((a) => `"${trim(a, 50)}"`)
+              .join(", ")}`
           : "";
         out.push(`${ctx}he chose "${trim(r.chosen)}"${alts}.`);
       }

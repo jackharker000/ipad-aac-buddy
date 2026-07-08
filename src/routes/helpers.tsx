@@ -1,21 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { toast } from "sonner";
-import {
-  ArrowLeft,
-  Mail,
-  MessageCircle,
-  Facebook,
-  ExternalLink,
-} from "lucide-react";
+import { ArrowLeft, Mail, MessageCircle, Facebook, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -61,14 +50,17 @@ function HelpersPage() {
     <main className="min-h-screen bg-background text-foreground">
       <div className="mx-auto max-w-3xl px-4 py-6">
         <Tabs defaultValue="messages">
-          <div className="mb-4 flex items-center gap-3">
+          <header className="mb-3 flex items-center gap-3">
             <Link
               to="/"
               aria-label="Back to home"
-              className="flex size-10 items-center justify-center rounded-lg text-muted-foreground hover:bg-secondary"
+              className="flex size-11 items-center justify-center rounded-xl border border-border bg-card transition hover:bg-secondary active:scale-95"
             >
               <ArrowLeft className="size-5" />
             </Link>
+            <h1 className="text-xl font-semibold tracking-tight">Reply helpers</h1>
+          </header>
+          <div className="mb-4 flex items-center gap-3">
             <TabsList className="h-12 flex-1 justify-start gap-1 bg-secondary/50">
               <TabsTrigger value="messages" className="h-10 gap-2 px-4 text-base">
                 <MessageCircle className="size-4 text-[#34c759]" /> Messages
@@ -84,9 +76,8 @@ function HelpersPage() {
 
           <TabsContent value="messages">
             <p className="mb-3 text-sm text-muted-foreground">
-              Apple Messages has no web version. Paste the message you received
-              below, type a rough reply, then copy the polished version and
-              paste it into Messages on your iPad.
+              Apple Messages has no web version. Paste the message you received below, type a rough
+              reply, then copy the polished version and paste it into Messages on your iPad.
             </p>
             <DraftHelper
               platform="imessage"
@@ -101,8 +92,7 @@ function HelpersPage() {
           <TabsContent value="email">
             <div className="mb-3 flex items-center justify-between gap-3">
               <p className="text-sm text-muted-foreground">
-                Gmail can't be embedded. Open it in a side window, then draft
-                here and copy across.
+                Gmail can't be embedded. Open it in a side window, then draft here and copy across.
               </p>
               <Button
                 onClick={() => openPopup("https://mail.google.com/", "gmail", 720)}
@@ -125,8 +115,8 @@ function HelpersPage() {
           <TabsContent value="facebook">
             <div className="mb-3 flex items-center justify-between gap-3">
               <p className="text-sm text-muted-foreground">
-                Facebook can't be embedded. Open it in a side window, then draft
-                here and copy across.
+                Facebook can't be embedded. Open it in a side window, then draft here and copy
+                across.
               </p>
               <Button
                 onClick={() => openPopup("https://www.facebook.com/", "facebook")}
@@ -147,10 +137,7 @@ function HelpersPage() {
               extraControls={
                 <div>
                   <Label className="text-base">Post type</Label>
-                  <Select
-                    value={postType}
-                    onValueChange={(v) => setPostType(v as PostType)}
-                  >
+                  <Select value={postType} onValueChange={(v) => setPostType(v as PostType)}>
                     <SelectTrigger className="mt-1">
                       <SelectValue />
                     </SelectTrigger>

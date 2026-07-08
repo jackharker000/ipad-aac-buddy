@@ -1,9 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useLiveQuery } from "dexie-react-hooks";
-import { ChevronLeft, Search, X } from "lucide-react";
+import { ChevronLeft, MessagesSquare, Mic, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
   SelectContent,
@@ -57,9 +58,7 @@ function RecentPage() {
           c.summary ?? "",
           ...(c.highlights ?? []),
           placesById.get(c.place_id ?? "")?.name ?? "",
-          ...(c.person_ids ?? [])
-            .map((id) => peopleById.get(id)?.name ?? "")
-            .filter(Boolean),
+          ...(c.person_ids ?? []).map((id) => peopleById.get(id)?.name ?? "").filter(Boolean),
         ]
           .join(" \n")
           .toLowerCase();
@@ -80,12 +79,10 @@ function RecentPage() {
         break;
       case "people":
         sorted.sort((a, b) => {
-          const an = (a.person_ids ?? [])
-            .map((id) => peopleById.get(id)?.name ?? "")
-            .sort()[0] ?? "~";
-          const bn = (b.person_ids ?? [])
-            .map((id) => peopleById.get(id)?.name ?? "")
-            .sort()[0] ?? "~";
+          const an =
+            (a.person_ids ?? []).map((id) => peopleById.get(id)?.name ?? "").sort()[0] ?? "~";
+          const bn =
+            (b.person_ids ?? []).map((id) => peopleById.get(id)?.name ?? "").sort()[0] ?? "~";
           return an.localeCompare(bn);
         });
         break;
@@ -107,12 +104,12 @@ function RecentPage() {
       <header className="flex items-center gap-3">
         <Link
           to="/"
-          className="flex size-10 items-center justify-center rounded-lg border border-border hover:bg-secondary"
-          aria-label="Back"
+          className="flex size-11 items-center justify-center rounded-xl border border-border bg-card transition hover:bg-secondary active:scale-95"
+          aria-label="Back to home"
         >
           <ChevronLeft className="size-5" />
         </Link>
-        <h1 className="text-xl font-semibold">Recent conversations</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Recent conversations</h1>
       </header>
 
       {/* Filter / sort bar */}
@@ -180,14 +177,62 @@ function RecentPage() {
       </div>
 
       <div className="text-xs text-muted-foreground">
-        {filtered.length} {filtered.length === 1 ? "conversation" : "conversations"}
+        {recent === undefined
+          ? "Loading…"
+          : `${filtered.length} ${filtered.length === 1 ? "conversation" : "conversations"}`}
       </div>
 
       <div className="flex-1 space-y-2 overflow-y-auto">
-        {filtered.length === 0 && (
-          <p className="text-sm italic text-muted-foreground">
-            No conversations match your filters.
-          </p>
+        {/* Loading skeletons while Dexie hydrates */}
+        {recent === undefined &&
+          Array.from({ length: 4 }).map((_, i) => (
+            <Card key={`skeleton-${i}`} className="p-3">
+              <Skeleton className="h-3.5 w-56" />
+              <Skeleton className="mt-2.5 h-4 w-full max-w-xl" />
+              <Skeleton className="mt-1.5 h-4 w-2/3" />
+            </Card>
+          ))}
+        {/* Nothing recorded yet — friendly first-run state */}
+        {recent !== undefined && (recent?.length ?? 0) === 0 && (
+          <Card className="flex flex-col items-center gap-3 p-10 text-center">
+            <MessagesSquare className="size-10 text-muted-foreground/50" />
+            <div>
+              <p className="font-medium">No conversations yet</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                When you record a conversation, it will be saved here with a summary and highlights.
+              </p>
+            </div>
+            <Link
+              to="/"
+              className="mt-1 inline-flex min-h-11 items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground shadow-sm transition hover:bg-primary/90 active:scale-[0.98]"
+            >
+              <Mic className="size-4" /> Start a conversation
+            </Link>
+          </Card>
+        )}
+        {/* Filters excluded everything */}
+        {recent !== undefined && (recent?.length ?? 0) > 0 && filtered.length === 0 && (
+          <Card className="flex flex-col items-center gap-3 p-8 text-center">
+            <Search className="size-8 text-muted-foreground/50" />
+            <div>
+              <p className="font-medium">No conversations match your filters</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Try a different search, or clear the filters to see everything.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              className="min-h-11"
+              onClick={() => {
+                setKeyword("");
+                setPlaceFilter("__all__");
+                setPersonFilter("__all__");
+                setSort("date_desc");
+              }}
+            >
+              <X className="mr-1 size-4" /> Clear filters
+            </Button>
+          </Card>
         )}
         {filtered.map((c) => {
           const placeName = placesById.get(c.place_id ?? "")?.name;
@@ -195,18 +240,16 @@ function RecentPage() {
             .map((id) => peopleById.get(id)?.name)
             .filter(Boolean) as string[];
           return (
-            <Card key={c.id} className="p-3">
+            <Card key={c.id} className="p-4">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                 <span>{new Date(c.started_at).toLocaleString()}</span>
                 {placeName && <span>· {placeName}</span>}
-                {peopleNames.length > 0 && (
-                  <span>· {peopleNames.join(", ")}</span>
-                )}
+                {peopleNames.length > 0 && <span>· {peopleNames.join(", ")}</span>}
               </div>
               {c.summary ? (
-                <p className="mt-1 leading-snug">{c.summary}</p>
+                <p className="mt-1.5 leading-relaxed">{c.summary}</p>
               ) : (
-                <p className="mt-1 text-xs italic text-muted-foreground">
+                <p className="mt-1.5 text-xs italic text-muted-foreground">
                   {c.ended_at ? "No summary" : "In progress…"}
                 </p>
               )}

@@ -1,5 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
+import { requireUserOrLocal } from "./server/auth-guard";
+import { logUsage } from "./server/usage-log";
+import { estimateLlmCostUsd, estimateTtsCostUsd } from "./server/pricing";
 
 function requireElevenLabsApiKey(): string {
   const key = process.env.ELEVENLABS_API_KEY;
@@ -8,17 +11,14 @@ function requireElevenLabsApiKey(): string {
 }
 
 function getOpenAIApiKey(): string | undefined {
-  // Accept the common alternate names so a key set under any of them works.
-  return (
-    process.env.OPENAI_API_KEY ||
-    process.env.VITE_OPENAI_API_KEY ||
-    process.env.OPENAI_KEY ||
-    undefined
-  );
+  // Server-only names only. Never accept a VITE_-prefixed name: that prefix is
+  // exactly what Vite uses to expose a var to the client bundle, so honoring it
+  // invites an operator to leak the key into client JS. (Security review L1.)
+  return process.env.OPENAI_API_KEY || process.env.OPENAI_KEY || undefined;
 }
 
 function getAnthropicApiKey(): string | undefined {
-  return process.env.ANTHROPIC_API_KEY || process.env.VITE_ANTHROPIC_API_KEY || undefined;
+  return process.env.ANTHROPIC_API_KEY || undefined;
 }
 
 function getGeminiApiKey(): string | undefined {
@@ -65,11 +65,7 @@ type ChatTarget = {
  * Build a target for each provider, or null if that provider has no key.
  * `explicitModel` (from a "provider/model" selector) bypasses the mapper.
  */
-function buildTarget(
-  provider: ChatProvider,
-  m: string,
-  explicitModel?: string,
-): ChatTarget | null {
+function buildTarget(provider: ChatProvider, m: string, explicitModel?: string): ChatTarget | null {
   if (provider === "anthropic") {
     const key = getAnthropicApiKey();
     if (!key) return null;
@@ -193,6 +189,32 @@ function resolveChatChain(model: string | undefined): ChatTarget[] {
  * attempt from each target. Returns the first successful Response, or the last
  * failed Response so callers' existing `if (!res.ok)` handling still works.
  */
+/**
+ * Read token usage off a successful chat response (clone, so the caller's
+ * body read is untouched) and write a usage_log row. Fire-and-forget.
+ */
+function recordChatUsage(target: ChatTarget, res: Response, latencyMs: number) {
+  void res
+    .clone()
+    .json()
+    .then((j: { usage?: { prompt_tokens?: number; completion_tokens?: number } }) => {
+      const inputTokens = j?.usage?.prompt_tokens;
+      const outputTokens = j?.usage?.completion_tokens;
+      logUsage({
+        provider: target.provider,
+        model: target.model,
+        inputTokens,
+        outputTokens,
+        estCostUsd: estimateLlmCostUsd(target.model, inputTokens, outputTokens),
+        latencyMs,
+        ok: true,
+      });
+    })
+    .catch(() => {
+      logUsage({ provider: target.provider, model: target.model, latencyMs, ok: true });
+    });
+}
+
 async function chatCompletion(
   model: string | undefined,
   body: Record<string, unknown>,
@@ -202,6 +224,7 @@ async function chatCompletion(
   for (let i = 0; i < chain.length; i++) {
     const target = chain[i];
     const isLast = i === chain.length - 1;
+    const startedAt = Date.now();
     const perBody: Record<string, unknown> = { ...body, model: target.model };
     // OpenAI's GPT-5 / o-series reject any temperature other than the default
     // (1) with a 400. Several callers pass a custom temperature, so strip it for
@@ -225,11 +248,28 @@ async function chatCompletion(
       });
     } catch (e) {
       console.warn(`[ai] ${target.provider} network error${isLast ? "" : " — falling back"}`, e);
+      logUsage({
+        provider: target.provider,
+        model: target.model,
+        latencyMs: Date.now() - startedAt,
+        ok: false,
+        error: `network: ${String(e)}`,
+      });
       last = new Response(JSON.stringify({ error: String(e) }), { status: 503 });
       if (isLast) return last;
       continue;
     }
-    if (res.ok) return res;
+    if (res.ok) {
+      recordChatUsage(target, res, Date.now() - startedAt);
+      return res;
+    }
+    logUsage({
+      provider: target.provider,
+      model: target.model,
+      latencyMs: Date.now() - startedAt,
+      ok: false,
+      error: `HTTP ${res.status}`,
+    });
     // Any non-2xx → try the next provider. A 429 is the common case (free-tier
     // rate limit), but we also fall back on 4xx/5xx so one provider's request-
     // shape quirk (e.g. a forced tool_choice it doesn't accept) or a bad/expired
@@ -258,8 +298,9 @@ async function chatCompletion(
  */
 function mapToAnthropic(m: string): string {
   if (m.startsWith("claude")) return m;
-  // "pro"-tier selectors → a stronger model; everything else → fast Haiku.
-  return /pro|opus|sonnet/i.test(m) ? "claude-sonnet-4-5" : "claude-haiku-4-5";
+  // "pro"-tier selectors → the current Sonnet (near-Opus quality at Sonnet
+  // pricing); everything else → fast Haiku for the latency-critical live path.
+  return /pro|opus|sonnet/i.test(m) ? "claude-sonnet-5" : "claude-haiku-4-5";
 }
 function mapToOpenAI(m: string): string {
   if (m.startsWith("gpt")) return m;
@@ -286,29 +327,44 @@ function mapToGemini(m: string): string {
  * can't break out of its quotes and read as injected prompt instructions.
  */
 function promptQuote(s: string, max = 200): string {
-  const t = (s ?? "").replace(/\s+/g, " ").replace(/["“”`]/g, "'").trim();
+  const t = (s ?? "")
+    .replace(/\s+/g, " ")
+    .replace(/["“”`]/g, "'")
+    .trim();
   return t.length > max ? t.slice(0, max - 1) + "…" : t;
 }
 
 /* ------------------------- ElevenLabs: Scribe token ------------------------- */
 
-export const createScribeToken = createServerFn({ method: "POST" }).handler(async () => {
-  const apiKey = requireElevenLabsApiKey();
-  const res = await fetch("https://api.elevenlabs.io/v1/single-use-token/realtime_scribe", {
-    method: "POST",
-    headers: { "xi-api-key": apiKey },
+export const createScribeToken = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
+  .handler(async () => {
+    const apiKey = requireElevenLabsApiKey();
+    const res = await fetch("https://api.elevenlabs.io/v1/single-use-token/realtime_scribe", {
+      method: "POST",
+      headers: { "xi-api-key": apiKey },
+    });
+    if (!res.ok) {
+      const err = await res.text();
+      logUsage({
+        provider: "elevenlabs",
+        model: "scribe-realtime",
+        ok: false,
+        error: `HTTP ${res.status}`,
+      });
+      throw new Error(err || `Token request failed: ${res.status}`);
+    }
+    const data = (await res.json()) as { token: string };
+    // Scribe is billed per audio-hour on ElevenLabs' side; we log the session
+    // start as an event so per-user STT volume is at least countable.
+    logUsage({ provider: "elevenlabs", model: "scribe-realtime", ok: true });
+    return { token: data.token };
   });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(err || `Token request failed: ${res.status}`);
-  }
-  const data = (await res.json()) as { token: string };
-  return { token: data.token };
-});
 
 /* --------------------------------- TTS ------------------------------------- */
 
 export const synthesizeSpeech = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator(
     z.object({
       text: z.string().min(1).max(2000),
@@ -317,6 +373,7 @@ export const synthesizeSpeech = createServerFn({ method: "POST" })
   )
   .handler(async ({ data }) => {
     const apiKey = requireElevenLabsApiKey();
+    const ttsStartedAt = Date.now();
     const res = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${data.voiceId}?output_format=mp3_22050_32`,
       {
@@ -338,51 +395,69 @@ export const synthesizeSpeech = createServerFn({ method: "POST" })
     );
     if (!res.ok) {
       const err = await res.text();
+      logUsage({
+        provider: "elevenlabs",
+        model: "eleven_turbo_v2_5",
+        characters: data.text.length,
+        latencyMs: Date.now() - ttsStartedAt,
+        ok: false,
+        error: `HTTP ${res.status}`,
+      });
       throw new Error(err || `TTS failed: ${res.status}`);
     }
     const buf = await res.arrayBuffer();
     const base64 = Buffer.from(buf).toString("base64");
+    logUsage({
+      provider: "elevenlabs",
+      model: "eleven_turbo_v2_5",
+      characters: data.text.length,
+      estCostUsd: estimateTtsCostUsd(data.text.length),
+      latencyMs: Date.now() - ttsStartedAt,
+      ok: true,
+    });
     return { audioBase64: base64, mime: "audio/mpeg" };
   });
 
 /* --------------------------- ElevenLabs: voices ---------------------------- */
 
-export const listVoices = createServerFn({ method: "GET" }).handler(async () => {
-  const apiKey = requireElevenLabsApiKey();
-  const res = await fetch("https://api.elevenlabs.io/v2/voices?page_size=50", {
-    headers: { "xi-api-key": apiKey },
-  });
-  if (!res.ok) {
-    // Fallback to a curated list if account has no Voices:Read
-    return {
-      voices: [
-        { voice_id: "EXAVITQu4vr4xnSDxMaL", name: "Sarah", labels: {} },
-        { voice_id: "JBFqnCBsd6RMkjVDRZzb", name: "George", labels: {} },
-        { voice_id: "TX3LPaxmHKxFdv7VOQHJ", name: "Liam", labels: {} },
-        { voice_id: "Xb7hH8MSUJpSbSDYk0k2", name: "Alice", labels: {} },
-        { voice_id: "iP95p4xoKVk53GoZ742B", name: "Chris", labels: {} },
-        { voice_id: "nPczCjzI2devNBz1zQrb", name: "Brian", labels: {} },
-        { voice_id: "pFZP5JQG7iQjIQuC4Bku", name: "Lily", labels: {} },
-        { voice_id: "FGY2WhTYpPnrIDTdsKH5", name: "Laura", labels: {} },
-      ],
+export const listVoices = createServerFn({ method: "GET" })
+  .middleware([requireUserOrLocal])
+  .handler(async () => {
+    const apiKey = requireElevenLabsApiKey();
+    const res = await fetch("https://api.elevenlabs.io/v2/voices?page_size=50", {
+      headers: { "xi-api-key": apiKey },
+    });
+    if (!res.ok) {
+      // Fallback to a curated list if account has no Voices:Read
+      return {
+        voices: [
+          { voice_id: "EXAVITQu4vr4xnSDxMaL", name: "Sarah", labels: {} },
+          { voice_id: "JBFqnCBsd6RMkjVDRZzb", name: "George", labels: {} },
+          { voice_id: "TX3LPaxmHKxFdv7VOQHJ", name: "Liam", labels: {} },
+          { voice_id: "Xb7hH8MSUJpSbSDYk0k2", name: "Alice", labels: {} },
+          { voice_id: "iP95p4xoKVk53GoZ742B", name: "Chris", labels: {} },
+          { voice_id: "nPczCjzI2devNBz1zQrb", name: "Brian", labels: {} },
+          { voice_id: "pFZP5JQG7iQjIQuC4Bku", name: "Lily", labels: {} },
+          { voice_id: "FGY2WhTYpPnrIDTdsKH5", name: "Laura", labels: {} },
+        ],
+      };
+    }
+    const data = (await res.json()) as {
+      voices: Array<{
+        voice_id: string;
+        name: string;
+        labels?: Record<string, string>;
+        category?: string;
+      }>;
     };
-  }
-  const data = (await res.json()) as {
-    voices: Array<{
-      voice_id: string;
-      name: string;
-      labels?: Record<string, string>;
-      category?: string;
-    }>;
-  };
-  return {
-    voices: data.voices.map((v) => ({
-      voice_id: v.voice_id,
-      name: v.name,
-      labels: v.labels ?? {},
-    })),
-  };
-});
+    return {
+      voices: data.voices.map((v) => ({
+        voice_id: v.voice_id,
+        name: v.name,
+        labels: v.labels ?? {},
+      })),
+    };
+  });
 
 /* --------------------- ElevenLabs: Voice Design (TTV) ---------------------- */
 
@@ -395,6 +470,7 @@ const DEFAULT_SAMPLE_TEXT =
   "Hello, it's good to see you again. I was just thinking about our last chat — how have things been with you this week? Take your time, I'm in no rush. There's a lot I want to catch up on, but let's start with whatever is on your mind first.";
 
 export const designVoicePreviews = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator((d) => designSchema.parse(d))
   .handler(async ({ data }) => {
     const apiKey = requireElevenLabsApiKey();
@@ -439,6 +515,7 @@ const saveDesignedSchema = z.object({
 });
 
 export const saveDesignedVoice = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator((d) => saveDesignedSchema.parse(d))
   .handler(async ({ data }) => {
     const apiKey = requireElevenLabsApiKey();
@@ -556,9 +633,7 @@ const suggestionsSchema = z.object({
   // alternatives, or when he rejected all of them and typed his own.
   choiceMemories: z.array(z.string()).max(20).optional(),
   model: z.string().optional(),
-  mood: z
-    .enum(["normal", "calm", "excited", "sad", "upset", "empathetic", "amused"])
-    .optional(),
+  mood: z.enum(["normal", "calm", "excited", "sad", "upset", "empathetic", "amused"]).optional(),
   questionAsked: z.boolean().optional(),
   // === Tier 3.1: semantic retrieval ===
   retrievedMemories: z.array(z.string()).max(12).optional(),
@@ -575,9 +650,7 @@ const suggestionsSchema = z.object({
     ])
     .optional(),
   // === Tier 3.4: per-category performance bias derived from suggestion logs ===
-  categoryBias: z
-    .record(z.string(), z.enum(["trusted", "neutral", "near-miss"]))
-    .optional(),
+  categoryBias: z.record(z.string(), z.enum(["trusted", "neutral", "near-miss"])).optional(),
 });
 
 const SUGGESTION_CATEGORIES = [
@@ -592,6 +665,7 @@ const SUGGESTION_CATEGORIES = [
 ] as const;
 
 export const generateSuggestions = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator((d) => suggestionsSchema.parse(d))
   .handler(async ({ data }) => {
     const transcriptText = data.recentTranscript
@@ -781,24 +855,32 @@ ${data.choiceMemories.map((s) => `- ${s}`).join("\n")}
       decision: `committal options — "yes", "let's", "I'd rather", short and definite.`,
       venting: `empathetic validation FIRST ("that sounds hard"), no fixes, gentle follow-ups.`,
       wrapping_up: `closure-friendly — "good to talk", "speak soon", confirm any agreed next step.`,
-      logistics: "precise, factual, time/place oriented; ask for clarification if a detail is missing.",
+      logistics:
+        "precise, factual, time/place oriented; ask for clarification if a detail is missing.",
       small_talk: "light, occasionally humorous, easy to bounce off.",
     };
-    const arcBlock = data.arc ? `# Conversation arc: ${data.arc}\nArc guidance: ${arcGuidance[data.arc]}\n` : "";
+    const arcBlock = data.arc
+      ? `# Conversation arc: ${data.arc}\nArc guidance: ${arcGuidance[data.arc]}\n`
+      : "";
 
     // === Tier 3.4: category-bias block ===
     const trustedCats = data.categoryBias
-      ? Object.entries(data.categoryBias).filter(([, v]) => v === "trusted").map(([k]) => k)
+      ? Object.entries(data.categoryBias)
+          .filter(([, v]) => v === "trusted")
+          .map(([k]) => k)
       : [];
     const nearMissCats = data.categoryBias
-      ? Object.entries(data.categoryBias).filter(([, v]) => v === "near-miss").map(([k]) => k)
+      ? Object.entries(data.categoryBias)
+          .filter(([, v]) => v === "near-miss")
+          .map(([k]) => k)
       : [];
-    const categoryBiasBlock = (trustedCats.length || nearMissCats.length)
-      ? `# Category performance signals
+    const categoryBiasBlock =
+      trustedCats.length || nearMissCats.length
+        ? `# Category performance signals
 ${trustedCats.length ? `Reliable categories (James picks these fast and unchanged): ${trustedCats.join(", ")}` : ""}
 ${nearMissCats.length ? `Under-performing categories (slow tap or often edited) — when used, generate with MORE diversity and stronger personal voice: ${nearMissCats.join(", ")}` : ""}
 `
-      : "";
+        : "";
 
     const presentNames = (data.people ?? []).map((p) => p.name);
     const presentList = presentNames.length ? presentNames.join(", ") : "(only James)";
@@ -834,50 +916,50 @@ ${questionGuidance}
 Return exactly 6 suggestions in James's voice.`;
 
     const res = await chatCompletion(data.model, {
-        // === Tier 3.4: bump temperature when there are under-performing
-        // categories so we explore variants rather than re-emitting the
-        // same near-miss text.
-        temperature: nearMissCats.length > 0 ? 0.9 : undefined,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "emit_suggestions",
-              description: "Emit ranked reply suggestions",
-              parameters: {
-                type: "object",
-                properties: {
-                  suggestions: {
-                    type: "array",
-                    minItems: 6,
-                    maxItems: 6,
-                    items: {
-                      type: "object",
-                      properties: {
-                        text: { type: "string" },
-                        category: {
-                          type: "string",
-                          enum: [...SUGGESTION_CATEGORIES],
-                        },
-                        why: { type: "string" },
+      // === Tier 3.4: bump temperature when there are under-performing
+      // categories so we explore variants rather than re-emitting the
+      // same near-miss text.
+      temperature: nearMissCats.length > 0 ? 0.9 : undefined,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "emit_suggestions",
+            description: "Emit ranked reply suggestions",
+            parameters: {
+              type: "object",
+              properties: {
+                suggestions: {
+                  type: "array",
+                  minItems: 6,
+                  maxItems: 6,
+                  items: {
+                    type: "object",
+                    properties: {
+                      text: { type: "string" },
+                      category: {
+                        type: "string",
+                        enum: [...SUGGESTION_CATEGORIES],
                       },
-                      required: ["text", "category"],
+                      why: { type: "string" },
                     },
+                    required: ["text", "category"],
                   },
                 },
-                required: ["suggestions"],
               },
+              required: ["suggestions"],
             },
           },
-        ],
-        tool_choice: {
-          type: "function",
-          function: { name: "emit_suggestions" },
         },
+      ],
+      tool_choice: {
+        type: "function",
+        function: { name: "emit_suggestions" },
+      },
     });
 
     if (!res.ok) {
@@ -906,6 +988,7 @@ const summarySchema = z.object({
 });
 
 export const summarizeConversation = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator((d) => summarySchema.parse(d))
   .handler(async ({ data }) => {
     const transcriptText = data.transcript.map((s) => `${s.speaker}: ${s.text}`).join("\n");
@@ -934,60 +1017,60 @@ Return, via the tool:
     // default must map to the SMART tier; `max_tokens` is raised so a dense
     // conversation's tool-call JSON can't truncate mid-object → Parse error.
     const res = await chatCompletion(data.model ?? "google/gemini-2.5-pro", {
-        max_tokens: 4096,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: ctx },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "emit_summary",
-              parameters: {
-                type: "object",
-                properties: {
-                  summary: {
-                    type: "string",
-                    description:
-                      "Detailed multi-paragraph narrative (~6-12 sentences) of the whole conversation: topics, tone/emotional arc, decisions, open questions.",
-                  },
-                  highlights: {
-                    type: "array",
-                    description: "4-8 concrete bullet points worth remembering at a glance.",
-                    items: { type: "string" },
-                  },
-                  memories: {
-                    type: "array",
-                    description:
-                      "Every durable thing worth remembering next time — be thorough (often 5-15 for a real conversation).",
-                    items: {
-                      type: "object",
-                      properties: {
-                        text: { type: "string" },
-                        kind: {
-                          type: "string",
-                          enum: ["fact", "preference", "event", "todo"],
-                        },
+      max_tokens: 4096,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: ctx },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "emit_summary",
+            parameters: {
+              type: "object",
+              properties: {
+                summary: {
+                  type: "string",
+                  description:
+                    "Detailed multi-paragraph narrative (~6-12 sentences) of the whole conversation: topics, tone/emotional arc, decisions, open questions.",
+                },
+                highlights: {
+                  type: "array",
+                  description: "4-8 concrete bullet points worth remembering at a glance.",
+                  items: { type: "string" },
+                },
+                memories: {
+                  type: "array",
+                  description:
+                    "Every durable thing worth remembering next time — be thorough (often 5-15 for a real conversation).",
+                  items: {
+                    type: "object",
+                    properties: {
+                      text: { type: "string" },
+                      kind: {
+                        type: "string",
+                        enum: ["fact", "preference", "event", "todo"],
                       },
-                      required: ["text", "kind"],
                     },
-                  },
-                  followUps: {
-                    type: "array",
-                    description: "Specific topics/questions to raise next time.",
-                    items: { type: "string" },
+                    required: ["text", "kind"],
                   },
                 },
-                required: ["summary", "highlights", "memories", "followUps"],
+                followUps: {
+                  type: "array",
+                  description: "Specific topics/questions to raise next time.",
+                  items: { type: "string" },
+                },
               },
+              required: ["summary", "highlights", "memories", "followUps"],
             },
           },
-        ],
-        tool_choice: {
-          type: "function",
-          function: { name: "emit_summary" },
         },
+      ],
+      tool_choice: {
+        type: "function",
+        function: { name: "emit_summary" },
+      },
     });
 
     if (!res.ok) {
@@ -1049,6 +1132,7 @@ const expandSchema = z.object({
 });
 
 export const expandUtterance = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator((d) => expandSchema.parse(d))
   .handler(async ({ data }) => {
     const transcriptText = (data.recentTranscript ?? [])
@@ -1086,10 +1170,10 @@ James typed: "${data.rawText}"
 Rewrite as the spoken reply:`;
 
     const res = await chatCompletion(data.model, {
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
     });
 
     if (!res.ok) {
@@ -1118,13 +1202,12 @@ const predictSchema = z.object({
   people: z.array(personCtxSchema).optional(),
   place: placeCtxSchema.optional(),
   jamesVoiceSamples: z.array(z.string()).max(30).optional(),
-  mood: z
-    .enum(["normal", "calm", "excited", "sad", "upset", "empathetic", "amused"])
-    .optional(),
+  mood: z.enum(["normal", "calm", "excited", "sad", "upset", "empathetic", "amused"]).optional(),
   model: z.string().optional(),
 });
 
 export const predictUtterances = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator((d) => predictSchema.parse(d))
   .handler(async ({ data }) => {
     const transcriptText = (data.recentTranscript ?? [])
@@ -1224,6 +1307,7 @@ const fbPostSchema = z.object({
 });
 
 export const draftFacebookPost = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator((d) => fbPostSchema.parse(d))
   .handler(async ({ data }) => {
     const jp = data.jamesProfile;
@@ -1252,40 +1336,40 @@ ${data.context ? `# Context for this post\n${data.context}\n` : ""}
 Produce one polished version (the recommended one) plus 3 alternative variations with different tones (e.g. shorter / warmer / drier-witted). Keep each under 60 words. Return them via the tool call.`;
 
     const res = await chatCompletion(data.model, {
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "emit_post",
-              description: "Emit a polished Facebook post and alternatives",
-              parameters: {
-                type: "object",
-                properties: {
-                  recommended: { type: "string" },
-                  alternatives: {
-                    type: "array",
-                    minItems: 2,
-                    maxItems: 4,
-                    items: {
-                      type: "object",
-                      properties: {
-                        text: { type: "string" },
-                        tone: { type: "string", description: "e.g. shorter, warmer, drier" },
-                      },
-                      required: ["text", "tone"],
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "emit_post",
+            description: "Emit a polished Facebook post and alternatives",
+            parameters: {
+              type: "object",
+              properties: {
+                recommended: { type: "string" },
+                alternatives: {
+                  type: "array",
+                  minItems: 2,
+                  maxItems: 4,
+                  items: {
+                    type: "object",
+                    properties: {
+                      text: { type: "string" },
+                      tone: { type: "string", description: "e.g. shorter, warmer, drier" },
                     },
+                    required: ["text", "tone"],
                   },
                 },
-                required: ["recommended", "alternatives"],
               },
+              required: ["recommended", "alternatives"],
             },
           },
-        ],
-        tool_choice: { type: "function", function: { name: "emit_post" } },
+        },
+      ],
+      tool_choice: { type: "function", function: { name: "emit_post" } },
     });
 
     if (!res.ok) {
@@ -1335,6 +1419,7 @@ const eventPrepSchema = z.object({
 });
 
 export const generateEventPrep = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator((d) => eventPrepSchema.parse(d))
   .handler(async ({ data }) => {
     const jp = data.jamesProfile;
@@ -1363,37 +1448,37 @@ ${existingBlock}
 Generate 6-10 key points and 6-10 key questions tailored to this event.`;
 
     const res = await chatCompletion(data.model, {
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "emit_event_prep",
-              parameters: {
-                type: "object",
-                properties: {
-                  keyPoints: {
-                    type: "array",
-                    minItems: 4,
-                    maxItems: 12,
-                    items: { type: "string" },
-                  },
-                  keyQuestions: {
-                    type: "array",
-                    minItems: 4,
-                    maxItems: 12,
-                    items: { type: "string" },
-                  },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "emit_event_prep",
+            parameters: {
+              type: "object",
+              properties: {
+                keyPoints: {
+                  type: "array",
+                  minItems: 4,
+                  maxItems: 12,
+                  items: { type: "string" },
                 },
-                required: ["keyPoints", "keyQuestions"],
+                keyQuestions: {
+                  type: "array",
+                  minItems: 4,
+                  maxItems: 12,
+                  items: { type: "string" },
+                },
               },
+              required: ["keyPoints", "keyQuestions"],
             },
           },
-        ],
-        tool_choice: { type: "function", function: { name: "emit_event_prep" } },
+        },
+      ],
+      tool_choice: { type: "function", function: { name: "emit_event_prep" } },
     });
 
     if (!res.ok) {
@@ -1434,6 +1519,7 @@ const draftReplySchema = z.object({
 });
 
 export const draftReply = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator((d) => draftReplySchema.parse(d))
   .handler(async ({ data }) => {
     const jp = data.jamesProfile;
@@ -1470,39 +1556,39 @@ ${data.context ? `# Context\n${data.context}\n` : ""}${incomingBlock}
 Produce one polished version (the recommended one) plus 3 alternative variations with different tones (e.g. shorter / warmer / drier-witted). Return them via the tool call.`;
 
     const res = await chatCompletion(data.model, {
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "emit_reply",
-              parameters: {
-                type: "object",
-                properties: {
-                  recommended: { type: "string" },
-                  alternatives: {
-                    type: "array",
-                    minItems: 2,
-                    maxItems: 4,
-                    items: {
-                      type: "object",
-                      properties: {
-                        text: { type: "string" },
-                        tone: { type: "string" },
-                      },
-                      required: ["text", "tone"],
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "emit_reply",
+            parameters: {
+              type: "object",
+              properties: {
+                recommended: { type: "string" },
+                alternatives: {
+                  type: "array",
+                  minItems: 2,
+                  maxItems: 4,
+                  items: {
+                    type: "object",
+                    properties: {
+                      text: { type: "string" },
+                      tone: { type: "string" },
                     },
+                    required: ["text", "tone"],
                   },
                 },
-                required: ["recommended", "alternatives"],
               },
+              required: ["recommended", "alternatives"],
             },
           },
-        ],
-        tool_choice: { type: "function", function: { name: "emit_reply" } },
+        },
+      ],
+      tool_choice: { type: "function", function: { name: "emit_reply" } },
     });
 
     if (!res.ok) {
@@ -1547,6 +1633,7 @@ const extractInterestsSchema = z.object({
 });
 
 export const extractInterests = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator((d) => extractInterestsSchema.parse(d))
   .handler(async ({ data }) => {
     const system = `You are a careful profile-keeper for ${data.jamesName ?? "James"}, a non-speaking AAC user. Looking at a message he just wrote (and optionally what he received), suggest 0-3 SHORT additions to his profile that would help an AI assistant respond more like him in the future. Categories: "topic_loved" (a hobby/subject he clearly cares about), "current_context" (a current life event/plan/health/family update), "signature_phrase" (a recurring expression or way of speaking). Only suggest things clearly evidenced in the text. Skip if nothing meaningful is new. Each suggestion must be under 12 words. Do NOT repeat anything already present in his current profile fields.`;
@@ -1565,41 +1652,41 @@ ${data.draft}
 Return 0-3 suggested profile additions.`;
 
     const res = await chatCompletion(data.model, {
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "emit_interests",
-              parameters: {
-                type: "object",
-                properties: {
-                  suggestions: {
-                    type: "array",
-                    maxItems: 3,
-                    items: {
-                      type: "object",
-                      properties: {
-                        kind: {
-                          type: "string",
-                          enum: ["topic_loved", "current_context", "signature_phrase"],
-                        },
-                        text: { type: "string" },
-                        why: { type: "string" },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "emit_interests",
+            parameters: {
+              type: "object",
+              properties: {
+                suggestions: {
+                  type: "array",
+                  maxItems: 3,
+                  items: {
+                    type: "object",
+                    properties: {
+                      kind: {
+                        type: "string",
+                        enum: ["topic_loved", "current_context", "signature_phrase"],
                       },
-                      required: ["kind", "text"],
+                      text: { type: "string" },
+                      why: { type: "string" },
                     },
+                    required: ["kind", "text"],
                   },
                 },
-                required: ["suggestions"],
               },
+              required: ["suggestions"],
             },
           },
-        ],
-        tool_choice: { type: "function", function: { name: "emit_interests" } },
+        },
+      ],
+      tool_choice: { type: "function", function: { name: "emit_interests" } },
     });
     if (!res.ok) return { suggestions: [], error: `AI error ${res.status}` };
     const json = (await res.json()) as any;
@@ -1624,23 +1711,20 @@ Return 0-3 suggested profile additions.`;
 
 const speakerContextSchema = z.object({
   unknownLabel: z.string(),
-  recentTranscript: z
-    .array(z.object({ speaker: z.string(), text: z.string() }))
-    .max(20),
+  recentTranscript: z.array(z.object({ speaker: z.string(), text: z.string() })).max(20),
   confirmedSpeakers: z.record(z.string(), z.string()),
   candidateNames: z.array(z.string()).max(15),
   model: z.string().optional(),
 });
 
 export const identifySpeakerFromContext = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator((d) => speakerContextSchema.parse(d))
   .handler(async ({ data }) => {
     const confirmedList = Object.entries(data.confirmedSpeakers)
       .map(([lbl, name]) => `${lbl} = ${name}`)
       .join(", ");
-    const transcriptText = data.recentTranscript
-      .map((s) => `${s.speaker}: ${s.text}`)
-      .join("\n");
+    const transcriptText = data.recentTranscript.map((s) => `${s.speaker}: ${s.text}`).join("\n");
 
     const system = `You are a speaker identification assistant. A conversation is being transcribed in real time. Some speakers are already identified; one cluster label is unknown. Use contextual clues — direct address by name, reply patterns, topic knowledge, name mentions by others, relationship cues — to infer who the unknown speaker likely is. Be conservative: only return a name (from the candidate list) if you are genuinely confident (confidence >= 0.65). Return "unknown" if there is not enough evidence.`;
 
@@ -1654,40 +1738,39 @@ ${transcriptText}
 Who is ${data.unknownLabel}? Return the most likely candidate name or "unknown", with confidence 0–1.`;
 
     const res = await chatCompletion(data.model ?? "google/gemini-2.5-flash-lite", {
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "emit_speaker_id",
-              parameters: {
-                type: "object",
-                properties: {
-                  personName: { type: "string" },
-                  confidence: {
-                    type: "number",
-                    minimum: 0,
-                    maximum: 1,
-                  },
-                  reasoning: { type: "string" },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "emit_speaker_id",
+            parameters: {
+              type: "object",
+              properties: {
+                personName: { type: "string" },
+                confidence: {
+                  type: "number",
+                  minimum: 0,
+                  maximum: 1,
                 },
-                required: ["personName", "confidence"],
+                reasoning: { type: "string" },
               },
+              required: ["personName", "confidence"],
             },
           },
-        ],
-        tool_choice: { type: "function", function: { name: "emit_speaker_id" } },
+        },
+      ],
+      tool_choice: { type: "function", function: { name: "emit_speaker_id" } },
     });
 
     if (!res.ok) {
       return { personName: null, confidence: 0, reasoning: "", error: `AI error ${res.status}` };
     }
     const json = (await res.json()) as any;
-    const argStr =
-      json.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
+    const argStr = json.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
     if (!argStr) {
       return { personName: null, confidence: 0, reasoning: "", error: "No tool call" };
     }
@@ -1699,8 +1782,7 @@ Who is ${data.unknownLabel}? Return the most likely candidate name or "unknown",
       };
       const name = (parsed.personName ?? "").trim();
       return {
-        personName:
-          name.toLowerCase() === "unknown" || !name ? null : name,
+        personName: name.toLowerCase() === "unknown" || !name ? null : name,
         confidence: parsed.confidence ?? 0,
         reasoning: parsed.reasoning ?? "",
         error: null,
@@ -1737,6 +1819,7 @@ const distillStyleProfileSchema = z.object({
 });
 
 export const distillStyleProfile = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator((d) => distillStyleProfileSchema.parse(d))
   .handler(async ({ data }) => {
     if (data.samples.length < 20) {
@@ -1773,54 +1856,54 @@ ${sampleLines.join("\n")}
 Now emit a StyleProfileJson. Focus on what James KEEPS (picked) and how he REWRITES (edited). Treat (ignored) lines as anti-examples. Do not over-claim if signal is thin.`;
 
     const res = await chatCompletion(data.model ?? "google/gemini-2.5-pro", {
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "emit_profile",
-              description: "Emit a distilled style profile JSON",
-              parameters: {
-                type: "object",
-                properties: {
-                  preferred_openers: { type: "array", items: { type: "string" } },
-                  preferred_signoffs: { type: "array", items: { type: "string" } },
-                  formality: {
-                    type: "string",
-                    enum: ["casual", "neutral", "formal"],
-                  },
-                  formality_score: { type: "number" },
-                  humor_markers: { type: "array", items: { type: "string" } },
-                  taboo_phrases: { type: "array", items: { type: "string" } },
-                  avg_sentence_length_words: { type: "number" },
-                  reading_grade_estimate: { type: "number" },
-                  category_preference: {
-                    type: "object",
-                    additionalProperties: { type: "number" },
-                  },
-                  notes: { type: "string" },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "emit_profile",
+            description: "Emit a distilled style profile JSON",
+            parameters: {
+              type: "object",
+              properties: {
+                preferred_openers: { type: "array", items: { type: "string" } },
+                preferred_signoffs: { type: "array", items: { type: "string" } },
+                formality: {
+                  type: "string",
+                  enum: ["casual", "neutral", "formal"],
                 },
-                required: [
-                  "preferred_openers",
-                  "preferred_signoffs",
-                  "formality",
-                  "formality_score",
-                  "humor_markers",
-                  "taboo_phrases",
-                  "avg_sentence_length_words",
-                  "reading_grade_estimate",
-                  "category_preference",
-                  "notes",
-                ],
+                formality_score: { type: "number" },
+                humor_markers: { type: "array", items: { type: "string" } },
+                taboo_phrases: { type: "array", items: { type: "string" } },
+                avg_sentence_length_words: { type: "number" },
+                reading_grade_estimate: { type: "number" },
+                category_preference: {
+                  type: "object",
+                  additionalProperties: { type: "number" },
+                },
+                notes: { type: "string" },
               },
+              required: [
+                "preferred_openers",
+                "preferred_signoffs",
+                "formality",
+                "formality_score",
+                "humor_markers",
+                "taboo_phrases",
+                "avg_sentence_length_words",
+                "reading_grade_estimate",
+                "category_preference",
+                "notes",
+              ],
             },
           },
-        ],
-        tool_choice: { type: "function", function: { name: "emit_profile" } },
-        temperature: 0.2,
+        },
+      ],
+      tool_choice: { type: "function", function: { name: "emit_profile" } },
+      temperature: 0.2,
     });
 
     if (!res.ok) {
@@ -1864,6 +1947,7 @@ const tieBreakerSchema = z.object({
 });
 
 export const aiRediarizeTieBreaker = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator((d) => tieBreakerSchema.parse(d))
   .handler(async ({ data }) => {
     const system = `You are a forensic transcript reviewer. A non-speaking AAC user, James, just finished a conversation. A first-pass automatic diarizer assigned each utterance a speaker label, but several were ambiguous. The user has confirmed the full list of speakers in the room.
@@ -1895,45 +1979,45 @@ ${data.candidates
     }
 
     const res = await chatCompletion(data.model ?? "google/gemini-2.5-pro", {
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: userMsg },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "emit_decisions",
-              parameters: {
-                type: "object",
-                properties: {
-                  decisions: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      properties: {
-                        segmentId: { type: "string" },
-                        speaker: {
-                          type: "string",
-                          description:
-                            "A speaker from knownSpeakers, or the literal string 'unsure' if truly indeterminate.",
-                        },
-                        confidence: {
-                          type: "number",
-                          minimum: 0,
-                          maximum: 1,
-                        },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: userMsg },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "emit_decisions",
+            parameters: {
+              type: "object",
+              properties: {
+                decisions: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      segmentId: { type: "string" },
+                      speaker: {
+                        type: "string",
+                        description:
+                          "A speaker from knownSpeakers, or the literal string 'unsure' if truly indeterminate.",
                       },
-                      required: ["segmentId", "speaker", "confidence"],
+                      confidence: {
+                        type: "number",
+                        minimum: 0,
+                        maximum: 1,
+                      },
                     },
+                    required: ["segmentId", "speaker", "confidence"],
                   },
                 },
-                required: ["decisions"],
               },
+              required: ["decisions"],
             },
           },
-        ],
-        tool_choice: { type: "function", function: { name: "emit_decisions" } },
+        },
+      ],
+      tool_choice: { type: "function", function: { name: "emit_decisions" } },
     });
 
     if (!res.ok) {
@@ -1988,6 +2072,7 @@ const ENRICH_ALLOWED_TAGS = [
 ];
 
 export const enrichPersonProfile = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator((d) => enrichPersonSchema.parse(d))
   .handler(async ({ data }) => {
     if (data.filteredTranscript.length === 0) {
@@ -2024,48 +2109,48 @@ Filtered transcript (only turns by James and ${data.personName}):
 ${transcriptText}`;
 
     const res = await chatCompletion(data.model ?? "google/gemini-2.5-pro", {
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "emit_proposals",
-              parameters: {
-                type: "object",
-                properties: {
-                  proposals: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      properties: {
-                        field: {
-                          type: "string",
-                          enum: [
-                            "interests",
-                            "style_notes",
-                            "topics_loved",
-                            "topics_avoided",
-                            "relationship_dynamics",
-                            "dynamic_tags",
-                          ],
-                        },
-                        value: { type: "string" },
-                        op: { type: "string", enum: ["add", "replace"] },
-                        reasoning: { type: "string" },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "emit_proposals",
+            parameters: {
+              type: "object",
+              properties: {
+                proposals: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      field: {
+                        type: "string",
+                        enum: [
+                          "interests",
+                          "style_notes",
+                          "topics_loved",
+                          "topics_avoided",
+                          "relationship_dynamics",
+                          "dynamic_tags",
+                        ],
                       },
-                      required: ["field", "value", "op"],
+                      value: { type: "string" },
+                      op: { type: "string", enum: ["add", "replace"] },
+                      reasoning: { type: "string" },
                     },
+                    required: ["field", "value", "op"],
                   },
                 },
-                required: ["proposals"],
               },
+              required: ["proposals"],
             },
           },
-        ],
-        tool_choice: { type: "function", function: { name: "emit_proposals" } },
+        },
+      ],
+      tool_choice: { type: "function", function: { name: "emit_proposals" } },
     });
 
     if (!res.ok) return { proposals: [], error: `AI error ${res.status}` };
@@ -2104,6 +2189,7 @@ const detectIntrosSchema = z.object({
 });
 
 export const detectIntroductions = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator((d) => detectIntrosSchema.parse(d))
   .handler(async ({ data }) => {
     if (data.transcript.length === 0) {
@@ -2136,43 +2222,43 @@ Transcript:
 ${data.transcript.map((t) => `${t.speaker}: ${t.text}`).join("\n")}`;
 
     const res = await chatCompletion(data.model ?? "google/gemini-2.5-pro", {
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "emit_introductions",
-              parameters: {
-                type: "object",
-                properties: {
-                  introductions: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      properties: {
-                        name: { type: "string" },
-                        role: { type: "string" },
-                        relationship: { type: "string" },
-                        speakerLabel: { type: "string" },
-                        confidence: { type: "number", minimum: 0, maximum: 1 },
-                        quote: { type: "string" },
-                      },
-                      required: ["name", "speakerLabel", "confidence", "quote"],
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "emit_introductions",
+            parameters: {
+              type: "object",
+              properties: {
+                introductions: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: {
+                      name: { type: "string" },
+                      role: { type: "string" },
+                      relationship: { type: "string" },
+                      speakerLabel: { type: "string" },
+                      confidence: { type: "number", minimum: 0, maximum: 1 },
+                      quote: { type: "string" },
                     },
+                    required: ["name", "speakerLabel", "confidence", "quote"],
                   },
                 },
-                required: ["introductions"],
               },
+              required: ["introductions"],
             },
           },
-        ],
-        tool_choice: {
-          type: "function",
-          function: { name: "emit_introductions" },
         },
+      ],
+      tool_choice: {
+        type: "function",
+        function: { name: "emit_introductions" },
+      },
     });
 
     if (!res.ok) return { introductions: [], error: `AI error ${res.status}` };
@@ -2225,6 +2311,7 @@ const arcSchema = z.object({
 });
 
 export const classifyConversationArc = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator((d) => arcSchema.parse(d))
   .handler(async ({ data }) => {
     const transcriptText = data.recentTranscript
@@ -2252,29 +2339,29 @@ Prefer the tag for the LAST 3-5 turns. If conversation just shifted, use new tag
 ${transcriptText}`;
 
     const res = await chatCompletion(data.model, {
-        temperature: 0.2,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "emit_arc",
-              description: "Emit a single conversation-arc tag with confidence",
-              parameters: {
-                type: "object",
-                properties: {
-                  arc: { type: "string", enum: [...CONVERSATION_ARC_VALUES] },
-                  confidence: { type: "number", minimum: 0, maximum: 1 },
-                },
-                required: ["arc", "confidence"],
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "emit_arc",
+            description: "Emit a single conversation-arc tag with confidence",
+            parameters: {
+              type: "object",
+              properties: {
+                arc: { type: "string", enum: [...CONVERSATION_ARC_VALUES] },
+                confidence: { type: "number", minimum: 0, maximum: 1 },
               },
+              required: ["arc", "confidence"],
             },
           },
-        ],
-        tool_choice: { type: "function", function: { name: "emit_arc" } },
+        },
+      ],
+      tool_choice: { type: "function", function: { name: "emit_arc" } },
     });
 
     if (!res.ok) {
@@ -2315,6 +2402,7 @@ const moodPredictSchema = z.object({
 });
 
 export const predictMood = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator((d) => moodPredictSchema.parse(d))
   .handler(async ({ data }) => {
     const transcriptText = data.recentTranscript
@@ -2355,30 +2443,30 @@ Be CONSERVATIVE. "normal" when nothing strongly suggests another tag. Confidence
 ${transcriptText}`;
 
     const res = await chatCompletion(data.model, {
-        temperature: 0.3,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "emit_mood",
-              description: "Emit a single predicted mood for James's next reply",
-              parameters: {
-                type: "object",
-                properties: {
-                  mood: { type: "string", enum: [...MOOD_VALUES] },
-                  confidence: { type: "number", minimum: 0, maximum: 1 },
-                  reasoning: { type: "string" },
-                },
-                required: ["mood", "confidence"],
+      temperature: 0.3,
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: user },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "emit_mood",
+            description: "Emit a single predicted mood for James's next reply",
+            parameters: {
+              type: "object",
+              properties: {
+                mood: { type: "string", enum: [...MOOD_VALUES] },
+                confidence: { type: "number", minimum: 0, maximum: 1 },
+                reasoning: { type: "string" },
               },
+              required: ["mood", "confidence"],
             },
           },
-        ],
-        tool_choice: { type: "function", function: { name: "emit_mood" } },
+        },
+      ],
+      tool_choice: { type: "function", function: { name: "emit_mood" } },
     });
 
     if (!res.ok) {
@@ -2420,6 +2508,7 @@ const embedSchema = z.object({
 });
 
 export const embedTexts = createServerFn({ method: "POST" })
+  .middleware([requireUserOrLocal])
   .inputValidator((d) => embedSchema.parse(d))
   .handler(async ({ data }) => {
     // Embeddings power Tier-3 semantic memory retrieval — a nice-to-have,
@@ -2446,8 +2535,22 @@ export const embedTexts = createServerFn({ method: "POST" })
           }),
         },
       );
-      if (!res.ok) throw new Error(`Embed failed: ${res.status} ${await res.text()}`);
+      if (!res.ok) {
+        logUsage({
+          provider: "gemini",
+          model: "gemini-embedding-001",
+          ok: false,
+          error: `HTTP ${res.status}`,
+        });
+        throw new Error(`Embed failed: ${res.status} ${await res.text()}`);
+      }
       const json = (await res.json()) as { data: Array<{ embedding: number[] }> };
+      logUsage({
+        provider: "gemini",
+        model: "gemini-embedding-001",
+        characters: data.texts.reduce((n, t) => n + t.length, 0),
+        ok: true,
+      });
       return { embeddings: json.data.map((d) => d.embedding), model: "gemini-embedding-001" };
     }
 
@@ -2458,8 +2561,26 @@ export const embedTexts = createServerFn({ method: "POST" })
         headers: { Authorization: `Bearer ${openaiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({ model: "text-embedding-3-small", input: data.texts }),
       });
-      if (!res.ok) throw new Error(`Embed failed: ${res.status} ${await res.text()}`);
-      const json = (await res.json()) as { data: Array<{ embedding: number[] }> };
+      if (!res.ok) {
+        logUsage({
+          provider: "openai",
+          model: "text-embedding-3-small",
+          ok: false,
+          error: `HTTP ${res.status}`,
+        });
+        throw new Error(`Embed failed: ${res.status} ${await res.text()}`);
+      }
+      const json = (await res.json()) as {
+        data: Array<{ embedding: number[] }>;
+        usage?: { prompt_tokens?: number };
+      };
+      logUsage({
+        provider: "openai",
+        model: "text-embedding-3-small",
+        inputTokens: json.usage?.prompt_tokens,
+        estCostUsd: estimateLlmCostUsd("text-embedding-3-small", json.usage?.prompt_tokens, 0),
+        ok: true,
+      });
       return { embeddings: json.data.map((d) => d.embedding), model: "text-embedding-3-small" };
     }
 

@@ -1,5 +1,16 @@
 import { useEffect, useRef, useState, useMemo } from "react";
-import { Check, X, HelpCircle, Mic2, Pencil, GitMerge, UserPlus, Brain, UserCheck } from "lucide-react";
+import {
+  Check,
+  X,
+  HelpCircle,
+  Mic2,
+  Pencil,
+  GitMerge,
+  UserPlus,
+  Brain,
+  UserCheck,
+  ArrowDown,
+} from "lucide-react";
 import type { Person, TranscriptSegment } from "@/lib/db";
 
 export type SuggestedName = {
@@ -61,13 +72,25 @@ export function SpeakerPanel({
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef<boolean>(true);
   const [reassigningSegId, setReassigningSegId] = useState<string | null>(null);
+  // True while the user has scrolled up — shows the "jump to latest" button.
+  const [scrolledUp, setScrolledUp] = useState(false);
 
   // Track whether the user is at the bottom so manual scroll-up isn't stolen.
   function onTranscriptScroll() {
     const el = transcriptRef.current;
     if (!el) return;
     const fromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stickToBottomRef.current = fromBottom < 40;
+    const stick = fromBottom < 40;
+    stickToBottomRef.current = stick;
+    setScrolledUp((cur) => (cur === !stick ? cur : !stick));
+  }
+
+  function jumpToLatest() {
+    const el = transcriptRef.current;
+    if (!el) return;
+    stickToBottomRef.current = true;
+    setScrolledUp(false);
+    el.scrollTop = el.scrollHeight;
   }
 
   // Auto-scroll on any transcript update — new segments, partial text growing,
@@ -90,6 +113,7 @@ export function SpeakerPanel({
     // even if the user had scrolled up in the previous one.
     if (segments.length === 0) {
       stickToBottomRef.current = true;
+      setScrolledUp(false);
       return;
     }
     // Dismiss reassign popover when new transcript arrives, so it doesn't
@@ -155,29 +179,38 @@ export function SpeakerPanel({
   return (
     <aside className="flex h-full min-h-0 w-full flex-col gap-2">
       {/* Live transcript */}
-      <div className="flex min-h-0 flex-[3] flex-col rounded-2xl border border-border bg-card/40">
+      <div className="relative flex min-h-0 flex-[3] flex-col rounded-2xl border border-border bg-card/40">
         <div className="border-b border-border px-3 py-1.5">
           <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
             Live transcript
           </h2>
         </div>
+        {/* Jump back to the newest lines after scrolling up */}
+        {scrolledUp && (
+          <button
+            onClick={jumpToLatest}
+            className="absolute bottom-2 left-1/2 z-10 flex min-h-10 -translate-x-1/2 items-center gap-1.5 rounded-full border border-border bg-card px-4 py-2 text-xs font-medium shadow-md transition hover:bg-secondary active:scale-95"
+          >
+            <ArrowDown className="size-3.5" /> Latest
+          </button>
+        )}
         <div
           ref={transcriptRef}
           onScroll={onTranscriptScroll}
-          className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2 text-sm"
+          className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2 text-[15px]"
         >
           {tail.length === 0 && !partial && (
-            <p className="italic text-muted-foreground">Listening…</p>
+            <p className="text-sm italic leading-relaxed text-muted-foreground">
+              The conversation will appear here as people speak.
+            </p>
           )}
           {tail.map((s) => {
             const isReassigning = reassigningSegId === s.id;
             return (
               <div key={s.id}>
                 <button
-                  onClick={() =>
-                    setReassigningSegId(isReassigning ? null : s.id)
-                  }
-                  className={`w-full rounded px-1 py-0.5 text-left leading-snug transition-colors hover:bg-secondary/50 active:bg-secondary/80 ${isReassigning ? "bg-secondary/60 ring-1 ring-primary/30" : ""}`}
+                  onClick={() => setReassigningSegId(isReassigning ? null : s.id)}
+                  className={`w-full rounded-md px-1.5 py-1 text-left leading-relaxed transition-colors hover:bg-secondary/50 active:bg-secondary/80 ${isReassigning ? "bg-secondary/60 ring-1 ring-primary/30" : ""}`}
                   title="Tap to reassign who said this"
                 >
                   <span className="mr-2 text-xs font-medium text-muted-foreground">
@@ -198,7 +231,7 @@ export function SpeakerPanel({
                           onReassignSegment(s.id, p.id);
                           setReassigningSegId(null);
                         }}
-                        className="rounded-full border border-primary/40 bg-primary/10 px-2.5 py-0.5 text-[11px] font-medium hover:bg-primary/25 active:bg-primary/40"
+                        className="min-h-9 rounded-full border border-primary/40 bg-primary/10 px-3 py-1.5 text-xs font-medium transition hover:bg-primary/25 active:scale-95 active:bg-primary/40"
                       >
                         {p.name}
                       </button>
@@ -214,9 +247,7 @@ export function SpeakerPanel({
             );
           })}
           {partial && (
-            <div className="italic leading-snug text-muted-foreground">
-              {partial}
-            </div>
+            <div className="px-1.5 italic leading-relaxed text-muted-foreground">{partial}</div>
           )}
         </div>
       </div>
@@ -231,25 +262,28 @@ export function SpeakerPanel({
             <button
               onClick={onForceNew}
               title="Next utterance will start a new speaker cluster"
-              className="flex items-center gap-1 rounded-md border border-border bg-secondary/40 px-2 py-1 text-xs text-foreground hover:bg-secondary"
+              className="flex min-h-9 items-center gap-1 rounded-md border border-border bg-secondary/40 px-2.5 py-1.5 text-xs text-foreground transition hover:bg-secondary active:scale-95 active:bg-secondary"
             >
-              <UserPlus className="size-3" /> New
+              <UserPlus className="size-3.5" /> New
             </button>
             <button
               onClick={() => onAskName()}
               title="Ask the room to introduce themselves"
-              className="flex items-center gap-1 rounded-md border border-border bg-secondary/40 px-2 py-1 text-xs text-foreground hover:bg-secondary"
+              className="flex min-h-9 items-center gap-1 rounded-md border border-border bg-secondary/40 px-2.5 py-1.5 text-xs text-foreground transition hover:bg-secondary active:scale-95 active:bg-secondary"
             >
-              <HelpCircle className="size-3" /> Ask
+              <HelpCircle className="size-3.5" /> Ask
             </button>
           </div>
         </div>
         <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
-          {participantCount != null && participantCount > 0 && clusters.length > participantCount && (
-            <div className="rounded-lg border border-[var(--accent)]/50 bg-[var(--accent)]/15 px-2 py-1.5 text-xs text-foreground">
-              You declared {participantCount} {participantCount === 1 ? "person" : "people"} — confirm who's who to improve accuracy.
-            </div>
-          )}
+          {participantCount != null &&
+            participantCount > 0 &&
+            clusters.length > participantCount && (
+              <div className="rounded-lg border border-[var(--accent)]/50 bg-[var(--accent)]/15 px-2 py-1.5 text-xs text-foreground">
+                You declared {participantCount} {participantCount === 1 ? "person" : "people"} —
+                confirm who's who to improve accuracy.
+              </div>
+            )}
           {/* Participants declared for this conversation who haven't spoken yet */}
           {(participantIds ?? [])
             .filter((pid) => {
@@ -334,9 +368,7 @@ function ClusterCard({
     .filter((pid) => {
       const taken = allClusters.some(
         (c) =>
-          c.label !== cluster.label &&
-          c.status.kind === "confirmed" &&
-          c.status.personId === pid,
+          c.label !== cluster.label && c.status.kind === "confirmed" && c.status.personId === pid,
       );
       return !taken;
     })
@@ -371,7 +403,7 @@ function ClusterCard({
       <div className="mt-1.5 flex items-center gap-1">
         <GitMerge className="size-3 shrink-0 text-muted-foreground" />
         <select
-          className="min-w-0 flex-1 rounded border border-input bg-background px-1 py-0.5 text-[11px]"
+          className="min-h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-1.5 py-1 text-xs"
           defaultValue=""
           onChange={(e) => {
             const target = e.target.value;
@@ -387,28 +419,29 @@ function ClusterCard({
           {mergeTargets.map((t) => {
             const confirmedPerson =
               t.status.kind === "confirmed"
-                ? people.find((p) => p.id === (t.status as { kind: "confirmed"; personId: string }).personId)
+                ? people.find(
+                    (p) => p.id === (t.status as { kind: "confirmed"; personId: string }).personId,
+                  )
                 : null;
             return (
               <option key={t.label} value={t.label}>
-                {confirmedPerson ? `${confirmedPerson.name} (${t.label})` : t.label} ·{" "}
-                {t.count}
+                {confirmedPerson ? `${confirmedPerson.name} (${t.label})` : t.label} · {t.count}
               </option>
             );
           })}
         </select>
         <button
           onClick={() => setShowMerge(false)}
-          className="rounded p-0.5 hover:bg-secondary"
+          className="flex min-h-9 min-w-9 items-center justify-center rounded-md p-1.5 transition hover:bg-secondary active:bg-secondary"
           aria-label="Cancel merge"
         >
-          <X className="size-3" />
+          <X className="size-3.5" />
         </button>
       </div>
     ) : (
       <button
         onClick={() => setShowMerge(true)}
-        className="mt-1 flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground"
+        className="mt-1 flex min-h-8 items-center gap-1 rounded-md text-xs text-muted-foreground transition hover:text-foreground active:text-foreground"
         title="Merge this cluster into another"
       >
         <GitMerge className="size-3" /> Merge into…
@@ -420,16 +453,16 @@ function ClusterCard({
     const status = cluster.status;
     const person = people.find((p) => p.id === status.personId);
     return (
-      <div className="rounded-xl border border-[var(--sage)]/50 bg-[var(--sage)]/15 px-2 py-1.5 text-sm">
+      <div className="rounded-xl border-2 border-[var(--sage)]/60 bg-[var(--sage)]/15 px-2 py-1.5 text-sm">
         <div className="flex items-center gap-1.5">
-          <Check className="size-4 text-[var(--sage)]" />
+          <Check className="size-4 shrink-0 text-[var(--sage)]" />
           <span className="font-medium">{person?.name ?? cluster.label}</span>
           <span className="ml-auto text-[10px] text-muted-foreground">
             {cluster.label} · {cluster.count}
           </span>
           <button
             onClick={() => setEditing(true)}
-            className="rounded p-0.5 hover:bg-[var(--sage)]/25"
+            className="flex min-h-9 min-w-9 items-center justify-center rounded-md p-1.5 transition hover:bg-[var(--sage)]/25 active:bg-[var(--sage)]/35"
             aria-label="Edit"
             title="Reassign or clear"
           >
@@ -451,14 +484,14 @@ function ClusterCard({
           <span className="font-medium">Edit {cluster.label}</span>
           <button
             onClick={() => setEditing(false)}
-            className="ml-auto rounded p-0.5 hover:bg-secondary"
+            className="ml-auto flex min-h-9 min-w-9 items-center justify-center rounded-md p-1.5 transition hover:bg-secondary active:bg-secondary"
             aria-label="Cancel"
           >
             <X className="size-3.5" />
           </button>
         </div>
         <select
-          className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs"
+          className="min-h-9 w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs"
           defaultValue=""
           onChange={(e) => {
             const v = e.target.value;
@@ -488,7 +521,7 @@ function ClusterCard({
               }
             }}
             placeholder="Or new name…"
-            className="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-xs"
+            className="min-h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1.5 text-xs"
           />
           <button
             onClick={() => {
@@ -498,7 +531,7 @@ function ClusterCard({
               }
             }}
             disabled={!name.trim()}
-            className="rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+            className="min-h-9 rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground transition hover:bg-primary/90 active:scale-[0.97] disabled:opacity-50"
           >
             Save
           </button>
@@ -508,7 +541,7 @@ function ClusterCard({
             onClearConfirmed(cluster.label);
             setEditing(false);
           }}
-          className="w-full rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive hover:bg-destructive/20"
+          className="min-h-9 w-full rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive transition hover:bg-destructive/20 active:bg-destructive/25"
         >
           This isn't them — clear
         </button>
@@ -524,7 +557,7 @@ function ClusterCard({
     const confidenceLabel =
       status.sim >= 0.9 ? "Sounds like" : status.sim >= 0.83 ? "Probably" : "Maybe";
     return (
-      <div className="rounded-xl border border-[var(--accent)]/50 bg-[var(--accent)]/15 p-2 text-sm">
+      <div className="rounded-xl border-2 border-dashed border-[var(--accent)]/60 bg-[var(--accent)]/15 p-2 text-sm">
         <div className="flex items-center gap-1.5">
           <Mic2 className="size-4 text-[var(--ink-soft)]" />
           <span className="font-medium">{cluster.label}</span>
@@ -533,34 +566,33 @@ function ClusterCard({
           </span>
         </div>
         <p className="mt-1 text-xs">
-          {confidenceLabel}{" "}
-          <span className="font-semibold">{person?.name ?? "?"}</span>
+          {confidenceLabel} <span className="font-semibold">{person?.name ?? "?"}</span>
         </p>
         <div className="mt-1.5 flex gap-1.5">
           <button
             onClick={() => onConfirmKnown(cluster.label, status.personId)}
-            className="flex-1 rounded-md bg-primary px-2 py-1 text-xs font-semibold text-primary-foreground hover:bg-primary/90"
+            className="min-h-9 flex-1 rounded-md bg-primary px-2 py-1.5 text-xs font-semibold text-primary-foreground transition hover:bg-primary/90 active:scale-[0.97]"
           >
             Confirm
           </button>
           <button
             onClick={() => onRejectSuggestion(cluster.label)}
-            className="rounded-md border border-border bg-secondary/60 px-2 py-1 text-xs hover:bg-secondary"
+            className="flex min-h-9 min-w-9 items-center justify-center rounded-md border border-border bg-secondary/60 px-2 py-1.5 text-xs transition hover:bg-secondary active:bg-secondary"
             title="Not them"
             aria-label="Not them"
           >
-            <X className="size-3" />
+            <X className="size-3.5" />
           </button>
         </div>
         {suggestions.length > 0 && (
-          <div className="mt-1.5 flex flex-wrap gap-1">
+          <div className="mt-1.5 flex flex-wrap items-center gap-1">
             <span className="text-[10px] text-muted-foreground">Or:</span>
             {suggestions.map((s) => (
               <button
                 key={s.name + s.source}
                 onClick={() => onConfirmNew(cluster.label, s.name)}
                 title={sourceLabel(s.source)}
-                className="rounded-full border border-[var(--accent)]/50 bg-background px-2 py-0.5 text-[11px] hover:bg-[var(--accent)]/20"
+                className="min-h-8 rounded-full border border-[var(--accent)]/50 bg-background px-2.5 py-1 text-xs transition hover:bg-[var(--accent)]/20 active:bg-[var(--accent)]/30"
               >
                 <SuggestionIcon source={s.source} />
                 {s.name}
@@ -578,21 +610,17 @@ function ClusterCard({
   const suggestions = cluster.status.suggestions ?? [];
   const excludedIds = new Set(cluster.status.excludedPersonIds ?? []);
   // Filter out participants the user has already explicitly rejected for this cluster
-  const quickIdentifyOptions = availableParticipants.filter(
-    (p) => !excludedIds.has(p.id),
-  );
+  const quickIdentifyOptions = availableParticipants.filter((p) => !excludedIds.has(p.id));
   return (
-    <div className="rounded-xl border border-border bg-secondary/40 p-2 text-sm">
+    <div className="rounded-xl border-2 border-dashed border-border bg-secondary/40 p-2 text-sm">
       <div className="flex items-center gap-1.5">
-        <Mic2 className="size-4 text-muted-foreground" />
+        <Mic2 className="size-4 shrink-0 text-muted-foreground" />
         <span className="font-medium">{cluster.label}</span>
-        <span className="ml-auto text-[10px] text-muted-foreground">
-          {cluster.count}
-        </span>
+        <span className="ml-auto text-[10px] text-muted-foreground">{cluster.count}</span>
         <button
           onClick={() => onAskName(cluster.label)}
           title="Ask this speaker to introduce themselves"
-          className="rounded p-0.5 text-muted-foreground hover:bg-secondary"
+          className="flex min-h-9 min-w-9 items-center justify-center rounded-md p-1.5 text-muted-foreground transition hover:bg-secondary active:bg-secondary"
           aria-label="Ask name"
         >
           <HelpCircle className="size-3.5" />
@@ -602,15 +630,13 @@ function ClusterCard({
           confirmed elsewhere. Tap the matching name to assign this cluster. */}
       {quickIdentifyOptions.length > 0 && (
         <div className="mt-1.5">
-          <p className="text-[10px] text-muted-foreground mb-1">
-            Who's this?
-          </p>
+          <p className="text-[10px] text-muted-foreground mb-1">Who's this?</p>
           <div className="flex flex-wrap gap-1">
             {quickIdentifyOptions.map((p) => (
               <button
                 key={p.id}
                 onClick={() => onConfirmKnown(cluster.label, p.id)}
-                className="rounded-full border-2 border-primary/50 bg-primary/15 px-2.5 py-1 text-xs font-semibold text-foreground hover:bg-primary/25"
+                className="min-h-9 rounded-full border-2 border-primary/50 bg-primary/15 px-3 py-1.5 text-xs font-semibold text-foreground transition hover:bg-primary/25 active:scale-95 active:bg-primary/35"
               >
                 {p.name}
               </button>
@@ -625,7 +651,7 @@ function ClusterCard({
               key={s.name + s.source}
               onClick={() => onConfirmNew(cluster.label, s.name)}
               title={sourceLabel(s.source)}
-              className="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[11px] font-medium hover:bg-primary/20"
+              className="min-h-8 rounded-full border border-primary/40 bg-primary/10 px-2.5 py-1 text-xs font-medium transition hover:bg-primary/20 active:bg-primary/30"
             >
               <SuggestionIcon source={s.source} />
               {s.name} ✓

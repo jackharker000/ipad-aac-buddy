@@ -96,10 +96,7 @@ export function VoiceSampleRecorder({ personId }: { personId: string }) {
           sample_count: 1,
           updated_at: Date.now(),
         });
-        await db.voiceprint_contributions
-          .where("person_id")
-          .equals(personId)
-          .delete();
+        await db.voiceprint_contributions.where("person_id").equals(personId).delete();
       } else {
         await recordVoiceprint(personId, mfcc);
       }
@@ -123,10 +120,7 @@ export function VoiceSampleRecorder({ personId }: { personId: string }) {
   const remove = async () => {
     if (!confirm("Delete this person's voice sample?")) return;
     await deleteVoiceprint(personId);
-    await db.voiceprint_contributions
-      .where("person_id")
-      .equals(personId)
-      .delete();
+    await db.voiceprint_contributions.where("person_id").equals(personId).delete();
     await refresh();
     toast.success("Voiceprint deleted");
   };
@@ -137,9 +131,7 @@ export function VoiceSampleRecorder({ personId }: { personId: string }) {
     <div className="space-y-2">
       <p className="text-sm text-muted-foreground">
         {print
-          ? `Voice learned · ${print.sample_count} sample${
-              print.sample_count === 1 ? "" : "s"
-            }`
+          ? `Voice learned · ${print.sample_count} sample${print.sample_count === 1 ? "" : "s"}`
           : "No voiceprint yet"}
       </p>
 
@@ -149,29 +141,17 @@ export function VoiceSampleRecorder({ personId }: { personId: string }) {
             <Square className="size-4" />
             Stop ({remaining.toFixed(1)}s)
           </Button>
-          <span className="text-xs text-muted-foreground">
-            Speak normally…
-          </span>
+          <span className="text-xs text-muted-foreground">Speak normally…</span>
         </div>
       ) : (
         <div className="flex flex-wrap gap-2">
-          <Button
-            onClick={() => start(false)}
-            disabled={busy}
-            size="sm"
-            variant="secondary"
-          >
+          <Button onClick={() => start(false)} disabled={busy} size="sm" variant="secondary">
             <Mic className="size-4" />
             {print ? "Add another sample" : "Record voice sample"}
           </Button>
           {print && (
             <>
-              <Button
-                onClick={() => start(true)}
-                disabled={busy}
-                size="sm"
-                variant="outline"
-              >
+              <Button onClick={() => start(true)} disabled={busy} size="sm" variant="outline">
                 Replace
               </Button>
               <Button
@@ -190,8 +170,8 @@ export function VoiceSampleRecorder({ personId }: { personId: string }) {
       )}
       {!recording && (
         <p className="text-xs text-muted-foreground">
-          Tap record and have the person speak normally for {MIN_SECS}–
-          {MAX_SECS} seconds. The recording stays on this device.
+          Tap record and have the person speak normally for {MIN_SECS}–{MAX_SECS} seconds. The
+          recording stays on this device.
         </p>
       )}
       {/* Auto-learned contributions */}
@@ -262,8 +242,7 @@ function VoiceprintContributions({
         Voice contributions ({items.length})
       </p>
       <p className="text-xs text-muted-foreground">
-        Remove any entry that isn't actually them — the voice profile will be
-        rebuilt from the rest.
+        Remove any entry that isn't actually them — the voice profile will be rebuilt from the rest.
       </p>
       <ul className="space-y-1">
         {items.slice(0, 20).map((c) => (
@@ -282,13 +261,9 @@ function VoiceprintContributions({
                 >
                   {c.source === "manual" ? "manual" : "auto"}
                 </span>
-                <span className="text-muted-foreground">
-                  {new Date(c.ts).toLocaleString()}
-                </span>
+                <span className="text-muted-foreground">{new Date(c.ts).toLocaleString()}</span>
               </div>
-              {c.preview_text && (
-                <p className="mt-0.5 truncate italic">"{c.preview_text}"</p>
-              )}
+              {c.preview_text && <p className="mt-0.5 truncate italic">"{c.preview_text}"</p>}
             </div>
             <Button
               onClick={() => remove(c.id)}

@@ -10,12 +10,7 @@ type ParleyLogoProps = {
  */
 export function ParleyLogo({ className, title = "Parley" }: ParleyLogoProps) {
   return (
-    <svg
-      viewBox="0 0 40 40"
-      role="img"
-      aria-label={title}
-      className={className}
-    >
+    <svg viewBox="0 0 40 40" role="img" aria-label={title} className={className}>
       <title>{title}</title>
       {/* Slate speech-bubble tile (with a short tail at the bottom-left) */}
       <path

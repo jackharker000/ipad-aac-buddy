@@ -50,19 +50,10 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Calendar } from "@/components/ui/calendar";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
   SelectContent,
@@ -256,9 +247,7 @@ function SystemTab() {
     // Driven off `db.tables` so new tables (voiceprints, choice memories,
     // profile proposals, events, …) are always included — the old hand-kept
     // list silently left more than half the data behind.
-    await Promise.all(
-      db.tables.filter((t) => t.name !== "settings").map((t) => t.clear()),
-    );
+    await Promise.all(db.tables.filter((t) => t.name !== "settings").map((t) => t.clear()));
     toast.success("All data cleared");
   }
 
@@ -279,11 +268,14 @@ function SystemTab() {
       <Accordion type="multiple" defaultValue={[]} className="space-y-2">
         <AccordionItem value="voice" className="rounded-xl border border-border bg-card px-5">
           <AccordionTrigger className="text-base font-semibold hover:no-underline">
-            <span className="flex items-center gap-2"><Volume2 className="size-4" /> Voice</span>
+            <span className="flex items-center gap-2">
+              <Volume2 className="size-4" /> Voice
+            </span>
           </AccordionTrigger>
           <AccordionContent className="pb-5">
             <p className="mb-4 text-sm text-muted-foreground">
-              Choose how the app speaks suggestions out loud. Selection is remembered across sessions.
+              Choose how the app speaks suggestions out loud. Selection is remembered across
+              sessions.
             </p>
             <div className="flex items-center gap-3">
               <Select
@@ -325,7 +317,9 @@ function SystemTab() {
 
         <AccordionItem value="ai" className="rounded-xl border border-border bg-card px-5">
           <AccordionTrigger className="text-base font-semibold hover:no-underline">
-            <span className="flex items-center gap-2"><SlidersHorizontal className="size-4" /> AI models</span>
+            <span className="flex items-center gap-2">
+              <SlidersHorizontal className="size-4" /> AI models
+            </span>
           </AccordionTrigger>
           <AccordionContent className="pb-5">
             {(() => {
@@ -338,17 +332,14 @@ function SystemTab() {
               )
                 ? (settings.fast_model ?? settings.suggestion_model)!
                 : provider.defaultFast;
-              const smartValue = provider.models.some(
-                (m) => m.id === settings.smart_model,
-              )
+              const smartValue = provider.models.some((m) => m.id === settings.smart_model)
                 ? settings.smart_model!
                 : provider.defaultSmart;
               return (
                 <>
                   <p className="mb-3 text-sm text-muted-foreground">
-                    Choose a provider, then a model for each tier.{" "}
-                    <strong>Fast</strong> runs live for every suggestion —
-                    speed matters. <strong>Smart</strong> runs at the end of
+                    Choose a provider, then a model for each tier. <strong>Fast</strong> runs live
+                    for every suggestion — speed matters. <strong>Smart</strong> runs at the end of
                     conversations and for drafts — quality matters.
                   </p>
 
@@ -367,9 +358,7 @@ function SystemTab() {
                               suggestion_model: p.defaultFast,
                               expand_model: p.defaultFast,
                               smart_model: p.defaultSmart,
-                            }).then(() =>
-                              toast.success(`Switched to ${p.label}`),
-                            )
+                            }).then(() => toast.success(`Switched to ${p.label}`))
                           }
                           aria-pressed={selected}
                           className={`min-h-12 rounded-xl border-2 px-3 py-2.5 text-base font-medium transition-colors ${
@@ -389,8 +378,8 @@ function SystemTab() {
                   <div className="mt-5">
                     <div className="text-sm font-medium">Live suggestions (fast)</div>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Powers suggestion chips, predictions and expand-and-speak.
-                      James will feel every extra second.
+                      Powers suggestion chips, predictions and expand-and-speak. James will feel
+                      every extra second.
                     </p>
                     <Select
                       value={fastValue}
@@ -408,8 +397,7 @@ function SystemTab() {
                       <SelectContent>
                         {provider.models.map((m) => (
                           <SelectItem key={`fast-${m.id}`} value={m.id}>
-                            {m.label} —{" "}
-                            <span className="text-muted-foreground">{m.hint}</span>
+                            {m.label} — <span className="text-muted-foreground">{m.hint}</span>
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -418,12 +406,10 @@ function SystemTab() {
 
                   {/* Smart model */}
                   <div className="mt-5">
-                    <div className="text-sm font-medium">
-                      Memory, summary &amp; drafts (smart)
-                    </div>
+                    <div className="text-sm font-medium">Memory, summary &amp; drafts (smart)</div>
                     <p className="mt-1 text-xs text-muted-foreground">
-                      Summary, memory extraction, event prep, reply drafts. The
-                      extra second is invisible to James.
+                      Summary, memory extraction, event prep, reply drafts. The extra second is
+                      invisible to James.
                     </p>
                     <Select
                       value={smartValue}
@@ -439,8 +425,7 @@ function SystemTab() {
                       <SelectContent>
                         {provider.models.map((m) => (
                           <SelectItem key={`smart-${m.id}`} value={m.id}>
-                            {m.label} —{" "}
-                            <span className="text-muted-foreground">{m.hint}</span>
+                            {m.label} — <span className="text-muted-foreground">{m.hint}</span>
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -448,9 +433,8 @@ function SystemTab() {
                   </div>
 
                   <p className="mt-4 rounded-lg bg-secondary/40 px-3 py-2 text-xs text-muted-foreground">
-                    Whichever provider you pick, Parley automatically falls back
-                    to the others if it's rate-limited or unavailable — so
-                    suggestions keep working.
+                    Whichever provider you pick, Parley automatically falls back to the others if
+                    it's rate-limited or unavailable — so suggestions keep working.
                   </p>
 
                   {/* Long-press feedback toggle */}
@@ -458,9 +442,9 @@ function SystemTab() {
                     <div className="pr-4">
                       <Label className="text-base">Hold a suggestion for feedback</Label>
                       <p className="text-sm text-muted-foreground">
-                        Press and hold a suggestion for 5 seconds to rate it
-                        (sounds like me / too formal / not me…). Teaches the AI
-                        your style. Handy while tuning; turn off for daily use.
+                        Press and hold a suggestion for 5 seconds to rate it (sounds like me / too
+                        formal / not me…). Teaches the AI your style. Handy while tuning; turn off
+                        for daily use.
                       </p>
                     </div>
                     <Switch
@@ -480,11 +464,14 @@ function SystemTab() {
 
         <AccordionItem value="display" className="rounded-xl border border-border bg-card px-5">
           <AccordionTrigger className="text-base font-semibold hover:no-underline">
-            <span className="flex items-center gap-2"><MapPin className="size-4" /> Display size</span>
+            <span className="flex items-center gap-2">
+              <MapPin className="size-4" /> Display size
+            </span>
           </AccordionTrigger>
           <AccordionContent className="pb-5">
             <p className="mb-4 text-sm text-muted-foreground">
-              Pick the iPad you mostly use. The home screen scales so all suggestions, transcript and controls fit without scrolling.
+              Pick the iPad you mostly use. The home screen scales so all suggestions, transcript
+              and controls fit without scrolling.
             </p>
             <Select
               value={settings.ipad_model ?? "auto"}
@@ -511,7 +498,9 @@ function SystemTab() {
 
         <AccordionItem value="location" className="rounded-xl border border-border bg-card px-5">
           <AccordionTrigger className="text-base font-semibold hover:no-underline">
-            <span className="flex items-center gap-2"><Crosshair className="size-4" /> Location</span>
+            <span className="flex items-center gap-2">
+              <Crosshair className="size-4" /> Location
+            </span>
           </AccordionTrigger>
           <AccordionContent className="pb-5">
             <div className="flex items-center justify-between">
@@ -535,11 +524,15 @@ function SystemTab() {
 
         <AccordionItem value="storage" className="rounded-xl border border-border bg-card px-5">
           <AccordionTrigger className="text-base font-semibold hover:no-underline">
-            <span className="flex items-center gap-2"><FileText className="size-4" /> Storage &amp; privacy</span>
+            <span className="flex items-center gap-2">
+              <FileText className="size-4" /> Storage &amp; privacy
+            </span>
           </AccordionTrigger>
           <AccordionContent className="pb-5">
             <p className="mb-5 text-sm text-muted-foreground">
-              Your data lives on this iPad and is automatically backed up to your Lovable Cloud account whenever it changes. Sign in with the same email on another device to restore everything.
+              Your data lives on this iPad and is automatically backed up to your Lovable Cloud
+              account whenever it changes. Sign in with the same email on another device to restore
+              everything.
             </p>
             <AlertDialog>
               <AlertDialogTrigger asChild>
@@ -551,7 +544,8 @@ function SystemTab() {
                 <AlertDialogHeader>
                   <AlertDialogTitle>Clear all local data?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    This will permanently delete all conversations, memories, people, places, events, and profile data stored on this device. This cannot be undone.
+                    This will permanently delete all conversations, memories, people, places,
+                    events, and profile data stored on this device. This cannot be undone.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
@@ -646,11 +640,7 @@ type Preview = {
   mime: string;
 };
 
-function VoiceDesignerPanel({
-  onSaved,
-}: {
-  onSaved: (v: Voice) => void;
-}) {
+function VoiceDesignerPanel({ onSaved }: { onSaved: (v: Voice) => void }) {
   const designFn = useServerFn(designVoicePreviews);
   const saveFn = useServerFn(saveDesignedVoice);
   const [open, setOpen] = useState(false);
@@ -724,15 +714,11 @@ function VoiceDesignerPanel({
         <div>
           <h3 className="text-sm font-semibold">Design a custom voice</h3>
           <p className="text-xs text-muted-foreground">
-            Describe the voice you want — ElevenLabs will generate 3 candidates
-            for you to choose from.
+            Describe the voice you want — ElevenLabs will generate 3 candidates for you to choose
+            from.
           </p>
         </div>
-        <Button
-          size="sm"
-          variant={open ? "ghost" : "secondary"}
-          onClick={() => setOpen((o) => !o)}
-        >
+        <Button size="sm" variant={open ? "ghost" : "secondary"} onClick={() => setOpen((o) => !o)}>
           {open ? "Close" : "Open"}
         </Button>
       </div>
@@ -809,7 +795,9 @@ function CharCount({ value, max }: { value: string | undefined; max: number }) {
   const len = (value ?? "").length;
   const pct = len / max;
   return (
-    <span className={`text-xs tabular-nums ${pct >= 1 ? "text-destructive" : pct >= 0.8 ? "text-amber-500" : "text-muted-foreground"}`}>
+    <span
+      className={`text-xs tabular-nums ${pct >= 1 ? "text-destructive" : pct >= 0.8 ? "text-amber-500" : "text-muted-foreground"}`}
+    >
       {len} / {max}
     </span>
   );
@@ -825,9 +813,7 @@ function JamesProfileCard() {
   }, [profile, draft]);
 
   if (!draft) {
-    return (
-      <Card className="p-6 text-sm text-muted-foreground">Loading profile…</Card>
-    );
+    return <Card className="p-6 text-sm text-muted-foreground">Loading profile…</Card>;
   }
 
   const set = <K extends keyof JamesProfile>(k: K, v: JamesProfile[K]) =>
@@ -851,27 +837,18 @@ function JamesProfileCard() {
         <h2 className="text-lg font-semibold">About James</h2>
       </div>
       <p className="mt-1 text-sm text-muted-foreground">
-        The richer this is, the more the AI suggestions will sound like him.
-        Edit anytime — changes apply to the next conversation.
+        The richer this is, the more the AI suggestions will sound like him. Edit anytime — changes
+        apply to the next conversation.
       </p>
 
       <div className="mt-5 grid gap-4 md:grid-cols-2">
         <Field label="Display name">
-          <Input
-            value={draft.display_name}
-            onChange={(e) => set("display_name", e.target.value)}
-          />
+          <Input value={draft.display_name} onChange={(e) => set("display_name", e.target.value)} />
         </Field>
         <Field label="Age">
-          <Input
-            value={draft.age ?? ""}
-            onChange={(e) => set("age", e.target.value)}
-          />
+          <Input value={draft.age ?? ""} onChange={(e) => set("age", e.target.value)} />
         </Field>
-        <Field
-          label="Background"
-          hint="Family, career, where he grew up, important life details"
-        >
+        <Field label="Background" hint="Family, career, where he grew up, important life details">
           <Textarea
             rows={3}
             value={draft.background ?? ""}
@@ -879,10 +856,7 @@ function JamesProfileCard() {
           />
           <CharCount value={draft.background} max={500} />
         </Field>
-        <Field
-          label="Personality"
-          hint="e.g. warm, dry-witted, hates small talk, deeply curious"
-        >
+        <Field label="Personality" hint="e.g. warm, dry-witted, hates small talk, deeply curious">
           <Textarea
             rows={3}
             value={draft.personality ?? ""}
@@ -975,10 +949,7 @@ const TEXT_EXT_RE = /\.(txt|md|markdown|json|csv|tsv|log|yaml|yml|xml|html?|rtf)
 const MAX_DOC_CHARS = 60_000;
 
 function JamesDocumentsSection() {
-  const docs = useLiveQuery(
-    () => db.james_documents.orderBy("created_at").toArray(),
-    [],
-  );
+  const docs = useLiveQuery(() => db.james_documents.orderBy("created_at").toArray(), []);
   const [busy, setBusy] = useState(false);
 
   async function handleFiles(files: FileList | null) {
@@ -986,8 +957,7 @@ function JamesDocumentsSection() {
     setBusy(true);
     try {
       for (const file of Array.from(files)) {
-        const isTextLike =
-          TEXT_LIKE_RE.test(file.type) || TEXT_EXT_RE.test(file.name);
+        const isTextLike = TEXT_LIKE_RE.test(file.type) || TEXT_EXT_RE.test(file.name);
         if (!isTextLike) {
           toast.error(
             `${file.name}: unsupported file type. Paste text, or upload .txt / .md / .csv / .json.`,
@@ -1032,10 +1002,10 @@ function JamesDocumentsSection() {
         <h3 className="text-base font-semibold">Reference documents</h3>
       </div>
       <p className="mt-1 text-sm text-muted-foreground">
-        Attach background docs about James — life history, medical notes,
-        favourite stories, anything the AI should know. Their contents are
-        included with every suggestion. Plain-text files only (.txt, .md, .csv,
-        .json, .yaml, .xml, .html). Each file is capped at ~60k characters.
+        Attach background docs about James — life history, medical notes, favourite stories,
+        anything the AI should know. Their contents are included with every suggestion. Plain-text
+        files only (.txt, .md, .csv, .json, .yaml, .xml, .html). Each file is capped at ~60k
+        characters.
       </p>
 
       <div className="mt-3">
@@ -1121,10 +1091,7 @@ function Field({
 /* ------------------------------- People Tab ------------------------------- */
 
 function PeopleTab() {
-  const people = useLiveQuery(
-    () => db.people.orderBy("name").toArray(),
-    [],
-  );
+  const people = useLiveQuery(() => db.people.orderBy("name").toArray(), []);
   // Pending profile-update proposals (Tier 2.3) keyed by person_id, so the
   // sidebar can show a badge per person.
   const pendingCounts = useLiveQuery(async () => {
@@ -1143,9 +1110,7 @@ function PeopleTab() {
     if (!filter.trim()) return list;
     const q = filter.toLowerCase();
     return list.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        (p.relationship ?? "").toLowerCase().includes(q),
+      (p) => p.name.toLowerCase().includes(q) || (p.relationship ?? "").toLowerCase().includes(q),
     );
   }, [people, filter]);
 
@@ -1247,9 +1212,7 @@ function PeopleTab() {
                     )}
                   </div>
                   {p.relationship && (
-                    <div className="text-xs text-muted-foreground">
-                      {p.relationship}
-                    </div>
+                    <div className="text-xs text-muted-foreground">{p.relationship}</div>
                   )}
                 </div>
                 {pending > 0 && (
@@ -1332,9 +1295,7 @@ function PersonDetail({
             )}
           </h2>
           {person.relationship && (
-            <p className="mt-0.5 text-sm text-muted-foreground">
-              {person.relationship}
-            </p>
+            <p className="mt-0.5 text-sm text-muted-foreground">{person.relationship}</p>
           )}
         </div>
         <div className="flex gap-2">
@@ -1351,7 +1312,8 @@ function PersonDetail({
               <AlertDialogHeader>
                 <AlertDialogTitle>Remove {person.name}?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  This will delete {person.name} and all their saved memories, follow-ups, and voice print from this device.
+                  This will delete {person.name} and all their saved memories, follow-ups, and voice
+                  print from this device.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
@@ -1396,25 +1358,17 @@ function PersonDetail({
           label="Conversations"
           value={stats ? String(stats.conversationCount) : "—"}
           active={openPanel === "conversations"}
-          onClick={() =>
-            setOpenPanel((p) => (p === "conversations" ? null : "conversations"))
-          }
+          onClick={() => setOpenPanel((p) => (p === "conversations" ? null : "conversations"))}
         />
         <Stat
           label="Last seen"
-          value={
-            stats?.lastSeenAt
-              ? new Date(stats.lastSeenAt).toLocaleDateString()
-              : "—"
-          }
+          value={stats?.lastSeenAt ? new Date(stats.lastSeenAt).toLocaleDateString() : "—"}
         />
         <StatButton
           label="Memories"
           value={stats ? String(stats.recentMemories.length) : "—"}
           active={openPanel === "memories"}
-          onClick={() =>
-            setOpenPanel((p) => (p === "memories" ? null : "memories"))
-          }
+          onClick={() => setOpenPanel((p) => (p === "memories" ? null : "memories"))}
         />
       </div>
 
@@ -1447,10 +1401,7 @@ function PersonDetail({
         {person.interests?.length ? (
           <div className="flex flex-wrap gap-1.5">
             {person.interests.map((i) => (
-              <span
-                key={i}
-                className="rounded-full bg-secondary px-3 py-1 text-xs"
-              >
+              <span key={i} className="rounded-full bg-secondary px-3 py-1 text-xs">
                 {i}
               </span>
             ))}
@@ -1510,9 +1461,7 @@ function PersonDetail({
         title="Key facts (auto-learned)"
         empty="The app will collect facts after your next chats."
       >
-        {grouped && grouped.fact.length > 0 && (
-          <MemoryList items={grouped.fact} />
-        )}
+        {grouped && grouped.fact.length > 0 && <MemoryList items={grouped.fact} />}
       </Section>
       <Section title="Preferences">
         {grouped && grouped.preference.length > 0 ? (
@@ -1520,9 +1469,7 @@ function PersonDetail({
         ) : null}
       </Section>
       <Section title="Recent events / topics">
-        {grouped && grouped.event.length > 0 ? (
-          <MemoryList items={grouped.event} />
-        ) : null}
+        {grouped && grouped.event.length > 0 ? <MemoryList items={grouped.event} /> : null}
       </Section>
       <Section title="Open follow-ups">
         {stats?.followUps.length ? (
@@ -1534,12 +1481,8 @@ function PersonDetail({
         ) : null}
       </Section>
 
-      {openPanel === "conversations" && (
-        <PersonConversationsPanel personId={personId} />
-      )}
-      {openPanel === "memories" && (
-        <PersonMemoriesPanel personId={personId} />
-      )}
+      {openPanel === "conversations" && <PersonConversationsPanel personId={personId} />}
+      {openPanel === "memories" && <PersonMemoriesPanel personId={personId} />}
     </Card>
   );
 }
@@ -1547,9 +1490,7 @@ function PersonDetail({
 function Stat({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border border-border bg-secondary/30 p-3">
-      <div className="text-xs uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="mt-1 text-xl font-semibold">{value}</div>
     </div>
   );
@@ -1578,9 +1519,7 @@ function StatButton({
           : "border-border bg-secondary/30 hover:bg-secondary/60",
       )}
     >
-      <div className="text-xs uppercase tracking-wide text-muted-foreground">
-        {label}
-      </div>
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="mt-1 text-xl font-semibold">{value}</div>
       <div className="mt-1 text-[10px] uppercase tracking-wide text-muted-foreground">
         {active ? "Hide list" : "Show list"}
@@ -1593,13 +1532,9 @@ function PersonConversationsPanel({ personId }: { personId: string }) {
   const data = useLiveQuery(async () => {
     const all = await db.conversations.orderBy("started_at").reverse().toArray();
     const convs = all.filter((c) => c.person_ids?.includes(personId));
-    const placeIds = Array.from(
-      new Set(convs.map((c) => c.place_id).filter(Boolean) as string[]),
-    );
+    const placeIds = Array.from(new Set(convs.map((c) => c.place_id).filter(Boolean) as string[]));
     const places = await db.places.bulkGet(placeIds);
-    const placeMap = new Map(
-      places.filter(Boolean).map((p) => [p!.id, p!.name]),
-    );
+    const placeMap = new Map(places.filter(Boolean).map((p) => [p!.id, p!.name]));
     return convs.map((c) => ({
       ...c,
       placeName: c.place_id ? placeMap.get(c.place_id) : undefined,
@@ -1607,7 +1542,8 @@ function PersonConversationsPanel({ personId }: { personId: string }) {
   }, [personId]);
 
   async function deleteConversation(id: string) {
-    if (!confirm("Delete this conversation and all of its transcript, memories and follow-ups?")) return;
+    if (!confirm("Delete this conversation and all of its transcript, memories and follow-ups?"))
+      return;
     await db.transaction(
       "rw",
       [
@@ -1637,25 +1573,16 @@ function PersonConversationsPanel({ personId }: { personId: string }) {
       {!data ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : data.length === 0 ? (
-        <p className="text-sm italic text-muted-foreground">
-          No conversations yet.
-        </p>
+        <p className="text-sm italic text-muted-foreground">No conversations yet.</p>
       ) : (
         <ul className="space-y-2">
           {data.map((c) => (
-            <li
-              key={c.id}
-              className="rounded-lg border border-border bg-background p-3 text-sm"
-            >
+            <li key={c.id} className="rounded-lg border border-border bg-background p-3 text-sm">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0 flex-1">
-                  <div className="font-medium">
-                    {new Date(c.started_at).toLocaleString()}
-                  </div>
+                  <div className="font-medium">{new Date(c.started_at).toLocaleString()}</div>
                   {c.placeName && (
-                    <div className="text-xs text-muted-foreground">
-                      {c.placeName}
-                    </div>
+                    <div className="text-xs text-muted-foreground">{c.placeName}</div>
                   )}
                 </div>
                 <Button
@@ -1668,9 +1595,7 @@ function PersonConversationsPanel({ personId }: { personId: string }) {
                   <Trash2 className="size-4 text-destructive" />
                 </Button>
               </div>
-              {c.summary && (
-                <p className="mt-1 text-muted-foreground">{c.summary}</p>
-              )}
+              {c.summary && <p className="mt-1 text-muted-foreground">{c.summary}</p>}
             </li>
           ))}
         </ul>
@@ -1681,12 +1606,7 @@ function PersonConversationsPanel({ personId }: { personId: string }) {
 
 function PersonMemoriesPanel({ personId }: { personId: string }) {
   const memories = useLiveQuery(
-    () =>
-      db.memories
-        .where("person_id")
-        .equals(personId)
-        .reverse()
-        .sortBy("created_at"),
+    () => db.memories.where("person_id").equals(personId).reverse().sortBy("created_at"),
     [personId],
   );
   const visible = memories?.filter((m) => m.status !== "hidden") ?? [];
@@ -1762,23 +1682,20 @@ function PersonMemoriesPanel({ personId }: { personId: string }) {
           />
           <div className="flex items-center gap-2">
             <MemoryKindSelect value={newKind} onChange={setNewKind} />
-            <Button size="sm" onClick={addMem}>Save</Button>
+            <Button size="sm" onClick={addMem}>
+              Save
+            </Button>
           </div>
         </div>
       )}
       {!memories ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : visible.length === 0 ? (
-        <p className="text-sm italic text-muted-foreground">
-          No memories yet.
-        </p>
+        <p className="text-sm italic text-muted-foreground">No memories yet.</p>
       ) : (
         <ul className="space-y-2">
           {visible.map((m) => (
-            <li
-              key={m.id}
-              className="rounded-lg border border-border bg-background p-3 text-sm"
-            >
+            <li key={m.id} className="rounded-lg border border-border bg-background p-3 text-sm">
               {editingId === m.id ? (
                 <div className="space-y-2">
                   <Textarea
@@ -1788,12 +1705,10 @@ function PersonMemoriesPanel({ personId }: { personId: string }) {
                   />
                   <div className="flex items-center gap-2">
                     <MemoryKindSelect value={editKind} onChange={setEditKind} />
-                    <Button size="sm" onClick={() => saveEdit(m)}>Save</Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setEditingId(null)}
-                    >
+                    <Button size="sm" onClick={() => saveEdit(m)}>
+                      Save
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
                       Cancel
                     </Button>
                   </div>
@@ -1865,11 +1780,7 @@ function MemoryKindSelect({
 
 function PersonDocumentsSection({ personId }: { personId: string }) {
   const docs = useLiveQuery(
-    () =>
-      db.person_documents
-        .where("person_id")
-        .equals(personId)
-        .sortBy("created_at"),
+    () => db.person_documents.where("person_id").equals(personId).sortBy("created_at"),
     [personId],
   );
   const [busy, setBusy] = useState(false);
@@ -1879,8 +1790,7 @@ function PersonDocumentsSection({ personId }: { personId: string }) {
     setBusy(true);
     try {
       for (const file of Array.from(files)) {
-        const isTextLike =
-          TEXT_LIKE_RE.test(file.type) || TEXT_EXT_RE.test(file.name);
+        const isTextLike = TEXT_LIKE_RE.test(file.type) || TEXT_EXT_RE.test(file.name);
         if (!isTextLike) {
           toast.error(
             `${file.name}: unsupported. Use .txt / .md / .csv / .json / .yaml / .xml / .html.`,
@@ -1920,14 +1830,11 @@ function PersonDocumentsSection({ personId }: { personId: string }) {
   }
 
   return (
-    <Section
-      icon={<FileText className="size-4" />}
-      title="Background documents"
-    >
+    <Section icon={<FileText className="size-4" />} title="Background documents">
       <p className="mb-2 text-sm text-muted-foreground">
-        Attach docs about this person — life history, shared memories, medical
-        notes, anything the AI should know. Plain-text files (.txt, .md, .csv,
-        .json, .yaml, .xml, .html). Each capped at ~60k characters.
+        Attach docs about this person — life history, shared memories, medical notes, anything the
+        AI should know. Plain-text files (.txt, .md, .csv, .json, .yaml, .xml, .html). Each capped
+        at ~60k characters.
       </p>
       <div>
         <label
@@ -1950,9 +1857,7 @@ function PersonDocumentsSection({ personId }: { personId: string }) {
       </div>
       <div className="mt-3 space-y-2">
         {!docs?.length ? (
-          <p className="text-sm italic text-muted-foreground">
-            No documents attached yet.
-          </p>
+          <p className="text-sm italic text-muted-foreground">No documents attached yet.</p>
         ) : (
           docs.map((d) => (
             <div key={d.id} className="rounded-md border p-3">
@@ -1961,8 +1866,7 @@ function PersonDocumentsSection({ personId }: { personId: string }) {
                 <div className="min-w-0 flex-1">
                   <div className="truncate font-medium">{d.name}</div>
                   <div className="text-xs text-muted-foreground">
-                    {(d.size / 1024).toFixed(1)} KB ·{" "}
-                    {d.text.length.toLocaleString()} chars used
+                    {(d.size / 1024).toFixed(1)} KB · {d.text.length.toLocaleString()} chars used
                     {d.text.length >= MAX_DOC_CHARS ? " (truncated)" : ""}
                   </div>
                   <Input
@@ -2004,8 +1908,7 @@ function Section({
   children?: React.ReactNode;
   empty?: string;
 }) {
-  const hasChildren =
-    children !== null && children !== undefined && children !== false;
+  const hasChildren = children !== null && children !== undefined && children !== false;
   return (
     <div className="mt-5">
       <div className="mb-2 flex items-center gap-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
@@ -2015,9 +1918,7 @@ function Section({
       {hasChildren ? (
         children
       ) : (
-        <p className="text-sm italic text-muted-foreground">
-          {empty ?? "—"}
-        </p>
+        <p className="text-sm italic text-muted-foreground">{empty ?? "—"}</p>
       )}
     </div>
   );
@@ -2035,11 +1936,7 @@ function MemoryList({ items }: { items: { id: string; text: string }[] }) {
 
 function VoiceprintSection({ personId }: { personId: string }) {
   return (
-    <Section
-      icon={<Mic className="size-4" />}
-      title="Voice recognition"
-      empty=""
-    >
+    <Section icon={<Mic className="size-4" />} title="Voice recognition" empty="">
       <VoiceSampleRecorder personId={personId} />
     </Section>
   );
@@ -2096,10 +1993,7 @@ function ProfileProposalsSection({ personId }: { personId: string }) {
   }
 
   return (
-    <Section
-      icon={<Sparkles className="size-4" />}
-      title="Pending profile updates (AI proposals)"
-    >
+    <Section icon={<Sparkles className="size-4" />} title="Pending profile updates (AI proposals)">
       <ul className="space-y-2">
         {pending.map((p) => {
           const isEditing = editingId === p.id;
@@ -2123,9 +2017,7 @@ function ProfileProposalsSection({ personId }: { personId: string }) {
                 <p className="mt-1 whitespace-pre-wrap text-sm">{p.value}</p>
               )}
               {p.reasoning && !isEditing && (
-                <p className="mt-1 text-xs text-muted-foreground italic">
-                  {p.reasoning}
-                </p>
+                <p className="mt-1 text-xs text-muted-foreground italic">{p.reasoning}</p>
               )}
               <div className="mt-2 flex flex-wrap gap-2">
                 {isEditing ? (
@@ -2146,11 +2038,7 @@ function ProfileProposalsSection({ personId }: { personId: string }) {
                     >
                       <Check className="size-4" /> Save & apply
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setEditingId(null)}
-                    >
+                    <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
                       Cancel
                     </Button>
                   </>
@@ -2212,14 +2100,11 @@ function PersonEditor({
   onSave: (p: Person) => void;
 }) {
   const [draft, setDraft] = useState<Person>(person);
-  const set = <K extends keyof Person>(k: K, v: Person[K]) =>
-    setDraft({ ...draft, [k]: v });
+  const set = <K extends keyof Person>(k: K, v: Person[K]) => setDraft({ ...draft, [k]: v });
 
   return (
     <Card className="space-y-3 border-2 border-primary/30 p-6">
-      <h3 className="text-lg font-semibold">
-        {isNew ? "New person" : `Edit ${person.name}`}
-      </h3>
+      <h3 className="text-lg font-semibold">{isNew ? "New person" : `Edit ${person.name}`}</h3>
       <Field label="Name">
         <Input value={draft.name} onChange={(e) => set("name", e.target.value)} />
       </Field>
@@ -2243,10 +2128,7 @@ function PersonEditor({
           }
         />
       </Field>
-      <Field
-        label="Notes"
-        hint="Anything James would want the AI to know about them"
-      >
+      <Field label="Notes" hint="Anything James would want the AI to know about them">
         <Textarea
           rows={3}
           value={draft.notes ?? ""}
@@ -2276,10 +2158,7 @@ function PersonEditor({
 /* ------------------------------ Locations Tab ----------------------------- */
 
 function PlacesTab() {
-  const places = useLiveQuery(
-    () => db.places.orderBy("name").toArray(),
-    [],
-  );
+  const places = useLiveQuery(() => db.places.orderBy("name").toArray(), []);
   const [editing, setEditing] = useState<Place | null>(null);
   const [busy, setBusy] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
@@ -2350,10 +2229,7 @@ function PlacesTab() {
               key={p.id}
               className="flex items-center justify-between rounded-lg px-3 py-2 hover:bg-secondary"
             >
-              <button
-                className="flex-1 text-left"
-                onClick={() => setEditing(p)}
-              >
+              <button className="flex-1 text-left" onClick={() => setEditing(p)}>
                 <div className="font-medium">{p.name}</div>
                 <div className="text-xs text-muted-foreground">
                   {p.lat.toFixed(4)}, {p.lng.toFixed(4)} · {p.radius_m}m
@@ -2380,9 +2256,7 @@ function PlacesTab() {
             <Field label="Name" hint="e.g. Home, Library, Mum's house">
               <Input
                 value={editing.name}
-                onChange={(e) =>
-                  setEditing({ ...editing, name: e.target.value })
-                }
+                onChange={(e) => setEditing({ ...editing, name: e.target.value })}
               />
             </Field>
             <div className="grid grid-cols-2 gap-3">
@@ -2390,33 +2264,22 @@ function PlacesTab() {
                 <Input
                   type="number"
                   value={editing.lat}
-                  onChange={(e) =>
-                    setEditing({ ...editing, lat: Number(e.target.value) })
-                  }
+                  onChange={(e) => setEditing({ ...editing, lat: Number(e.target.value) })}
                 />
               </Field>
               <Field label="Longitude">
                 <Input
                   type="number"
                   value={editing.lng}
-                  onChange={(e) =>
-                    setEditing({ ...editing, lng: Number(e.target.value) })
-                  }
+                  onChange={(e) => setEditing({ ...editing, lng: Number(e.target.value) })}
                 />
               </Field>
             </div>
-            <Button
-              variant="secondary"
-              onClick={useCurrentLocation}
-              disabled={busy}
-            >
+            <Button variant="secondary" onClick={useCurrentLocation} disabled={busy}>
               <Crosshair className="size-4" />
               {busy ? "Reading GPS…" : "Use current location"}
             </Button>
-            <Button
-              variant="secondary"
-              onClick={() => setMapOpen(true)}
-            >
+            <Button variant="secondary" onClick={() => setMapOpen(true)}>
               <MapIcon className="size-4" />
               Pick on map
             </Button>
@@ -2436,9 +2299,7 @@ function PlacesTab() {
               <Textarea
                 rows={3}
                 value={editing.notes ?? ""}
-                onChange={(e) =>
-                  setEditing({ ...editing, notes: e.target.value })
-                }
+                onChange={(e) => setEditing({ ...editing, notes: e.target.value })}
               />
             </Field>
             <div className="flex gap-2">
@@ -2467,7 +2328,7 @@ function PlacesTab() {
                     ...cur,
                     lat,
                     lng,
-                    name: cur.name?.trim() ? cur.name : name ?? cur.name,
+                    name: cur.name?.trim() ? cur.name : (name ?? cur.name),
                   }
                 : cur,
             );
@@ -2482,10 +2343,7 @@ function PlacesTab() {
 /* -------------------------------- Events Tab ----------------------------- */
 
 function EventsTab() {
-  const events = useLiveQuery(
-    () => db.events.orderBy("created_at").reverse().toArray(),
-    [],
-  );
+  const events = useLiveQuery(() => db.events.orderBy("created_at").reverse().toArray(), []);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
   const [timeFilter, setTimeFilter] = useState<"upcoming" | "past">("upcoming");
@@ -2529,7 +2387,9 @@ function EventsTab() {
     setPendingDeleteId(null);
   }
 
-  const pendingEvent = pendingDeleteId ? (events ?? []).find((e) => e.id === pendingDeleteId) : null;
+  const pendingEvent = pendingDeleteId
+    ? (events ?? []).find((e) => e.id === pendingDeleteId)
+    : null;
 
   return (
     <div className="grid gap-4 grid-cols-[260px_1fr] sm:grid-cols-[280px_1fr]">
@@ -2585,9 +2445,7 @@ function EventsTab() {
         <div className="space-y-1">
           {filtered.length === 0 && (
             <p className="px-2 py-4 text-sm italic text-muted-foreground">
-              {events?.length === 0
-                ? "No events yet. Tap + to prep for one."
-                : "No matches."}
+              {events?.length === 0 ? "No events yet. Tap + to prep for one." : "No matches."}
             </p>
           )}
           {filtered.map((e) => (
@@ -2595,18 +2453,12 @@ function EventsTab() {
               key={e.id}
               onClick={() => setSelectedId(e.id)}
               className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left transition ${
-                selectedId === e.id
-                  ? "bg-primary/10 ring-1 ring-primary/40"
-                  : "hover:bg-secondary"
+                selectedId === e.id ? "bg-primary/10 ring-1 ring-primary/40" : "hover:bg-secondary"
               }`}
             >
               <div className="min-w-0">
                 <div className="truncate font-medium">{e.name || "Untitled"}</div>
-                {e.when && (
-                  <div className="truncate text-xs text-muted-foreground">
-                    {e.when}
-                  </div>
-                )}
+                {e.when && <div className="truncate text-xs text-muted-foreground">{e.when}</div>}
               </div>
               <span
                 role="button"
@@ -2615,7 +2467,12 @@ function EventsTab() {
                   ev.stopPropagation();
                   setPendingDeleteId(e.id);
                 }}
-                onKeyDown={(ev) => { if (ev.key === "Enter" || ev.key === " ") { ev.stopPropagation(); setPendingDeleteId(e.id); }}}
+                onKeyDown={(ev) => {
+                  if (ev.key === "Enter" || ev.key === " ") {
+                    ev.stopPropagation();
+                    setPendingDeleteId(e.id);
+                  }
+                }}
                 className="rounded-full p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                 aria-label="Delete"
               >
@@ -2672,9 +2529,9 @@ function EventDetail({ eventId }: { eventId: string }) {
       const peopleNames = (await db.people.bulkGet(event.person_ids ?? []))
         .filter((p): p is Person => !!p)
         .map((p) => p.name);
-      const docSnips = (docs ?? []).slice(0, 10).map(
-        (d) => `### ${d.name}${d.note ? ` — ${d.note}` : ""}\n${d.text.slice(0, 4000)}`,
-      );
+      const docSnips = (docs ?? [])
+        .slice(0, 10)
+        .map((d) => `### ${d.name}${d.note ? ` — ${d.note}` : ""}\n${d.text.slice(0, 4000)}`);
       const r = await generateFn({
         data: {
           eventName: event.name || "Event",
@@ -2735,8 +2592,7 @@ function EventDetail({ eventId }: { eventId: string }) {
     setBusyDoc(true);
     try {
       for (const file of Array.from(files)) {
-        const isTextLike =
-          TEXT_LIKE_RE.test(file.type) || TEXT_EXT_RE.test(file.name);
+        const isTextLike = TEXT_LIKE_RE.test(file.type) || TEXT_EXT_RE.test(file.name);
         if (!isTextLike) {
           toast.error(`${file.name}: unsupported. Use .txt/.md/.csv/.json/etc.`);
           continue;
@@ -2764,11 +2620,7 @@ function EventDetail({ eventId }: { eventId: string }) {
     }
   }
 
-  function updateItem(
-    list: "key_points" | "key_questions",
-    id: string,
-    p: Partial<EventPrepItem>,
-  ) {
+  function updateItem(list: "key_points" | "key_questions", id: string, p: Partial<EventPrepItem>) {
     const next = event![list].map((k) => (k.id === id ? { ...k, ...p } : k));
     patch({ [list]: next } as Partial<EventItem>);
   }
@@ -2777,10 +2629,7 @@ function EventDetail({ eventId }: { eventId: string }) {
     patch({ [list]: next } as Partial<EventItem>);
   }
   function addItem(list: "key_points" | "key_questions") {
-    const next = [
-      ...event![list],
-      { id: newId(), text: "", selected: true } as EventPrepItem,
-    ];
+    const next = [...event![list], { id: newId(), text: "", selected: true } as EventPrepItem];
     patch({ [list]: next } as Partial<EventItem>);
   }
 
@@ -2788,10 +2637,7 @@ function EventDetail({ eventId }: { eventId: string }) {
     <Card className="p-6">
       <div className="grid gap-4 md:grid-cols-2">
         <Field label="Event name">
-          <Input
-            value={event.name}
-            onChange={(e) => patch({ name: e.target.value })}
-          />
+          <Input value={event.name} onChange={(e) => patch({ name: e.target.value })} />
         </Field>
         <Field label="When" hint="Pick a date or type freeform (e.g. Tue 14 May, 10am)">
           <div className="flex gap-2">
@@ -2803,12 +2649,7 @@ function EventDetail({ eventId }: { eventId: string }) {
             />
             <Popover>
               <PopoverTrigger asChild>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="icon"
-                  aria-label="Pick a date"
-                >
+                <Button type="button" variant="outline" size="icon" aria-label="Pick a date">
                   <CalendarIcon className="size-4" />
                 </Button>
               </PopoverTrigger>
@@ -2870,13 +2711,10 @@ function EventDetail({ eventId }: { eventId: string }) {
         ) : null}
       </Section>
 
-      <Section
-        icon={<FileText className="size-4" />}
-        title="Reference documents"
-      >
+      <Section icon={<FileText className="size-4" />} title="Reference documents">
         <p className="mb-2 text-sm text-muted-foreground">
-          CVs, briefs, agendas — fed into the AI when preparing this event and
-          when it's selected on the home screen.
+          CVs, briefs, agendas — fed into the AI when preparing this event and when it's selected on
+          the home screen.
         </p>
         <label
           className={`inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border bg-secondary px-3 text-sm font-medium hover:bg-secondary/80 ${busyDoc ? "opacity-60" : ""}`}
@@ -2897,9 +2735,7 @@ function EventDetail({ eventId }: { eventId: string }) {
         </label>
         <div className="mt-3 space-y-2">
           {!docs?.length ? (
-            <p className="text-sm italic text-muted-foreground">
-              No documents attached.
-            </p>
+            <p className="text-sm italic text-muted-foreground">No documents attached.</p>
           ) : (
             docs.map((d) => (
               <div key={d.id} className="flex items-start gap-2 rounded-md border p-2">
@@ -2936,10 +2772,7 @@ function EventDetail({ eventId }: { eventId: string }) {
         </div>
       </Section>
 
-      <Section
-        icon={<Sparkles className="size-4" />}
-        title="AI prep"
-      >
+      <Section icon={<Sparkles className="size-4" />} title="AI prep">
         <Field
           label="Prompt for the AI"
           hint="Steer what kinds of points/questions to generate (e.g. 'Interview a new care worker — focus on dementia experience, manual handling, weekend availability')."
@@ -3042,13 +2875,7 @@ function parseEventDate(value: string | undefined): Date | undefined {
   return isNaN(d.getTime()) ? undefined : d;
 }
 
-function EventLocationField({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-}) {
+function EventLocationField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const places = useLiveQuery(() => db.places.orderBy("name").toArray(), []);
   const matchedPlaceId = useMemo(() => {
     if (!places || !value) return "";
