@@ -133,7 +133,7 @@ function buildTarget(
  * To make Anthropic the primary instead, set PARLEY_AI_PROVIDER=anthropic.
  */
 function resolveChatChain(model: string | undefined): ChatTarget[] {
-  const m = model ?? "google/gemini-2.5-flash-lite";
+  const m = model ?? "google/gemini-3.5-flash-lite";
 
   let primary: ChatProvider | null = null;
   let explicit: string | undefined;
@@ -207,7 +207,7 @@ async function chatCompletion(
     // (1) with a 400. Several callers pass a custom temperature, so strip it for
     // those models — otherwise the request 400s and the fallback chain would
     // silently mask the user's chosen model never running.
-    if (target.provider === "openai" && /^(gpt-5|o\d)/i.test(target.model)) {
+    if (target.provider === "openai" && /^(gpt-[5-9]|o\d)/i.test(target.model)) {
       // GPT-5 / o-series reject a non-default `temperature` and use
       // `max_completion_tokens` instead of `max_tokens`.
       if ("temperature" in perBody) delete perBody.temperature;
@@ -253,17 +253,17 @@ async function chatCompletion(
 /**
  * Map a Lovable-gateway / generic model selector to a concrete model id for
  * each provider. The app's default selectors are gateway ids like
- * "google/gemini-2.5-flash" or tier hints; these collapse to one solid
+ * "google/gemini-3.8-flash" or tier hints; these collapse to one solid
  * default per provider (callers that pass a real provider-native id keep it).
  */
 function mapToAnthropic(m: string): string {
   if (m.startsWith("claude")) return m;
   // "pro"-tier selectors → a stronger model; everything else → fast Haiku.
-  return /pro|opus|sonnet/i.test(m) ? "claude-sonnet-4-5" : "claude-haiku-4-5";
+  return /pro|opus|sonnet/i.test(m) ? "claude-sonnet-5-5" : "claude-haiku-5-5";
 }
 function mapToOpenAI(m: string): string {
   if (m.startsWith("gpt")) return m;
-  return /pro|opus|sonnet/i.test(m) ? "gpt-4o" : "gpt-4o-mini";
+  return /pro|opus|sonnet/i.test(m) ? "gpt-6.1-sol" : "gpt-6-luna";
 }
 function mapToGemini(m: string): string {
   // Free-tier safe: the Gemini free tier has little/no quota on 2.5-pro, so
@@ -274,9 +274,9 @@ function mapToGemini(m: string): string {
     ? m.slice("google/".length)
     : m.startsWith("gemini-")
       ? m
-      : "gemini-2.5-flash";
+      : "gemini-3.8-flash";
   // Downgrade any pro id to flash so a free key never 429s/403s on quota.
-  if (/pro/i.test(id)) return "gemini-2.5-flash";
+  if (/pro/i.test(id)) return "gemini-3.8-flash";
   return id;
 }
 
@@ -933,7 +933,7 @@ Return, via the tool:
     // Summarisation is quality-dominant (long narrative + many memories), so the
     // default must map to the SMART tier; `max_tokens` is raised so a dense
     // conversation's tool-call JSON can't truncate mid-object → Parse error.
-    const res = await chatCompletion(data.model ?? "google/gemini-2.5-pro", {
+    const res = await chatCompletion(data.model ?? "google/gemini-3.1-pro-preview", {
         max_tokens: 4096,
         messages: [
           { role: "system", content: system },
@@ -1653,7 +1653,7 @@ ${transcriptText}
 
 Who is ${data.unknownLabel}? Return the most likely candidate name or "unknown", with confidence 0–1.`;
 
-    const res = await chatCompletion(data.model ?? "google/gemini-2.5-flash-lite", {
+    const res = await chatCompletion(data.model ?? "google/gemini-3.5-flash-lite", {
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
@@ -1772,7 +1772,7 @@ ${sampleLines.join("\n")}
 
 Now emit a StyleProfileJson. Focus on what James KEEPS (picked) and how he REWRITES (edited). Treat (ignored) lines as anti-examples. Do not over-claim if signal is thin.`;
 
-    const res = await chatCompletion(data.model ?? "google/gemini-2.5-pro", {
+    const res = await chatCompletion(data.model ?? "google/gemini-3.1-pro-preview", {
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
@@ -1894,7 +1894,7 @@ ${data.candidates
       };
     }
 
-    const res = await chatCompletion(data.model ?? "google/gemini-2.5-pro", {
+    const res = await chatCompletion(data.model ?? "google/gemini-3.1-pro-preview", {
         messages: [
           { role: "system", content: system },
           { role: "user", content: userMsg },
@@ -2023,7 +2023,7 @@ ${profileText}
 Filtered transcript (only turns by James and ${data.personName}):
 ${transcriptText}`;
 
-    const res = await chatCompletion(data.model ?? "google/gemini-2.5-pro", {
+    const res = await chatCompletion(data.model ?? "google/gemini-3.1-pro-preview", {
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },
@@ -2135,7 +2135,7 @@ Existing people in the address book: ${data.existingPeopleNames.join(", ") || "(
 Transcript:
 ${data.transcript.map((t) => `${t.speaker}: ${t.text}`).join("\n")}`;
 
-    const res = await chatCompletion(data.model ?? "google/gemini-2.5-pro", {
+    const res = await chatCompletion(data.model ?? "google/gemini-3.1-pro-preview", {
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },

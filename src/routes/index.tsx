@@ -269,8 +269,8 @@ function Home() {
   } | null>(null);
   const [voiceId, setVoiceId] = useState<string>("EXAVITQu4vr4xnSDxMaL");
   const [ipadModel, setIpadModel] = useState<string>("auto");
-  const fastModelRef = useRef<string>("gemini/gemini-2.5-flash-lite");
-  const smartModelRef = useRef<string>("gemini/gemini-2.5-flash");
+  const fastModelRef = useRef<string>("gemini/gemini-3.5-flash-lite");
+  const smartModelRef = useRef<string>("gemini/gemini-3.8-flash");
 
   // Speaker map
   // `speakerMap` only ever contains CONFIRMED entries (label -> personId).
@@ -1030,8 +1030,8 @@ function Home() {
       setIpadModel(s.ipad_model ?? "auto");
       setFeedbackEnabled(s.suggestion_feedback_enabled ?? true);
       fastModelRef.current =
-        s.fast_model ?? s.suggestion_model ?? "gemini/gemini-2.5-flash-lite";
-      smartModelRef.current = s.smart_model ?? "gemini/gemini-2.5-flash";
+        s.fast_model ?? s.suggestion_model ?? "gemini/gemini-3.5-flash-lite";
+      smartModelRef.current = s.smart_model ?? "gemini/gemini-3.8-flash";
 
       const people = await db.people.orderBy("name").toArray();
       if (!cancelled) setAllPeople(people);

@@ -35,8 +35,8 @@ type RequestBody = {
 };
 
 function modelFor(tier: Tier): string {
-  const fast = process.env.PARLEY_OPENAI_FAST_MODEL ?? "gpt-4o-mini";
-  const smart = process.env.PARLEY_OPENAI_SMART_MODEL ?? "gpt-4o";
+  const fast = process.env.PARLEY_OPENAI_FAST_MODEL ?? "gpt-6-luna";
+  const smart = process.env.PARLEY_OPENAI_SMART_MODEL ?? "gpt-6.1-sol";
   return tier === "smart" ? smart : fast;
 }
 

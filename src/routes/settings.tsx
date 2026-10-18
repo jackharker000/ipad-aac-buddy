@@ -2686,7 +2686,7 @@ function EventDetail({ eventId }: { eventId: string }) {
           docs: docSnips,
           existingPoints: event.key_points.map((k) => k.text),
           existingQuestions: event.key_questions.map((k) => k.text),
-          model: s.smart_model ?? "gemini/gemini-2.5-flash",
+          model: s.smart_model ?? "gemini/gemini-3.8-flash",
           jamesProfile: {
             name: profile.display_name || "James",
             background: profile.background,

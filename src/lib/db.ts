@@ -519,10 +519,10 @@ export const DEFAULT_SETTINGS: Settings = {
   // rate-limits, the server's fallback chain automatically retries on
   // Anthropic / OpenAI, so suggestions never break — switch the primary in
   // Settings → AI models.
-  suggestion_model: "gemini/gemini-2.5-flash-lite",
-  expand_model: "gemini/gemini-2.5-flash-lite",
-  fast_model: "gemini/gemini-2.5-flash-lite",
-  smart_model: "gemini/gemini-2.5-flash",
+  suggestion_model: "gemini/gemini-3.5-flash-lite",
+  expand_model: "gemini/gemini-3.5-flash-lite",
+  fast_model: "gemini/gemini-3.5-flash-lite",
+  smart_model: "gemini/gemini-3.8-flash",
   suggestion_feedback_enabled: true,
 };
 
@@ -546,8 +546,8 @@ function normalizeModelId(
   }
   // Legacy / unknown id → the default provider (Gemini) for the tier.
   return tier === "fast"
-    ? "gemini/gemini-2.5-flash-lite"
-    : "gemini/gemini-2.5-flash";
+    ? "gemini/gemini-3.5-flash-lite"
+    : "gemini/gemini-3.8-flash";
 }
 
 /** Provider family of a prefixed model id (must match ai-models.providerIdForModel). */
@@ -575,10 +575,10 @@ export async function getSettings(): Promise<Settings> {
       const p = providerOf(fast);
       smart =
         p === "anthropic"
-          ? "anthropic/claude-sonnet-4-5"
+          ? "anthropic/claude-sonnet-5-5"
           : p === "openai"
-            ? "openai-direct/gpt-4o"
-            : "gemini/gemini-2.5-flash";
+            ? "openai-direct/gpt-6.1-sol"
+            : "gemini/gemini-3.8-flash";
     }
     if (
       existing.fast_model !== fast ||

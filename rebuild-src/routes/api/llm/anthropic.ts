@@ -46,8 +46,8 @@ type RequestBody = {
 };
 
 function modelFor(tier: Tier): string {
-  const fast = process.env.PARLEY_ANTHROPIC_FAST_MODEL ?? "claude-haiku-4-5";
-  const smart = process.env.PARLEY_ANTHROPIC_SMART_MODEL ?? "claude-sonnet-4-6";
+  const fast = process.env.PARLEY_ANTHROPIC_FAST_MODEL ?? "claude-haiku-5-5";
+  const smart = process.env.PARLEY_ANTHROPIC_SMART_MODEL ?? "claude-sonnet-5-5";
   return tier === "smart" ? smart : fast;
 }
 
