@@ -19,11 +19,11 @@ export type ModelEntry = {
 };
 
 export const MODEL_OPTIONS: ModelEntry[] = [
-  { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", provider: "anthropic", tier: "fast" },
-  { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", provider: "anthropic", tier: "smart" },
-  { id: "claude-opus-4-7", label: "Claude Opus 4.7", provider: "anthropic", tier: "smart" },
-  { id: "gpt-5-mini", label: "GPT-5 mini", provider: "openai", tier: "fast" },
-  { id: "gpt-5", label: "GPT-5", provider: "openai", tier: "smart" },
+  { id: "claude-haiku-5-5", label: "Claude Haiku 5.5", provider: "anthropic", tier: "fast" },
+  { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", provider: "anthropic", tier: "smart" },
+  { id: "claude-opus-5-5", label: "Claude Opus 5.5", provider: "anthropic", tier: "smart" },
+  { id: "gpt-6-luna", label: "GPT-6 Luna", provider: "openai", tier: "fast" },
+  { id: "gpt-6.1-sol", label: "GPT-6.1 Sol", provider: "openai", tier: "smart" },
 ];
 
 export function modelsForProviderTier(provider: ModelProviderId, tier: ModelTier): ModelEntry[] {

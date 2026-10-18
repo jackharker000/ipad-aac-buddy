@@ -269,8 +269,8 @@ function Home() {
   } | null>(null);
   const [voiceId, setVoiceId] = useState<string>("EXAVITQu4vr4xnSDxMaL");
   const [ipadModel, setIpadModel] = useState<string>("auto");
-  const fastModelRef = useRef<string>("gemini/gemini-2.5-flash-lite");
-  const smartModelRef = useRef<string>("gemini/gemini-2.5-flash");
+  const fastModelRef = useRef<string>("gemini/gemini-3.5-flash-lite");
+  const smartModelRef = useRef<string>("gemini/gemini-3.8-flash");
 
   // Speaker map
   // `speakerMap` only ever contains CONFIRMED entries (label -> personId).
@@ -1030,8 +1030,8 @@ function Home() {
       setIpadModel(s.ipad_model ?? "auto");
       setFeedbackEnabled(s.suggestion_feedback_enabled ?? true);
       fastModelRef.current =
-        s.fast_model ?? s.suggestion_model ?? "gemini/gemini-2.5-flash-lite";
-      smartModelRef.current = s.smart_model ?? "gemini/gemini-2.5-flash";
+        s.fast_model ?? s.suggestion_model ?? "gemini/gemini-3.5-flash-lite";
+      smartModelRef.current = s.smart_model ?? "gemini/gemini-3.8-flash";
 
       const people = await db.people.orderBy("name").toArray();
       if (!cancelled) setAllPeople(people);
@@ -2469,7 +2469,14 @@ function Home() {
               {loadingSuggestions ? "Thinking…" : "Refresh"}
             </Button>
           </div>
-          <div className="grid min-h-0 flex-1 grid-cols-3 grid-rows-3 gap-2 overflow-hidden p-2">
+          <div
+            className="grid min-h-0 flex-1 grid-cols-3 gap-2 overflow-hidden p-2"
+            // Fewer than 9 suggestions → fewer rows, so the cards stretch to
+            // fill the panel instead of leaving an empty gap underneath.
+            style={{
+              gridTemplateRows: `repeat(${suggestions.length > 0 ? Math.min(3, Math.ceil(suggestions.length / 3)) : 3}, minmax(0, 1fr))`,
+            }}
+          >
             {!active && suggestions.length === 0 && !predicting && (
               <Card className="col-span-3 row-span-3 flex items-center justify-center p-5 text-center text-sm text-muted-foreground">
                 Press the record button to start a conversation. Suggestions

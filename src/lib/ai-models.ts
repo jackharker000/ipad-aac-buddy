@@ -12,7 +12,7 @@
 export type AiProviderId = "anthropic" | "gemini" | "openai";
 
 export type AiModel = {
-  /** Provider-prefixed id sent to the server (e.g. "anthropic/claude-haiku-4-5"). */
+  /** Provider-prefixed id sent to the server (e.g. "anthropic/claude-haiku-5-5"). */
   id: string;
   label: string;
   hint: string;
@@ -35,23 +35,23 @@ export const AI_PROVIDERS: AiProvider[] = [
     note: "Google — the default. If the free tier rate-limits, Parley auto-falls-back to Anthropic/OpenAI so suggestions keep working.",
     models: [
       {
-        id: "gemini/gemini-2.5-flash-lite",
-        label: "Gemini 2.5 Flash-Lite",
-        hint: "Fastest · free tier",
+        id: "gemini/gemini-3.5-flash-lite",
+        label: "Gemini 3.5 Flash-Lite",
+        hint: "Fastest · cheapest",
       },
       {
-        id: "gemini/gemini-2.5-flash",
-        label: "Gemini 2.5 Flash",
-        hint: "Balanced · free tier",
+        id: "gemini/gemini-3.8-flash",
+        label: "Gemini 3.8 Flash",
+        hint: "Balanced · smart",
       },
       {
-        id: "gemini/gemini-2.5-pro",
-        label: "Gemini 2.5 Pro",
+        id: "gemini/gemini-3.1-pro-preview",
+        label: "Gemini 3.1 Pro (preview)",
         hint: "Smartest · needs paid tier",
       },
     ],
-    defaultFast: "gemini/gemini-2.5-flash-lite",
-    defaultSmart: "gemini/gemini-2.5-flash",
+    defaultFast: "gemini/gemini-3.5-flash-lite",
+    defaultSmart: "gemini/gemini-3.8-flash",
   },
   {
     id: "anthropic",
@@ -59,18 +59,23 @@ export const AI_PROVIDERS: AiProvider[] = [
     note: "Claude. Paid key — most reliable/lowest-latency; pick this if the Gemini free tier rate-limits too often.",
     models: [
       {
-        id: "anthropic/claude-haiku-4-5",
-        label: "Claude Haiku 4.5",
+        id: "anthropic/claude-haiku-5-5",
+        label: "Claude Haiku 5.5",
         hint: "Fastest · cheapest",
       },
       {
-        id: "anthropic/claude-sonnet-4-5",
-        label: "Claude Sonnet 4.5",
+        id: "anthropic/claude-sonnet-5-5",
+        label: "Claude Sonnet 5.5",
         hint: "Balanced · smart",
       },
+      {
+        id: "anthropic/claude-opus-5-5",
+        label: "Claude Opus 5.5",
+        hint: "Most capable · slower",
+      },
     ],
-    defaultFast: "anthropic/claude-haiku-4-5",
-    defaultSmart: "anthropic/claude-sonnet-4-5",
+    defaultFast: "anthropic/claude-haiku-5-5",
+    defaultSmart: "anthropic/claude-sonnet-5-5",
   },
   {
     id: "openai",
@@ -78,15 +83,23 @@ export const AI_PROVIDERS: AiProvider[] = [
     note: "GPT. Uses your OpenAI key.",
     models: [
       {
-        id: "openai-direct/gpt-4o-mini",
-        label: "GPT-4o mini",
-        hint: "Fast · cheap",
+        id: "openai-direct/gpt-6-luna",
+        label: "GPT-6 Luna",
+        hint: "Fast · cheapest",
       },
-      { id: "openai-direct/gpt-4o", label: "GPT-4o", hint: "Balanced" },
-      { id: "openai-direct/gpt-5", label: "GPT-5", hint: "Most capable" },
+      {
+        id: "openai-direct/gpt-6.1-sol",
+        label: "GPT-6.1 Sol",
+        hint: "Balanced",
+      },
+      {
+        id: "openai-direct/gpt-6-astra",
+        label: "GPT-6 Astra",
+        hint: "Most capable",
+      },
     ],
-    defaultFast: "openai-direct/gpt-4o-mini",
-    defaultSmart: "openai-direct/gpt-4o",
+    defaultFast: "openai-direct/gpt-6-luna",
+    defaultSmart: "openai-direct/gpt-6.1-sol",
   },
 ];
 
